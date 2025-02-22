@@ -1,10 +1,11 @@
 import React, { useState, useRef, useEffect } from "react";
-import { View, Text, StyleSheet, TouchableOpacity, TextInput } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, SafeAreaView, Animated } from "react-native";
 import MapView, { Marker, Polygon, Circle } from "react-native-maps";
 import * as Location from "expo-location";
 import { getDatabase, ref, set, push, get, remove, child, onValue } from "firebase/database";
 import { db, auth } from "./firebaseConfig";
 import { getAuth, signOut } from 'firebase/auth';
+import { Ionicons } from '@expo/vector-icons';
 
 export default function App() {
 const mapRef = useRef(null);
@@ -310,8 +311,8 @@ const addSubZone = async () => {
     alert("No connection to database. Please check your internet connection.");
     return;
   }
-  if (!mapRef.current || points.length !== 4) {
-    alert("Please define the geofence area first.");
+  if (!mapRef.current || points.length < 3) {
+    alert("Please define the geofence area first (minimum 3 points needed).");
     return;
   }
 
@@ -600,62 +601,72 @@ return (
       <Text style={styles.crosshairText}>+</Text>
     </View>
 
-    <TextInput
-      style={styles.input}
-      placeholder="Enter Diameter"
-      keyboardType="numeric"
-      onChangeText={(text) => {
-        const newDiameter = parseFloat(text) || 10;
-        setSubZoneDiameter(newDiameter);
-        updatePreviewCircle();
-      }}
-    />
+    <View style={styles.buttonContainer}>
+      <View style={styles.inputWrapper}>
+        <Ionicons name="resize" size={20} color="#999" />
+        <TextInput
+          style={styles.inputInContainer}
+          placeholder="Enter Diameter"
+          placeholderTextColor="#999"
+          keyboardType="numeric"
+          returnKeyType="done"
+          onSubmitEditing={() => Keyboard.dismiss()}
+          blurOnSubmit={true}
+          onChangeText={(text) => {
+            const newDiameter = parseFloat(text) || 10;
+            setSubZoneDiameter(newDiameter);
+            updatePreviewCircle();
+          }}
+        />
+      </View>
+      <View style={styles.buttonsRow}>
+        <TouchableOpacity style={styles.button} onPress={getLocation}>
+          <Ionicons name="location" size={20} color="white" />
+          <Text style={styles.buttonText}>Set Point</Text>
+        </TouchableOpacity>
 
-    <TouchableOpacity style={styles.button} onPress={getLocation}>
-      <Text style={styles.buttonText}>Set Point</Text>
-    </TouchableOpacity>
+        <TouchableOpacity style={styles.button} onPress={toggleCurrentLocation}>
+          <Ionicons name="navigate" size={20} color="white" />
+          <Text style={styles.buttonText}>
+            {isFetchingLocation ? "Loading" : currentLocation ? "Remove" : "My Loc"}
+          </Text>
+        </TouchableOpacity>
 
-    <TouchableOpacity style={styles.buttonSecondary} onPress={toggleCurrentLocation}>
-      <Text style={styles.buttonText}>{isFetchingLocation ? "Loading..." : currentLocation ? "Remove Loc" : "My Location"}</Text>
-    </TouchableOpacity>
+        <TouchableOpacity style={[styles.button, selectedSubZone && { backgroundColor: 'black' }]} 
+          onPress={selectedSubZone ? removeSubZone : addSubZone}>
+          <Ionicons name="radio-button-on" size={20} color="white" />
+          <Text style={styles.buttonText}>
+            {selectedSubZone ? "Remove" : "SubZone"}
+          </Text>
+        </TouchableOpacity>
 
-    <TouchableOpacity 
-      style={[
-        styles.buttonSubZone,
-        selectedSubZone && { backgroundColor: 'black' }
-      ]} 
-      onPress={selectedSubZone ? removeSubZone : addSubZone}
-    >
-      <Text style={styles.buttonText}>
-        {selectedSubZone ? "Remove" : "SubZone"}
-      </Text>
-    </TouchableOpacity>
-
-    <TouchableOpacity 
-      style={[
-        styles.buttonReset, 
-        (points.length > 0 || isDrawing) && { display: 'flex' }
-      ]} 
-      onPress={() => {
-        if (isDrawing) {
-          // Finish drawing
-          if (points.length >= 3) {
-            setIsDrawing(false);
-            saveCoordinatesToFirebase(points);
-          } else {
-            alert("Please add at least 3 points to create a valid area");
-          }
-        } else {
-          // Reset points
-          setPoints([]);
-          setIsDrawing(true);
-        }
-      }}
-    >
-      <Text style={styles.buttonText}>
-        {isDrawing ? "Done Set" : "Reset Points"}
-      </Text>
-    </TouchableOpacity>
+        <TouchableOpacity 
+          style={styles.button} 
+          onPress={() => {
+            if (isDrawing) {
+              if (points.length >= 3) {
+                setIsDrawing(false);
+                saveCoordinatesToFirebase(points);
+              } else {
+                alert("Please add at least 3 points to create a valid area");
+              }
+            } else {
+              setPoints([]);
+              setIsDrawing(true);
+            }
+          }}
+        >
+          <Ionicons 
+            name={isDrawing ? "checkmark-circle" : "refresh-circle"} 
+            size={20} 
+            color="white" 
+          />
+          <Text style={styles.buttonText}>
+            {isDrawing ? "Done" : "Reset"}
+          </Text>
+        </TouchableOpacity>
+      </View>
+    </View>
 
     <TouchableOpacity 
       style={styles.logoutButton} 
@@ -663,6 +674,23 @@ return (
     >
       <Text style={styles.buttonText}>Logout</Text>
     </TouchableOpacity>
+
+    <View style={styles.navbar}>
+      <TouchableOpacity style={styles.navItem}>
+        <Ionicons name="grid-outline" size={24} color="white" />
+        <Text style={styles.navText}>Dashboard</Text>
+      </TouchableOpacity>
+      
+      <TouchableOpacity style={[styles.navItem, styles.activeNavItem]}>
+        <Ionicons name="map-outline" size={24} color="white" />
+        <Text style={styles.navText}>Maps</Text>
+      </TouchableOpacity>
+      
+      <TouchableOpacity style={styles.navItem}>
+        <Ionicons name="person-outline" size={24} color="white" />
+        <Text style={styles.navText}>Profile</Text>
+      </TouchableOpacity>
+    </View>
   </View>
 );
 } 
@@ -677,59 +705,77 @@ map: {
 },
 input: {
   position: "absolute",
-  bottom: 155,
+  bottom: 185,
   right: 20,
-  backgroundColor: "gray",
-  paddingVertical: 5,
-  paddingHorizontal: 10,
-  borderRadius: 5,
+  backgroundColor: "#2C2C2E",
+  paddingVertical: 12,
+  paddingHorizontal: 15,
+  borderRadius: 15,
   width: 150,
   textAlign: "center",
-  color: "yellow",
-  fontWeight: "bold",
+  color: "#FFFFFF",
+  fontWeight: "600",
+  shadowColor: "#000",
+  shadowOffset: {
+    width: 0,
+    height: 2,
+  },
+  shadowOpacity: 0.25,
+  shadowRadius: 3.84,
+  elevation: 5,
+},
+buttonContainer: {
+  position: 'absolute',
+  bottom: 85,
+  left: 0,
+  right: 0,
+  padding: 10,
+  backgroundColor: 'rgba(0,0,0,0.85)',
+  borderTopLeftRadius: 25,
+  borderTopRightRadius: 25,
+  paddingTop: 15,
+  paddingBottom: 15,
+},
+buttonsRow: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  paddingHorizontal: 10,
+  width: '100%',
 },
 button: {
-  position: "absolute",
-  bottom: 200,
-  right: -55,
-  transform: [{ translateX: -75 }],
-  backgroundColor: "blue",
-  paddingVertical: 10,
-  paddingHorizontal: 20,
-  borderRadius: 10,
-  width: 150,
-  alignItems: "center",
-  justifyContent: "center",
-},
-buttonSecondary: {
-  position: "absolute",
-  bottom: 200,
-  left: 95,
-  transform: [{ translateX: -75 }],
-  backgroundColor: "green",
-  paddingVertical: 10,
-  paddingHorizontal: 20,
-  borderRadius: 10,
-  width: 150,
-  alignItems: "center",
-  justifyContent: "center",
-},
-buttonSubZone: {
-  position: "absolute",
-  bottom: 150,
-  left: 20,
-  backgroundColor: "red",
-  paddingVertical: 10,
-  paddingHorizontal: 20,
-  borderRadius: 10,
-  width: 150,
-  alignItems: "center",
-  justifyContent: "center",
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'center',
+  backgroundColor: "#007AFF",
+  paddingVertical: 8,
+  paddingHorizontal: 8,
+  borderRadius: 12,
+  width: '23%', // Slightly less than 25% to account for spacing
+  gap: 4,
 },
 buttonText: {
   color: "white",
-  fontSize: 16,
-  fontWeight: "bold",
+  fontSize: 12,
+  fontWeight: "600",
+},
+inputWrapper: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  backgroundColor: "#2C2C2E",
+  paddingHorizontal: 15,
+  borderRadius: 15,
+  width: '95%',
+  marginBottom: 10,
+  marginHorizontal: 10,
+  borderWidth: 1,
+  borderColor: '#3A3A3C',
+},
+inputInContainer: {
+  flex: 1,
+  paddingVertical: 10,
+  paddingHorizontal: 10,
+  color: "#FFFFFF",
+  fontSize: 14,
 },
 crosshair: {
   position: "absolute",
@@ -743,18 +789,6 @@ crosshairText: {
   fontWeight: "bold",
   color: "red",
 },
-buttonReset: {
-  position: "absolute",
-  bottom: 200,
-  right: 20,
-  backgroundColor: "blue",
-  paddingVertical: 10,
-  paddingHorizontal: 20,
-  borderRadius: 10,
-  width: 150,
-  alignItems: "center",
-  justifyContent: "center",
-},
 logoutButton: {
   position: 'absolute',
   top: 40,
@@ -764,5 +798,44 @@ logoutButton: {
   paddingHorizontal: 20,
   borderRadius: 10,
   zIndex: 1000,
+},
+navbar: {
+  position: 'absolute',
+  bottom: 0,
+  left: 0,
+  right: 0,
+  height: 85,
+  backgroundColor: '#1a1a1a',
+  flexDirection: 'row',
+  justifyContent: 'space-around',
+  alignItems: 'center',
+  paddingBottom: 25,
+  paddingTop: 10,
+  borderTopWidth: 1,
+  borderTopColor: '#333',
+  shadowColor: '#000',
+  shadowOffset: {
+    width: 0,
+    height: -3,
+  },
+  shadowOpacity: 0.25,
+  shadowRadius: 4,
+  elevation: 5,
+},
+navItem: {
+  alignItems: 'center',
+  justifyContent: 'center',
+  flex: 1,
+  paddingVertical: 8,
+},
+activeNavItem: {
+  borderTopWidth: 2,
+  borderTopColor: '#007AFF',
+},
+navText: {
+  color: '#fff',
+  fontSize: 12,
+  marginTop: 4,
+  fontWeight: '500',
 },
 });
