@@ -3,7 +3,8 @@ import { View, Text, StyleSheet, TouchableOpacity, TextInput } from "react-nativ
 import MapView, { Marker, Polygon, Circle } from "react-native-maps";
 import * as Location from "expo-location";
 import { getDatabase, ref, set, push, get, remove, child, onValue } from "firebase/database";
-import { db } from "./firebaseConfig";
+import { db, auth } from "./firebaseConfig";
+import { getAuth, signOut } from 'firebase/auth';
 
 export default function App() {
 const mapRef = useRef(null);
@@ -131,34 +132,57 @@ const toggleCurrentLocation = async () => {
     setCurrentLocation(null);
     setLocationButtonText("My Location");
     console.log("Location removed");
-  } else {
-    setIsFetchingLocation(true);
+    return;
+  }
+
+  setIsFetchingLocation(true);
+  try {
+    // Check location permissions
     let { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== "granted") {
       console.error("Permission to access location was denied");
       setIsFetchingLocation(false);
       return;
     }
-    try {
-      let location = await Location.getCurrentPositionAsync({});
-      const { latitude, longitude } = location.coords;
-      setCurrentLocation({ latitude, longitude });
-      setLocationButtonText("Remove Loc");
-      if (mapRef.current) {
-        mapRef.current.animateToRegion({
-          latitude,
-          longitude,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
-        });
-      }
-      // Initial location save to Firebase
-      const dbRef = ref(db, "UsersCurrentLocation");
-      await set(dbRef, { Latitude: latitude, Longitude: longitude });
-      console.log("Current location saved to Firebase:", { latitude, longitude });
-    } catch (error) {
-      console.error("Error fetching location:", error);
+
+    // Check database connection
+    const isConnected = await checkDatabaseConnection();
+    if (!isConnected) {
+      alert("No connection to database. Please check your internet connection.");
+      setIsFetchingLocation(false);
+      return;
     }
+
+    // Get location
+    let location = await Location.getCurrentPositionAsync({});
+    const { latitude, longitude } = location.coords;
+    setCurrentLocation({ latitude, longitude });
+    setLocationButtonText("Remove Loc");
+
+    // Animate map
+    if (mapRef.current) {
+      mapRef.current.animateToRegion({
+        latitude,
+        longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      });
+    }
+
+    // Save to Firebase
+    const dbRef = ref(db, "UsersCurrentLocation");
+    await set(dbRef, { 
+      Latitude: latitude, 
+      Longitude: longitude,
+      timestamp: new Date().toISOString(),
+      userId: auth.currentUser?.uid // Add user ID to track different users
+    });
+    console.log("Current location saved to Firebase:", { latitude, longitude });
+
+  } catch (error) {
+    console.error("Error in toggleCurrentLocation:", error);
+    alert("Error updating location. Please try again.");
+  } finally {
     setIsFetchingLocation(false);
   }
 };
@@ -168,63 +192,49 @@ useEffect(() => {
   let locationSubscription = null;
 
   const startLocationTracking = async () => {
-    if (currentLocation) {
+    if (!currentLocation) return;
+
+    try {
+      const isConnected = await checkDatabaseConnection();
+      if (!isConnected) {
+        console.warn("No database connection, location updates will not be saved");
+        return;
+      }
+
       locationSubscription = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.High,
-          timeInterval: 5000,    // 5 seconds between updates
-          distanceInterval: 0.508,    // Only update if moved by 20 inches
+          timeInterval: 5000,
+          distanceInterval: 0.508,
         },
         async (location) => {
-          const { latitude, longitude } = location.coords;
-          
-          // Only update if the location has significantly changed
-          // and accuracy is good enough (less than 10 meters)
-          if (location.coords.accuracy <= 10 && 
-              isSignificantMove(currentLocation, location.coords)) {
+          try {
+            const { latitude, longitude } = location.coords;
             
-            setCurrentLocation({ latitude, longitude });
-            
-            // Update Firebase
-            try {
+            if (location.coords.accuracy <= 10) {
+              setCurrentLocation({ latitude, longitude });
+              
               const dbRef = ref(db, "UsersCurrentLocation");
               await set(dbRef, { 
                 Latitude: latitude, 
                 Longitude: longitude,
                 Accuracy: location.coords.accuracy,
-                Timestamp: new Date().toISOString()
+                Timestamp: new Date().toISOString(),
+                userId: auth.currentUser?.uid
               });
-              console.log("Location updated in Firebase:", { 
-                latitude, 
-                longitude, 
-                accuracy: location.coords.accuracy 
-              });
-            } catch (error) {
-              console.error("Error updating location in Firebase:", error);
             }
+          } catch (error) {
+            console.error("Error updating location:", error);
           }
         }
       );
+    } catch (error) {
+      console.error("Error starting location tracking:", error);
     }
-  };
-
-  // Add this helper function to check if movement is significant
-  const isSignificantMove = (prevLocation, newLocation) => {
-    if (!prevLocation) return true;
-
-    // Calculate distance between points using Haversine formula
-    const distance = calculateDistance(
-      { latitude: prevLocation.latitude, longitude: prevLocation.longitude },
-      { latitude: newLocation.latitude, longitude: newLocation.longitude }
-    );
-
-    // Only consider movements greater than 5 meters as significant
-    return distance > 5;
   };
 
   startLocationTracking();
 
-  // Cleanup subscription
   return () => {
     if (locationSubscription) {
       locationSubscription.remove();
@@ -510,6 +520,16 @@ useEffect(() => {
   }
 }, [isDrawing, points]);
 
+const handleLogout = async () => {
+  try {
+    const auth = getAuth();
+    await signOut(auth);
+  } catch (error) {
+    console.error('Error logging out:', error);
+    alert('Failed to log out');
+  }
+};
+
 if (!db) {
   console.error("Firebase database not initialized");
   return;
@@ -636,6 +656,13 @@ return (
         {isDrawing ? "Done Set" : "Reset Points"}
       </Text>
     </TouchableOpacity>
+
+    <TouchableOpacity 
+      style={styles.logoutButton} 
+      onPress={handleLogout}
+    >
+      <Text style={styles.buttonText}>Logout</Text>
+    </TouchableOpacity>
   </View>
 );
 } 
@@ -727,5 +754,15 @@ buttonReset: {
   width: 150,
   alignItems: "center",
   justifyContent: "center",
+},
+logoutButton: {
+  position: 'absolute',
+  top: 40,
+  right: 20,
+  backgroundColor: 'red',
+  paddingVertical: 10,
+  paddingHorizontal: 20,
+  borderRadius: 10,
+  zIndex: 1000,
 },
 });

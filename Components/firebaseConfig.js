@@ -1,5 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, onValue } from "firebase/database"; // Import Realtime Database
+import { getAuth } from "firebase/auth";
 
 // Your Firebase configuration
 const firebaseConfig = {
@@ -13,19 +14,49 @@ const firebaseConfig = {
 };
 
 // Initialize Firebase
-const app = initializeApp(firebaseConfig);
+let app;
+let db;
+let auth;
 
-// Initialize Realtime Database and get a reference to the service
-const db = getDatabase(app);
+try {
+  app = initializeApp(firebaseConfig);
+  db = getDatabase(app);
+  auth = getAuth(app);
+} catch (error) {
+  console.error("Error initializing Firebase:", error);
+}
 
-// Add error handling for database connection
-const connectedRef = ref(db, '.info/connected');
-onValue(connectedRef, (snap) => {
-  if (snap.val() === true) {
-    console.log('Connected to Firebase');
-  } else {
-    console.log('Not connected to Firebase');
-  }
-});
+// Add connection state monitoring
+if (db) {
+  const connectedRef = ref(db, '.info/connected');
+  onValue(connectedRef, (snap) => {
+    if (snap.val() === true) {
+      console.log('Connected to Firebase');
+    } else {
+      console.log('Not connected to Firebase');
+    }
+  }, (error) => {
+    console.error('Error monitoring connection:', error);
+  });
+}
 
-export { db };
+// Helper function to check database connection
+const checkDatabaseConnection = () => {
+  return new Promise((resolve) => {
+    if (!db) {
+      console.error('Database not initialized');
+      resolve(false);
+      return;
+    }
+
+    const connectedRef = ref(db, '.info/connected');
+    onValue(connectedRef, (snap) => {
+      resolve(snap.val() === true);
+    }, (error) => {
+      console.error('Error checking connection:', error);
+      resolve(false);
+    });
+  });
+};
+
+export { db, auth, checkDatabaseConnection };
