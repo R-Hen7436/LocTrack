@@ -12,9 +12,17 @@ export default function Login({ navigation }) {
   const handleLogin = async () => {
     try {
       const auth = getAuth();
-      await signInWithEmailAndPassword(auth, email, password);
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      
+      if (!userCredential.user.emailVerified) {
+        await auth.signOut();
+        setError('Please verify your email before logging in');
+        setEmail('');
+        setPassword('');
+        return;
+      }
     } catch (error) {
-      let errorMessage = "an error occured, Please try again.";
+      let errorMessage = "An error occurred. Please try again.";
 
       switch (error.code) {
         case 'auth/invalid-email':
