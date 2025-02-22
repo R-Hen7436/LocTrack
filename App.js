@@ -6,18 +6,21 @@ import Login from './Components/Auth/Login';
 import Register from './Components/Auth/Register';
 import LocTrack from './Components/locTrack';
 import ForgotPassword from './Components/Auth/ForgotPassword';
-import { View, ActivityIndicator } from 'react-native';
+import VerifyEmail from './Components/Auth/VerifyEmail';
+import { View, ActivityIndicator, Text } from 'react-native';
 
 const Stack = createNativeStackNavigator();
 
 export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [isVerified, setIsVerified] = useState(false);
 
   useEffect(() => {
     const auth = getAuth();
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setUser(user);
+      setIsVerified(user?.emailVerified ?? false);
       setLoading(false);
     });
 
@@ -36,12 +39,21 @@ export default function App() {
     <NavigationContainer>
       <Stack.Navigator>
         {user ? (
-          // Protected routes
-          <Stack.Screen 
-            name="LocTrack" 
-            component={LocTrack}
-            options={{ headerShown: false }}
-          />
+          isVerified ? (
+            // Protected routes for verified users
+            <Stack.Screen 
+              name="LocTrack" 
+              component={LocTrack}
+              options={{ headerShown: false }}
+            />
+          ) : (
+            // Screen for unverified users
+            <Stack.Screen 
+              name="VerifyEmail" 
+              component={VerifyEmail}
+              options={{ headerShown: false }}
+            />
+          )
         ) : (
           // Auth routes
           <>
