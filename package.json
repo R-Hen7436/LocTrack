@@ -11,6 +11,7 @@
   "dependencies": {
     "@expo/metro-runtime": "~4.0.1",
     "expo": "~52.0.28",
+    "expo-ble": "~6.0.0",
     "expo-location": "~18.0.5",
     "expo-status-bar": "~2.0.1",
     "firebase": "^11.2.0",

@@ -17,7 +17,9 @@
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "This app needs access to location for accurate position tracking.",
         "NSLocationAlwaysUsageDescription": "This app needs access to location for accurate position tracking.",
-        "UIBackgroundModes": ["location"]
+        "UIBackgroundModes": ["location", "bluetooth-central", "bluetooth-peripheral"],
+        "NSBluetoothAlwaysUsageDescription": "This app uses Bluetooth for indoor location tracking",
+        "NSBluetoothPeripheralUsageDescription": "This app uses Bluetooth for indoor location tracking"
       }
     },
     "android": {
@@ -28,12 +30,26 @@
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
-        "ACCESS_BACKGROUND_LOCATION"
+        "ACCESS_BACKGROUND_LOCATION",
+        "BLUETOOTH",
+        "BLUETOOTH_ADMIN",
+        "BLUETOOTH_SCAN",
+        "BLUETOOTH_ADVERTISE",
+        "BLUETOOTH_CONNECT"
       ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      [
+        "expo-ble",
+        {
+          "isBackgroundEnabled": true,
+          "modes": ["peripheral", "central"]
+        }
+      ]
+    ]
   },
   "android": {
     "config": {

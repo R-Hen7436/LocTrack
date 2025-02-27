@@ -4,6 +4,7 @@ import MapView, { Marker, Polygon, Circle } from "react-native-maps";
 import * as Location from "expo-location";
 import { getDatabase, ref, set, push, get, remove, child, onValue } from "firebase/database";
 import { db } from "./firebaseConfig";
+import BLEBeacon from './BLEBeacon';
 
 export default function App() {
 const mapRef = useRef(null);
@@ -24,6 +25,8 @@ const [initialRegion, setInitialRegion] = useState({
   latitudeDelta: 0.01,
   longitudeDelta: 0.01,
 });
+const [isBLEActive, setIsBLEActive] = useState(false);
+const [bleError, setBleError] = useState(null);
 
 // Add this new useEffect right after your state declarations (around line 26)
 useEffect(() => {
@@ -510,6 +513,31 @@ useEffect(() => {
   }
 }, [isDrawing, points]);
 
+useEffect(() => {
+  const initializeBLE = async () => {
+    try {
+      // Generate a unique UUID for this device
+      const deviceUUID = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+      });
+
+      const success = await BLEBeacon.startAdvertising(deviceUUID);
+      setIsBLEActive(success);
+    } catch (error) {
+      console.error('BLE initialization error:', error);
+      setBleError(error.message);
+    }
+  };
+
+  initializeBLE();
+
+  // Cleanup
+  return () => {
+    BLEBeacon.stopAdvertising();
+  };
+}, []);
+
 if (!db) {
   console.error("Firebase database not initialized");
   return;
@@ -636,6 +664,13 @@ return (
         {isDrawing ? "Done Set" : "Reset Points"}
       </Text>
     </TouchableOpacity>
+
+    <View style={styles.bleStatus}>
+      <Text style={[styles.bleStatusText, { color: isBLEActive ? 'green' : 'red' }]}>
+        BLE: {isBLEActive ? 'Active' : 'Inactive'}
+      </Text>
+      {bleError && <Text style={styles.bleError}>{bleError}</Text>}
+    </View>
   </View>
 );
 } 
@@ -727,5 +762,20 @@ buttonReset: {
   width: 150,
   alignItems: "center",
   justifyContent: "center",
+},
+bleStatus: {
+  position: 'absolute',
+  top: 40,
+  right: 20,
+  backgroundColor: 'rgba(255, 255, 255, 0.8)',
+  padding: 8,
+  borderRadius: 5,
+},
+bleStatusText: {
+  fontWeight: 'bold',
+},
+bleError: {
+  color: 'red',
+  fontSize: 12,
 },
 });
