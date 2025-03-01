@@ -8,20 +8,72 @@ export default function App() {
   const [points, setPoints] = useState([]);
   const [errorMsg, setErrorMsg] = useState(null);
 
+  const getCurrentLocation = async () => {
+    let { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      setErrorMsg('Permission to access location was denied');
+      return;
+    }
+
+    try {
+      const location = await Location.getCurrentPositionAsync({});
+      if (mapRef.current) {
+        mapRef.current.animateToRegion({
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        });
+      }
+    } catch (error) {
+      setErrorMsg('Error getting location');
+    }
+  };
+
   const getLocation = async () => {
-    if (mapRef.current) {
-      const region = await mapRef.current.getMapBoundaries();
-      const centerLatitude = (region.northEast.latitude + region.southWest.latitude) / 2;
-      const centerLongitude = (region.northEast.longitude + region.southWest.longitude) / 2;
-      const newPoint = { latitude: centerLatitude, longitude: centerLongitude };
+    let { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      setErrorMsg('Permission to access location was denied');
+      return;
+    }
+
+    try {
+      const location = await Location.getCurrentPositionAsync({});
+      const newPoint = {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude
+      };
       
+      console.log('New point:', newPoint); // Debug log
+
       setPoints((prevPoints) => {
+        console.log('Previous points:', prevPoints); // Debug log
+        
+        // Check if the new coordinates already exist in prevPoints
+        const isDuplicate = prevPoints.some(point => {
+          const isDup = point.latitude === newPoint.latitude && 
+                       point.longitude === newPoint.longitude;
+          console.log('Checking point:', point, 'isDuplicate:', isDup); // Debug log
+          return isDup;
+        });
+
+        if (isDuplicate) {
+          console.log('Duplicate point detected'); // Debug log
+          setErrorMsg('This location has already been added');
+          return prevPoints;
+        }
+
         if (prevPoints.length < 4) {
+          console.log('Adding new point'); // Debug log
           return [...prevPoints, newPoint];
         } else {
+          console.log('Resetting points with new point'); // Debug log
           return [newPoint];
         }
       });
+    } catch (error) {
+      console.error('Error:', error); // Debug log
+      setErrorMsg('Error getting location');
     }
   };
 
@@ -52,6 +104,11 @@ export default function App() {
       {/* Button to Get Coordinates */}
       <TouchableOpacity style={styles.button} onPress={getLocation}>
         <Text style={styles.buttonText}>Get Location</Text>
+      </TouchableOpacity>
+
+      {/* Add new Current Location button */}
+      <TouchableOpacity style={[styles.button, styles.currentLocationButton]} onPress={getCurrentLocation}>
+        <Text style={styles.buttonText}>Current Location</Text>
       </TouchableOpacity>
 
       {/* Display Coordinates */}
@@ -129,5 +186,8 @@ buttonText: {
     color: "red",
     textAlign: "center",
     marginTop: 20,
+  },
+  currentLocationButton: {
+    bottom: 220, // Position above the existing button
   },
 });

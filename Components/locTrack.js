@@ -11,21 +11,15 @@ const [points, setPoints] = useState([]);
 const [subZones, setSubZones] = useState([]);
 const [currentLocation, setCurrentLocation] = useState(null);
 const [isFetchingLocation, setIsFetchingLocation] = useState(false);
- const [locationButtonText, setLocationButtonText] = useState("My Location");
+const [locationButtonText, setLocationButtonText] = useState("My Location");
 const [subZoneDiameter, setSubZoneDiameter] = useState(10);
 const [selectedSubZone, setSelectedSubZone] = useState(null);
 const [subZoneCount, setSubZoneCount] = useState(0);
 const [previewCircle, setPreviewCircle] = useState(null);
 const [isDrawingComplete, setIsDrawingComplete] = useState(false);
 const [isDrawing, setIsDrawing] = useState(false);
-const [initialRegion, setInitialRegion] = useState({
-  latitude: 14.5995,
-  longitude: 120.9842,
-  latitudeDelta: 0.01,
-  longitudeDelta: 0.01,
-});
 
-// Add this new useEffect right after your state declarations (around line 26)
+// Add this useEffect to get location when app opens
 useEffect(() => {
   const getInitialLocation = async () => {
     setIsFetchingLocation(true);
@@ -519,15 +513,10 @@ return (
   <View style={styles.container}>
     <MapView 
       ref={mapRef} 
-      style={styles.map} 
-      initialRegion={currentLocation ? {
+      style={styles.map}
+      region={currentLocation && {
         latitude: currentLocation.latitude,
         longitude: currentLocation.longitude,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      } : {
-        latitude: 14.5995,
-        longitude: 120.9842,
         latitudeDelta: 0.01,
         longitudeDelta: 0.01,
       }}
