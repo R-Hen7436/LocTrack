@@ -28,44 +28,60 @@ const [initialRegion, setInitialRegion] = useState({
   longitudeDelta: 0.01,
 });
 const navigation = useNavigation();
+const [userRole, setUserRole] = useState(null);
 
-// Add this new useEffect right after your state declarations (around line 26)
+// Add this useEffect right after the state declarations
 useEffect(() => {
-  const getInitialLocation = async () => {
-    setIsFetchingLocation(true);
+  const loadUserRole = async () => {
     try {
-      let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") {
-        console.error("Permission to access location was denied");
-        return;
-      }
-
-      let location = await Location.getCurrentPositionAsync({});
-      const { latitude, longitude } = location.coords;
+      const auth = getAuth();
+      if (!auth.currentUser) return;
       
-      setCurrentLocation({ latitude, longitude });
-      setLocationButtonText("Remove Loc");
-
-      if (mapRef.current) {
-        mapRef.current.animateToRegion({
-          latitude,
-          longitude,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
-        });
+      const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+      const snapshot = await get(userProfileRef);
+      
+      if (snapshot.exists()) {
+        const profileData = snapshot.val();
+        setUserRole(profileData.role);
+        
+        // Auto-trigger location tracking for members
+        if (profileData.role === 'member') {
+          toggleCurrentLocation();
+        }
       }
-
-      // Initial location save to Firebase
-      const dbRef = ref(db, "UsersCurrentLocation");
-      await set(dbRef, { Latitude: latitude, Longitude: longitude });
-      console.log("Current location saved to Firebase:", { latitude, longitude });
     } catch (error) {
-      console.error("Error getting initial location:", error);
+      console.error('Error loading user role:', error);
     }
-    setIsFetchingLocation(false);
   };
 
-  getInitialLocation();
+  loadUserRole();
+}, []);
+
+// Add this useEffect after your other useEffects
+useEffect(() => {
+  const loadUserRole = async () => {
+    try {
+      const auth = getAuth();
+      if (!auth.currentUser) return;
+      
+      const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+      const snapshot = await get(userProfileRef);
+      
+      if (snapshot.exists()) {
+        const profileData = snapshot.val();
+        setUserRole(profileData.role);
+        
+        // Auto-trigger location tracking for members
+        if (profileData.role === 'member') {
+          toggleCurrentLocation();
+        }
+      }
+    } catch (error) {
+      console.error('Error loading user role:', error);
+    }
+  };
+
+  loadUserRole();
 }, []);
 
 const getLocation = async () => {
@@ -131,7 +147,7 @@ const distanceFromPointToLine = (point, lineStart, lineEnd) => {
 };
 
 const toggleCurrentLocation = async () => {
-  if (currentLocation) {
+  if (currentLocation && userRole !== 'member') {
     setCurrentLocation(null);
     setLocationButtonText("My Location");
     console.log("Location removed");
@@ -140,7 +156,6 @@ const toggleCurrentLocation = async () => {
 
   setIsFetchingLocation(true);
   try {
-    // Check location permissions
     let { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== "granted") {
       console.error("Permission to access location was denied");
@@ -148,21 +163,11 @@ const toggleCurrentLocation = async () => {
       return;
     }
 
-    // Check database connection
-    const isConnected = await checkDatabaseConnection();
-    if (!isConnected) {
-      alert("No connection to database. Please check your internet connection.");
-      setIsFetchingLocation(false);
-      return;
-    }
-
-    // Get location
     let location = await Location.getCurrentPositionAsync({});
     const { latitude, longitude } = location.coords;
     setCurrentLocation({ latitude, longitude });
     setLocationButtonText("Remove Loc");
 
-    // Animate map
     if (mapRef.current) {
       mapRef.current.animateToRegion({
         latitude,
@@ -172,22 +177,36 @@ const toggleCurrentLocation = async () => {
       });
     }
 
-    // Save to Firebase
-    const dbRef = ref(db, "UsersCurrentLocation");
+    const dbRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
     await set(dbRef, { 
       Latitude: latitude, 
       Longitude: longitude,
       timestamp: new Date().toISOString(),
-      userId: auth.currentUser?.uid // Add user ID to track different users
     });
-    console.log("Current location saved to Firebase:", { latitude, longitude });
-
+    
+    // If user is a member, set up continuous location tracking
+    if (userRole === 'member') {
+      Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.High,
+          timeInterval: 5000,
+          distanceInterval: 5,
+        },
+        (location) => {
+          const { latitude, longitude } = location.coords;
+          setCurrentLocation({ latitude, longitude });
+          set(dbRef, { 
+            Latitude: latitude, 
+            Longitude: longitude,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      );
+    }
   } catch (error) {
-    console.error("Error in toggleCurrentLocation:", error);
-    alert("Error updating location. Please try again.");
-  } finally {
-    setIsFetchingLocation(false);
+    console.error("Error fetching location:", error);
   }
+  setIsFetchingLocation(false);
 };
 
 // Replace the existing location tracking useEffect (around line 167-203) with this:
@@ -543,107 +562,89 @@ return (
     <MapView 
       ref={mapRef} 
       style={styles.map} 
-      initialRegion={currentLocation ? {
-        latitude: currentLocation.latitude,
-        longitude: currentLocation.longitude,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      } : {
-        latitude: 14.5995,
-        longitude: 120.9842,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      }}
+      initialRegion={initialRegion}
       onPress={(e) => {
-        if (isDrawing) {
+        if (isDrawing && userRole !== 'member') {
           const newPoint = e.nativeEvent.coordinate;
           setPoints(prevPoints => [...prevPoints, newPoint]);
         }
       }}
     >
-      {points.map((point, index) => (
-        <Marker key={index} coordinate={point} title={`Point ${index + 1}`} />
-      ))}
-      {points.length >= 3 && (
-        <Polygon 
-          coordinates={points} 
-          fillColor="rgba(0,0,255,0.3)" 
-          strokeColor="blue" 
-          strokeWidth={2} 
-        />
+      {userRole !== 'member' && (
+        <>
+          {points.map((point, index) => (
+            <Marker key={index} coordinate={point} title={`Point ${index + 1}`} />
+          ))}
+          {points.length >= 3 && (
+            <Polygon 
+              coordinates={points} 
+              fillColor="rgba(0,0,255,0.3)" 
+              strokeColor="blue" 
+              strokeWidth={2} 
+            />
+          )}
+          {subZones.map((zone, index) => (
+            <Circle
+              key={index}
+              center={{ latitude: zone.latitude, longitude: zone.longitude }}
+              radius={zone.diameter * 0.5}
+              fillColor="rgba(255,0,0,0.3)"
+              strokeColor="red"
+              strokeWidth={2}
+            />
+          ))}
+          {previewCircle && !selectedSubZone && (
+            <Circle
+              center={{ 
+                latitude: previewCircle.latitude, 
+                longitude: previewCircle.longitude 
+              }}
+              radius={previewCircle.diameter * 0.5}
+              fillColor="rgba(85, 84, 83, 0.3)"
+              strokeColor="gray"
+              strokeWidth={2}
+              strokePattern={[10, 5]}
+            />
+          )}
+        </>
       )}
-      {subZones.map((zone, index) => (
-        <Circle
-          key={index}
-          center={{ latitude: zone.latitude, longitude: zone.longitude }}
-          radius={zone.diameter * 0.5}
-          fillColor="rgba(255,0,0,0.3)"
-          strokeColor="red"
-          strokeWidth={2}
-        />
-      ))}
       {currentLocation && (
         <Marker coordinate={currentLocation} title="Current Location" pinColor="green" />
       )}
-      {previewCircle && !selectedSubZone && (
-        <Circle
-          center={{ 
-            latitude: previewCircle.latitude, 
-            longitude: previewCircle.longitude 
-          }}
-          radius={previewCircle.diameter * 0.5}
-          fillColor="rgba(85, 84, 83, 0.3)"
-          strokeColor="gray"
-          strokeWidth={2}
-          strokePattern={[10, 5]}
-        />
-      )}
     </MapView>
-    <View style={styles.crosshair}>
-      <Text style={styles.crosshairText}>+</Text>
-    </View>
 
-    <View style={styles.buttonContainer}>
-      <View style={styles.inputWrapper}>
-        <Ionicons name="resize" size={20} color="#999" />
+    {userRole !== 'member' && (
+      <>
+        <View style={styles.crosshair}>
+          <Text style={styles.crosshairText}>+</Text>
+        </View>
+
         <TextInput
-          style={styles.inputInContainer}
+          style={styles.input}
           placeholder="Enter Diameter"
-          placeholderTextColor="#999"
           keyboardType="numeric"
-          returnKeyType="done"
-          onSubmitEditing={() => Keyboard.dismiss()}
-          blurOnSubmit={true}
           onChangeText={(text) => {
             const newDiameter = parseFloat(text) || 10;
             setSubZoneDiameter(newDiameter);
             updatePreviewCircle();
           }}
         />
-      </View>
-      <View style={styles.buttonsRow}>
+
         <TouchableOpacity style={styles.button} onPress={getLocation}>
-          <Ionicons name="location" size={20} color="white" />
           <Text style={styles.buttonText}>Set Point</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.button} onPress={toggleCurrentLocation}>
-          <Ionicons name="navigate" size={20} color="white" />
-          <Text style={styles.buttonText}>
-            {isFetchingLocation ? "Loading" : currentLocation ? "Remove" : "My Loc"}
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={[styles.button, selectedSubZone && { backgroundColor: 'black' }]} 
-          onPress={selectedSubZone ? removeSubZone : addSubZone}>
-          <Ionicons name="radio-button-on" size={20} color="white" />
+        <TouchableOpacity 
+          style={[styles.buttonSubZone, selectedSubZone && { backgroundColor: 'black' }]} 
+          onPress={selectedSubZone ? removeSubZone : addSubZone}
+        >
           <Text style={styles.buttonText}>
             {selectedSubZone ? "Remove" : "SubZone"}
           </Text>
         </TouchableOpacity>
 
         <TouchableOpacity 
-          style={styles.button} 
+          style={[styles.buttonReset, (points.length > 0 || isDrawing) && { display: 'flex' }]} 
           onPress={() => {
             if (isDrawing) {
               if (points.length >= 3) {
@@ -658,24 +659,12 @@ return (
             }
           }}
         >
-          <Ionicons 
-            name={isDrawing ? "checkmark-circle" : "refresh-circle"} 
-            size={20} 
-            color="white" 
-          />
           <Text style={styles.buttonText}>
-            {isDrawing ? "Done" : "Reset"}
+            {isDrawing ? "Done Set" : "Reset Points"}
           </Text>
         </TouchableOpacity>
-      </View>
-    </View>
-
-    <TouchableOpacity 
-      style={styles.logoutButton} 
-      onPress={handleLogout}
-    >
-      <Text style={styles.buttonText}>Logout</Text>
-    </TouchableOpacity>
+      </>
+    )}
 
     <View style={styles.navbar}>
       <TouchableOpacity style={styles.navItem}>
@@ -731,21 +720,12 @@ input: {
 },
 buttonContainer: {
   position: 'absolute',
-  bottom: 85,
-  left: 0,
-  right: 0,
-  padding: 10,
-  backgroundColor: 'rgba(0,0,0,0.85)',
-  borderTopLeftRadius: 25,
-  borderTopRightRadius: 25,
-  paddingTop: 15,
-  paddingBottom: 15,
-},
-buttonsRow: {
-  flexDirection: 'row',
-  justifyContent: 'space-between',
-  paddingHorizontal: 10,
-  width: '100%',
+  bottom: 20,
+  left: 20,
+  right: 20,
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: 10,
 },
 button: {
   flexDirection: 'row',
@@ -755,7 +735,7 @@ button: {
   paddingVertical: 8,
   paddingHorizontal: 8,
   borderRadius: 12,
-  width: '23%', // Slightly less than 25% to account for spacing
+  width: '100%',
   gap: 4,
 },
 buttonText: {
@@ -769,7 +749,7 @@ inputWrapper: {
   backgroundColor: "#2C2C2E",
   paddingHorizontal: 15,
   borderRadius: 15,
-  width: '95%',
+  width: '100%',
   marginBottom: 10,
   marginHorizontal: 10,
   borderWidth: 1,
@@ -842,5 +822,31 @@ navText: {
   fontSize: 12,
   marginTop: 4,
   fontWeight: '500',
+},
+disabledButton: {
+  backgroundColor: '#666',
+  opacity: 0.5,
+},
+buttonSubZone: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'center',
+  backgroundColor: "#007AFF",
+  paddingVertical: 8,
+  paddingHorizontal: 8,
+  borderRadius: 12,
+  width: '100%',
+  gap: 4,
+},
+buttonReset: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'center',
+  backgroundColor: "#007AFF",
+  paddingVertical: 8,
+  paddingHorizontal: 8,
+  borderRadius: 12,
+  width: '100%',
+  gap: 4,
 },
 });
