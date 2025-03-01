@@ -112,4 +112,18 @@ const validateProductKey = async (productKey, userId) => {
   return true;
 };
 
-export { db, auth, checkDatabaseConnection, generateProductKey, storeProductKey, validateProductKey };
+const generateTeamCode = () => {
+  const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const length = 6;
+  let result = '';
+  
+  for (let i = 0; i < length; i++) {
+    const randomIndex = Math.floor(Math.random() * chars.length);
+    result += chars[randomIndex];
+  }
+  
+  console.log('Generated New Team Code:', result); // Debug log
+  return result;
+};
+
+export { db, auth, checkDatabaseConnection, generateProductKey, storeProductKey, validateProductKey, generateTeamCode };

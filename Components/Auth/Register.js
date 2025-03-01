@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
 import { getAuth, createUserWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
-import { getDatabase, ref, set } from 'firebase/database';
+import { getDatabase, ref, set, get } from 'firebase/database';
 import { Ionicons } from '@expo/vector-icons';
 import { CommonActions } from '@react-navigation/native';
 import { getAdminConfig } from '../Admin/adminConfig';
+import { generateProductKey, validateProductKey, generateTeamCode } from '../firebaseConfig';
 
 export default function Register({ navigation }) {
   const [firstName, setFirstName] = useState('');
@@ -46,22 +47,66 @@ export default function Register({ navigation }) {
     try {
       const auth = getAuth();
       const db = getDatabase();
+
+      // If member, verify team code exists
+      if (role === 'member') {
+        const teamsRef = ref(db, 'users');
+        const snapshot = await get(teamsRef);
+        let teamFound = false;
+        
+        if (snapshot.exists()) {
+          snapshot.forEach((child) => {
+            const userData = child.val();
+            if (userData?.profile?.teamCode === teamCode.trim() && userData?.profile?.role === 'owner') {
+              teamFound = true;
+            }
+          });
+        }
+        
+        if (!teamFound) {
+          setError('Invalid team code');
+          return;
+        }
+      }
+
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       
+      // Generate team code for owner
+      const generatedTeamCode = role === 'owner' ? generateTeamCode() : null;
+      console.log('Generated Team Code:', generatedTeamCode); // Debug log
+      
       // Save user profile data with role
-      await set(ref(db, `users/${userCredential.user.uid}/profile`), {
+      const userProfile = {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         middleName: middleName.trim() || null,
         email: email.trim(),
         createdAt: new Date().toISOString(),
         role: role,
-        teamCode: role === 'member' ? teamCode : null,
+        teamCode: role === 'owner' ? generatedTeamCode : teamCode.trim(),
         isOwner: role === 'owner',
-        isAdmin: false // Ensure regular users can't be admins
-      });
+        isAdmin: false
+      };
+      
+      console.log('Saving User Profile:', userProfile); // Debug log
+      
+      await set(ref(db, `users/${userCredential.user.uid}/profile`), userProfile);
 
-      // Initialize location data separately
+      // If owner, create team entry
+      if (role === 'owner') {
+        const teamData = {
+          ownerId: userCredential.user.uid,
+          createdAt: new Date().toISOString(),
+          name: `${firstName.trim()}'s Team`,
+          members: {},
+          teamCode: generatedTeamCode // Add team code to team data
+        };
+        
+        console.log('Creating Team:', teamData); // Debug log
+        await set(ref(db, `teams/${generatedTeamCode}`), teamData);
+      }
+
+      // Initialize location data
       await set(ref(db, `UsersCurrentLocation/${userCredential.user.uid}`), {
         Latitude: null,
         Longitude: null,
@@ -72,6 +117,9 @@ export default function Register({ navigation }) {
       
       await sendEmailVerification(userCredential.user);
       setMessage('Registration successful! Please check your email for verification.');
+      if (role === 'owner') {
+        setMessage(message + `\nYour team code is: ${generatedTeamCode}`);
+      }
       setError('');
       
       navigation.dispatch(
@@ -81,6 +129,7 @@ export default function Register({ navigation }) {
         })
       );
     } catch (error) {
+      console.error('Registration Error:', error);
       setError(error.message);
       setMessage('');
     }

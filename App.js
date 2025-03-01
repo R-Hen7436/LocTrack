@@ -11,6 +11,7 @@ import { View, ActivityIndicator, Text } from 'react-native';
 import ProductKeyManager from './Components/Admin/ProductKeyManager';
 import { initializeAdmin } from './scripts/initAdmin';
 import { getDatabase, ref, get } from 'firebase/database';
+import Profile from './Components/Profile/Profile';
 
 const Stack = createNativeStackNavigator();
 
@@ -89,13 +90,31 @@ export default function App() {
                     component={LocTrack}
                     options={{ headerShown: false }}
                   />
+                  <Stack.Screen 
+                    name="Profile" 
+                    component={Profile}
+                    options={{ 
+                      headerShown: true,
+                      title: 'My Profile'
+                    }}
+                  />
                 </>
               ) : (
-                <Stack.Screen 
-                  name="LocTrack" 
-                  component={LocTrack}
-                  options={{ headerShown: false }}
-                />
+                <>
+                  <Stack.Screen 
+                    name="LocTrack" 
+                    component={LocTrack}
+                    options={{ headerShown: false }}
+                  />
+                  <Stack.Screen 
+                    name="Profile" 
+                    component={Profile}
+                    options={{ 
+                      headerShown: true,
+                      title: 'My Profile'
+                    }}
+                  />
+                </>
               )}
             </>
           ) : (

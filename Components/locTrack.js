@@ -6,6 +6,7 @@ import { getDatabase, ref, set, push, get, remove, child, onValue } from "fireba
 import { db, auth } from "./firebaseConfig";
 import { getAuth, signOut } from 'firebase/auth';
 import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 
 export default function App() {
 const mapRef = useRef(null);
@@ -26,6 +27,7 @@ const [initialRegion, setInitialRegion] = useState({
   latitudeDelta: 0.01,
   longitudeDelta: 0.01,
 });
+const navigation = useNavigation();
 
 // Add this new useEffect right after your state declarations (around line 26)
 useEffect(() => {
@@ -686,7 +688,10 @@ return (
         <Text style={styles.navText}>Maps</Text>
       </TouchableOpacity>
       
-      <TouchableOpacity style={styles.navItem}>
+      <TouchableOpacity 
+        style={styles.navItem}
+        onPress={() => navigation.navigate('Profile')}
+      >
         <Ionicons name="person-outline" size={24} color="white" />
         <Text style={styles.navText}>Profile</Text>
       </TouchableOpacity>
