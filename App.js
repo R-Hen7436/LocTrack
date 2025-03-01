@@ -8,6 +8,9 @@ import LocTrack from './Components/locTrack';
 import ForgotPassword from './Components/Auth/ForgotPassword';
 import VerifyEmail from './Components/Auth/VerifyEmail';
 import { View, ActivityIndicator, Text } from 'react-native';
+import ProductKeyManager from './Components/Admin/ProductKeyManager';
+import { initializeAdmin } from './scripts/initAdmin';
+import { getDatabase, ref, get } from 'firebase/database';
 
 const Stack = createNativeStackNavigator();
 
@@ -17,14 +20,44 @@ export default function App() {
   const [isVerified, setIsVerified] = useState(false);
 
   useEffect(() => {
-    const auth = getAuth();
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setUser(user);
-      setIsVerified(user?.emailVerified ?? false);
-      setLoading(false);
-    });
+    const setupApp = async () => {
+      const auth = getAuth();
+      
+      try {
+        // Initialize admin account if it doesn't exist
+        await initializeAdmin();
+      } catch (error) {
+        console.error('Admin initialization error:', error);
+      }
 
-    return unsubscribe;
+      const unsubscribe = onAuthStateChanged(auth, async (user) => {
+        if (user) {
+          const db = getDatabase();
+          const userProfileRef = ref(db, `users/${user.uid}/profile`);
+          const snapshot = await get(userProfileRef);
+          
+          if (snapshot.exists()) {
+            const userData = snapshot.val();
+            setUser({
+              ...user,
+              isAdmin: userData.isAdmin
+            });
+            setIsVerified(userData.isAdmin || user.emailVerified);
+          } else {
+            setUser(user);
+            setIsVerified(user.emailVerified);
+          }
+        } else {
+          setUser(null);
+          setIsVerified(false);
+        }
+        setLoading(false);
+      });
+
+      return unsubscribe;
+    };
+
+    setupApp();
   }, []);
 
   if (loading) {
@@ -40,14 +73,32 @@ export default function App() {
       <Stack.Navigator>
         {user ? (
           isVerified ? (
-            // Protected routes for verified users
-            <Stack.Screen 
-              name="LocTrack" 
-              component={LocTrack}
-              options={{ headerShown: false }}
-            />
+            <>
+              {user?.isAdmin ? (
+                <>
+                  <Stack.Screen 
+                    name="ProductKeyManager" 
+                    component={ProductKeyManager}
+                    options={{ 
+                      headerShown: true,
+                      title: 'Product Keys'
+                    }}
+                  />
+                  <Stack.Screen 
+                    name="LocTrack" 
+                    component={LocTrack}
+                    options={{ headerShown: false }}
+                  />
+                </>
+              ) : (
+                <Stack.Screen 
+                  name="LocTrack" 
+                  component={LocTrack}
+                  options={{ headerShown: false }}
+                />
+              )}
+            </>
           ) : (
-            // Screen for unverified users
             <Stack.Screen 
               name="VerifyEmail" 
               component={VerifyEmail}

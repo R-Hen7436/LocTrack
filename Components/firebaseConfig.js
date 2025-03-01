@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, onValue } from "firebase/database"; // Import Realtime Database
+import { getDatabase, ref, onValue, set, get } from "firebase/database"; // Import Realtime Database
 import { getAuth } from "firebase/auth";
 
 // Your Firebase configuration
@@ -59,4 +59,57 @@ const checkDatabaseConnection = () => {
   });
 };
 
-export { db, auth, checkDatabaseConnection };
+// Function to generate a secure 12-character product key
+const generateProductKey = () => {
+  const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'; // Excluding similar-looking characters
+  const length = 12;
+  let result = '';
+  
+  for (let i = 0; i < length; i++) {
+    const randomIndex = Math.floor(Math.random() * chars.length);
+    result += chars[randomIndex];
+  }
+  
+  // Insert dashes every 4 characters for readability
+  return result.match(/.{1,4}/g).join('-');
+};
+
+// Function to store a new product key
+const storeProductKey = async (productKey) => {
+  const db = getDatabase();
+  await set(ref(db, `productKeys/${productKey}`), {
+    key: productKey,
+    status: 'unused',
+    createdAt: new Date().toISOString(),
+    usedBy: null,
+    usedAt: null
+  });
+};
+
+// Function to validate and claim a product key
+const validateProductKey = async (productKey, userId) => {
+  const formattedKey = productKey.replace(/-/g, '').toUpperCase();
+  const keyRef = ref(db, `productKeys/${formattedKey}`);
+  
+  const snapshot = await get(keyRef);
+  if (!snapshot.exists()) {
+    throw new Error('Invalid product key');
+  }
+  
+  const keyData = snapshot.val();
+  if (keyData.status === 'used') {
+    throw new Error('Product key has already been used');
+  }
+  
+  // Mark the key as used
+  await set(keyRef, {
+    ...keyData,
+    status: 'used',
+    usedBy: userId,
+    usedAt: new Date().toISOString()
+  });
+  
+  return true;
+};
+
+export { db, auth, checkDatabaseConnection, generateProductKey, storeProductKey, validateProductKey };

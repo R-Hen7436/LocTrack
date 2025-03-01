@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
 import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
 import { Ionicons } from '@expo/vector-icons';
+import { getDatabase, ref, get, set } from 'firebase/database';
 
 export default function Login({ navigation }) {
   const [email, setEmail] = useState('');
@@ -14,12 +15,25 @@ export default function Login({ navigation }) {
       const auth = getAuth();
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       
-      if (!userCredential.user.emailVerified) {
-        await auth.signOut();
-        setError('Please verify your email before logging in');
-        setEmail('');
-        setPassword('');
-        return;
+      const db = getDatabase();
+      const userProfileRef = ref(db, `users/${userCredential.user.uid}/profile`);
+      const snapshot = await get(userProfileRef);
+      
+      if (snapshot.exists()) {
+        const userData = snapshot.val();
+        if (!userCredential.user.emailVerified && !userData.isAdmin) {
+          await auth.signOut();
+          setError('Please verify your email before logging in');
+          setEmail('');
+          setPassword('');
+          return;
+        }
+        
+        if (userData.isAdmin) {
+          await set(ref(db, `adminSessions/${userCredential.user.uid}`), {
+            lastLogin: new Date().toISOString()
+          });
+        }
       }
     } catch (error) {
       let errorMessage = "An error occurred. Please try again.";
@@ -113,9 +127,10 @@ const styles = StyleSheet.create({
   input: {
     borderWidth: 1,
     borderColor: '#ddd',
-    padding: 10,
+    padding: 12,
     marginBottom: 20,
     borderRadius: 5,
+    height: 48,
   },
   button: {
     backgroundColor: 'black',
@@ -151,12 +166,13 @@ const styles = StyleSheet.create({
     borderColor: '#ddd',
     borderRadius: 5,
     marginBottom: 20,
+    height: 48,
   },
   passwordInput: {
     flex: 1,
-    padding: 10,
+    padding: 12,
   },
   eyeIcon: {
-    padding: 10,
+    padding: 12,
   },
 }); 

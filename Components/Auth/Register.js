@@ -4,6 +4,7 @@ import { getAuth, createUserWithEmailAndPassword, sendEmailVerification } from '
 import { getDatabase, ref, set } from 'firebase/database';
 import { Ionicons } from '@expo/vector-icons';
 import { CommonActions } from '@react-navigation/native';
+import { getAdminConfig } from '../Admin/adminConfig';
 
 export default function Register({ navigation }) {
   const [firstName, setFirstName] = useState('');
@@ -14,10 +15,31 @@ export default function Register({ navigation }) {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [productKey, setProductKey] = useState('');
+  const [teamCode, setTeamCode] = useState('');
+  const [role, setRole] = useState('member'); 
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
 
   const handleRegister = async () => {
     if (!firstName.trim() || !lastName.trim() || !email.trim() || !password.trim()) {
       setError('First name, last name, email, and password are required');
+      return;
+    }
+
+    // Prevent admin registration through normal flow
+    if (email.toLowerCase() === getAdminConfig().email.toLowerCase()) {
+      setError('This email address is reserved');
+      return;
+    }
+
+    if (role === 'owner' && !productKey.trim()) {
+      setError('Product key is required for owner registration');
+      return;
+    }
+
+    if (role === 'member' && !teamCode.trim()) {
+      setError('Team invitation code is required for member registration');
       return;
     }
 
@@ -26,14 +48,17 @@ export default function Register({ navigation }) {
       const db = getDatabase();
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       
-      // Save user profile data
+      // Save user profile data with role
       await set(ref(db, `users/${userCredential.user.uid}/profile`), {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         middleName: middleName.trim() || null,
         email: email.trim(),
         createdAt: new Date().toISOString(),
-        role: 'basic_user'
+        role: role,
+        teamCode: role === 'member' ? teamCode : null,
+        isOwner: role === 'owner',
+        isAdmin: false // Ensure regular users can't be admins
       });
 
       // Initialize location data separately
@@ -118,6 +143,70 @@ export default function Register({ navigation }) {
         </TouchableOpacity>
       </View>
       
+      <View style={styles.pickerContainer}>
+        <Text style={styles.label}>Register as:</Text>
+        <TouchableOpacity 
+          style={styles.picker}
+          onPress={() => setShowDropdown(!showDropdown)}
+        >
+          <Text style={[styles.dropdownText, role !== 'member' && styles.selectedText]}>
+            {role === 'member' ? 'Member' : 'Owner'}
+          </Text>
+          <Ionicons 
+            name={showDropdown ? "chevron-up" : "chevron-down"} 
+            size={24} 
+            color="#999" 
+          />
+        </TouchableOpacity>
+        
+        {showDropdown && (
+          <View style={styles.dropdownContainer}>
+            <TouchableOpacity 
+              style={styles.dropdownItem} 
+              onPress={() => {
+                setRole('member');
+                setShowDropdown(false);
+              }}
+            >
+              <Text style={[styles.dropdownText, role === 'member' && styles.selectedText]}>
+                Member
+              </Text>
+              {role === 'member' && <Ionicons name="checkmark" size={20} color="#007AFF" />}
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={[styles.dropdownItem, { borderBottomWidth: 0 }]}
+              onPress={() => {
+                setRole('owner');
+                setShowDropdown(false);
+              }}
+            >
+              <Text style={[styles.dropdownText, role === 'owner' && styles.selectedText]}>
+                Owner
+              </Text>
+              {role === 'owner' && <Ionicons name="checkmark" size={20} color="#007AFF" />}
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+      
+      {role === 'owner' ? (
+        <TextInput
+          style={styles.input}
+          placeholder="Product Key *"
+          value={productKey}
+          onChangeText={setProductKey}
+          autoCapitalize="none"
+        />
+      ) : (
+        <TextInput
+          style={styles.input}
+          placeholder="Team Invitation Code *"
+          value={teamCode}
+          onChangeText={setTeamCode}
+          autoCapitalize="none"
+        />
+      )}
+      
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {message ? <Text style={styles.success}>{message}</Text> : null}
       
@@ -147,9 +236,10 @@ const styles = StyleSheet.create({
   input: {
     borderWidth: 1,
     borderColor: '#ddd',
-    padding: 10,
+    padding: 12,
     marginBottom: 20,
     borderRadius: 5,
+    height: 48,
   },
   button: {
     backgroundColor: 'black',
@@ -184,12 +274,70 @@ const styles = StyleSheet.create({
     borderColor: '#ddd',
     borderRadius: 5,
     marginBottom: 20,
+    height: 48,
   },
   passwordInput: {
     flex: 1,
-    padding: 10,
+    padding: 12,
   },
   eyeIcon: {
     padding: 10,
+  },
+  pickerContainer: {
+    marginBottom: 20,
+    zIndex: 2,
+  },
+  label: {
+    fontSize: 16,
+    marginBottom: 8,
+    color: '#999',
+  },
+  picker: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#ddd',
+    padding: 12,
+    borderRadius: 5,
+    height: 48,
+  },
+  dropdownContainer: {
+    position: 'absolute',
+    top: '100%',
+    left: 0,
+    right: 0,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 5,
+    marginTop: 5,
+    zIndex: 1000,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    overflow: 'hidden',
+  },
+  dropdownItem: {
+    padding: 12,
+    height: 48,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  dropdownText: {
+    fontSize: 16,
+    color: '#333',
+  },
+  selectedText: {
+    color: 'black',
+    fontWeight: 'bold',
   },
 }); 
