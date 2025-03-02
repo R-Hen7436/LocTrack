@@ -6,7 +6,8 @@ import {
   StyleSheet, 
   FlatList,
   TextInput,
-  Alert 
+  Alert,
+  Keyboard
 } from 'react-native';
 import { getDatabase, ref, get, query, orderByChild, set } from 'firebase/database';
 import { generateProductKey, storeProductKey } from '../firebaseConfig';
@@ -136,6 +137,10 @@ export default function ProductKeyManager({ navigation }) {
           onChangeText={setQuantity}
           keyboardType="numeric"
           placeholder="Enter quantity (1-100)"
+          returnKeyType="done"
+          onSubmitEditing={() => {
+            Keyboard.dismiss();
+          }}
         />
         <TouchableOpacity 
           style={[styles.button, loading && styles.buttonDisabled]}
