@@ -48,6 +48,19 @@ export default function Register({ navigation }) {
       const auth = getAuth();
       const db = getDatabase();
 
+      // Validate product key for owner registration
+      if (role === 'owner') {
+        try {
+          console.log('Attempting to validate product key during registration:', productKey.trim());
+          await validateProductKey(productKey.trim(), email);
+          console.log('Product key validation successful');
+        } catch (error) {
+          console.error('Product key validation failed:', error.message);
+          setError(error.message);
+          return;
+        }
+      }
+
       // If member, verify team code exists
       if (role === 'member') {
         const teamsRef = ref(db, 'users');

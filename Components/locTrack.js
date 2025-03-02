@@ -29,6 +29,8 @@ const [initialRegion, setInitialRegion] = useState({
 });
 const navigation = useNavigation();
 const [userRole, setUserRole] = useState(null);
+const [teamGeofence, setTeamGeofence] = useState([]);
+const [teamSubzones, setTeamSubzones] = useState([]);
 
 // Add this useEffect right after the state declarations
 useEffect(() => {
@@ -83,6 +85,40 @@ useEffect(() => {
 
   loadUserRole();
 }, []);
+
+// Add this new useEffect
+useEffect(() => {
+  const loadTeamGeofence = async () => {
+    if (!auth.currentUser || userRole !== 'member') return;
+    
+    try {
+      // Get user's team code
+      const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+      const profileSnapshot = await get(userProfileRef);
+      const teamCode = profileSnapshot.val()?.teamCode;
+      
+      if (teamCode) {
+        // Load geofence coordinates
+        const geofenceRef = ref(db, "geofence/coordinates");
+        const geofenceSnapshot = await get(geofenceRef);
+        if (geofenceSnapshot.exists()) {
+          setTeamGeofence(geofenceSnapshot.val());
+        }
+        
+        // Load subzones
+        const subzonesRef = ref(db, "geofence/subzones");
+        const subzonesSnapshot = await get(subzonesRef);
+        if (subzonesSnapshot.exists()) {
+          setTeamSubzones(Object.values(subzonesSnapshot.val()));
+        }
+      }
+    } catch (error) {
+      console.error("Error loading team geofence:", error);
+    }
+  };
+
+  loadTeamGeofence();
+}, [userRole]);
 
 const getLocation = async () => {
   if (mapRef.current) {
@@ -570,7 +606,28 @@ return (
         }
       }}
     >
-      {userRole !== 'member' && (
+      {userRole === 'member' ? (
+        <>
+          {teamGeofence.length >= 3 && (
+            <Polygon 
+              coordinates={teamGeofence} 
+              fillColor="rgba(0,0,255,0.2)" 
+              strokeColor="blue" 
+              strokeWidth={2} 
+            />
+          )}
+          {teamSubzones.map((zone, index) => (
+            <Circle
+              key={index}
+              center={{ latitude: zone.latitude, longitude: zone.longitude }}
+              radius={zone.diameter * 0.5}
+              fillColor="rgba(255,0,0,0.2)"
+              strokeColor="red"
+              strokeWidth={2}
+            />
+          ))}
+        </>
+      ) : (
         <>
           {points.map((point, index) => (
             <Marker key={index} coordinate={point} title={`Point ${index + 1}`} />
@@ -593,19 +650,6 @@ return (
               strokeWidth={2}
             />
           ))}
-          {previewCircle && !selectedSubZone && (
-            <Circle
-              center={{ 
-                latitude: previewCircle.latitude, 
-                longitude: previewCircle.longitude 
-              }}
-              radius={previewCircle.diameter * 0.5}
-              fillColor="rgba(85, 84, 83, 0.3)"
-              strokeColor="gray"
-              strokeWidth={2}
-              strokePattern={[10, 5]}
-            />
-          )}
         </>
       )}
       {currentLocation && (
@@ -614,57 +658,83 @@ return (
     </MapView>
 
     {userRole !== 'member' && (
-      <>
-        <View style={styles.crosshair}>
-          <Text style={styles.crosshairText}>+</Text>
-        </View>
-
-        <TextInput
-          style={styles.input}
-          placeholder="Enter Diameter"
-          keyboardType="numeric"
-          onChangeText={(text) => {
-            const newDiameter = parseFloat(text) || 10;
-            setSubZoneDiameter(newDiameter);
-            updatePreviewCircle();
-          }}
-        />
-
-        <TouchableOpacity style={styles.button} onPress={getLocation}>
-          <Text style={styles.buttonText}>Set Point</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={[styles.buttonSubZone, selectedSubZone && { backgroundColor: 'black' }]} 
-          onPress={selectedSubZone ? removeSubZone : addSubZone}
-        >
-          <Text style={styles.buttonText}>
-            {selectedSubZone ? "Remove" : "SubZone"}
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={[styles.buttonReset, (points.length > 0 || isDrawing) && { display: 'flex' }]} 
-          onPress={() => {
-            if (isDrawing) {
-              if (points.length >= 3) {
-                setIsDrawing(false);
-                saveCoordinatesToFirebase(points);
-              } else {
-                alert("Please add at least 3 points to create a valid area");
-              }
-            } else {
-              setPoints([]);
-              setIsDrawing(true);
-            }
-          }}
-        >
-          <Text style={styles.buttonText}>
-            {isDrawing ? "Done Set" : "Reset Points"}
-          </Text>
-        </TouchableOpacity>
-      </>
+      <View style={styles.crosshair}>
+        <Text style={styles.crosshairText}>+</Text>
+      </View>
     )}
+
+    <View style={styles.toolbarContainer}>
+      {userRole !== 'member' ? (
+        <>
+          <View style={styles.inputWrapper}>
+            <TextInput
+              style={styles.input}
+              placeholder="Enter Diameter (meters)"
+              keyboardType="numeric"
+              placeholderTextColor="#666"
+              onChangeText={(text) => {
+                const newDiameter = parseFloat(text) || 10;
+                setSubZoneDiameter(newDiameter);
+                updatePreviewCircle();
+              }}
+            />
+          </View>
+          
+          <View style={styles.buttonContainer}>
+            <TouchableOpacity style={styles.button} onPress={getLocation}>
+              <Ionicons name="location" size={20} color="white" />
+              <Text style={styles.buttonText}>Set Point</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={[styles.button, styles.buttonSecondary]} onPress={toggleCurrentLocation}>
+              <Ionicons name="navigate" size={20} color="white" />
+              <Text style={styles.buttonText}>
+                {isFetchingLocation ? "Loading..." : currentLocation ? "Remove Loc" : "My Location"}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={[styles.button, styles.buttonSubZone, selectedSubZone && { backgroundColor: '#FF3B30' }]} 
+              onPress={selectedSubZone ? removeSubZone : addSubZone}
+            >
+              <Ionicons name={selectedSubZone ? "trash" : "add-circle"} size={20} color="white" />
+              <Text style={styles.buttonText}>
+                {selectedSubZone ? "Remove" : "Add Zone"}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={[styles.button, styles.buttonReset]} 
+              onPress={() => {
+                if (isDrawing) {
+                  if (points.length >= 3) {
+                    setIsDrawing(false);
+                    saveCoordinatesToFirebase(points);
+                  } else {
+                    alert("Please add at least 3 points to create a valid area");
+                  }
+                } else {
+                  setPoints([]);
+                  setIsDrawing(true);
+                }
+              }}
+            >
+              <Ionicons name={isDrawing ? "checkmark-circle" : "refresh"} size={20} color="white" />
+              <Text style={styles.buttonText}>
+                {isDrawing ? "Done Set" : "Reset"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </>
+      ) : null}
+    </View>
+
+    <TouchableOpacity 
+      style={styles.logoutButton} 
+      onPress={handleLogout}
+    >
+      <Text style={styles.buttonText}>Logout</Text>
+    </TouchableOpacity>
 
     <View style={styles.navbar}>
       <TouchableOpacity style={styles.navItem}>
@@ -690,163 +760,135 @@ return (
 } 
 
 const styles = StyleSheet.create({
-container: {
-  flex: 1,
-},
-map: {
-  width: "100%",
-  height: "100%",
-},
-input: {
-  position: "absolute",
-  bottom: 185,
-  right: 20,
-  backgroundColor: "#2C2C2E",
-  paddingVertical: 12,
-  paddingHorizontal: 15,
-  borderRadius: 15,
-  width: 150,
-  textAlign: "center",
-  color: "#FFFFFF",
-  fontWeight: "600",
-  shadowColor: "#000",
-  shadowOffset: {
-    width: 0,
-    height: 2,
+  container: {
+    flex: 1,
+    backgroundColor: '#F8F9FA',
   },
-  shadowOpacity: 0.25,
-  shadowRadius: 3.84,
-  elevation: 5,
-},
-buttonContainer: {
-  position: 'absolute',
-  bottom: 20,
-  left: 20,
-  right: 20,
-  flexDirection: 'column',
-  alignItems: 'center',
-  gap: 10,
-},
-button: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  justifyContent: 'center',
-  backgroundColor: "#007AFF",
-  paddingVertical: 8,
-  paddingHorizontal: 8,
-  borderRadius: 12,
-  width: '100%',
-  gap: 4,
-},
-buttonText: {
-  color: "white",
-  fontSize: 12,
-  fontWeight: "600",
-},
-inputWrapper: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  backgroundColor: "#2C2C2E",
-  paddingHorizontal: 15,
-  borderRadius: 15,
-  width: '100%',
-  marginBottom: 10,
-  marginHorizontal: 10,
-  borderWidth: 1,
-  borderColor: '#3A3A3C',
-},
-inputInContainer: {
-  flex: 1,
-  paddingVertical: 10,
-  paddingHorizontal: 10,
-  color: "#FFFFFF",
-  fontSize: 14,
-},
-crosshair: {
-  position: "absolute",
-  top: "49%",
-  left: "51%",
-  transform: [{ translateX: -10 }, { translateY: -10 }],
-  zIndex: 10, // Ensures it's above other elements
-},
-crosshairText: {
-  fontSize: 24,
-  fontWeight: "bold",
-  color: "red",
-},
-logoutButton: {
-  position: 'absolute',
-  top: 40,
-  right: 20,
-  backgroundColor: 'red',
-  paddingVertical: 10,
-  paddingHorizontal: 20,
-  borderRadius: 10,
-  zIndex: 1000,
-},
-navbar: {
-  position: 'absolute',
-  bottom: 0,
-  left: 0,
-  right: 0,
-  height: 85,
-  backgroundColor: '#1a1a1a',
-  flexDirection: 'row',
-  justifyContent: 'space-around',
-  alignItems: 'center',
-  paddingBottom: 25,
-  paddingTop: 10,
-  borderTopWidth: 1,
-  borderTopColor: '#333',
-  shadowColor: '#000',
-  shadowOffset: {
-    width: 0,
-    height: -3,
+  map: {
+    width: "100%",
+    height: "100%",
   },
-  shadowOpacity: 0.25,
-  shadowRadius: 4,
-  elevation: 5,
-},
-navItem: {
-  alignItems: 'center',
-  justifyContent: 'center',
-  flex: 1,
-  paddingVertical: 8,
-},
-activeNavItem: {
-  borderTopWidth: 2,
-  borderTopColor: '#007AFF',
-},
-navText: {
-  color: '#fff',
-  fontSize: 12,
-  marginTop: 4,
-  fontWeight: '500',
-},
-disabledButton: {
-  backgroundColor: '#666',
-  opacity: 0.5,
-},
-buttonSubZone: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  justifyContent: 'center',
-  backgroundColor: "#007AFF",
-  paddingVertical: 8,
-  paddingHorizontal: 8,
-  borderRadius: 12,
-  width: '100%',
-  gap: 4,
-},
-buttonReset: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  justifyContent: 'center',
-  backgroundColor: "#007AFF",
-  paddingVertical: 8,
-  paddingHorizontal: 8,
-  borderRadius: 12,
-  width: '100%',
-  gap: 4,
-},
+  toolbarContainer: {
+    position: 'absolute',
+    bottom: 100,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderRadius: 20,
+    padding: 15,
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  inputWrapper: {
+    marginBottom: 10,
+  },
+  input: {
+    backgroundColor: "#F1F3F4",
+    paddingVertical: 12,
+    paddingHorizontal: 15,
+    borderRadius: 10,
+    color: "#1A1A1A",
+    fontWeight: "500",
+    fontSize: 16,
+  },
+  buttonContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  button: {
+    flex: 1,
+    minWidth: '45%',
+    backgroundColor: "#2196F3",
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  buttonSecondary: {
+    backgroundColor: "#2196F3",
+  },
+  buttonSubZone: {
+    backgroundColor: "#2196F3",
+  },
+  buttonReset: {
+    backgroundColor: "#2196F3",
+  },
+  buttonText: {
+    color: "#FFFFFF",
+    fontWeight: "600",
+    fontSize: 16,
+  },
+  logoutButton: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
+    backgroundColor: '#FF3B30',
+    paddingVertical: 8,
+    paddingHorizontal: 15,
+    borderRadius: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  navbar: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    backgroundColor: '#2196F3',
+    paddingVertical: 15,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: -2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 5,
+  },
+  navItem: {
+    alignItems: 'center',
+    gap: 4,
+  },
+  navText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  activeNavItem: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    padding: 10,
+    borderRadius: 15,
+  },
+  crosshair: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    transform: [{ translateX: -12 }, { translateY: -12 }],
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1000,
+  },
+  crosshairText: {
+    fontSize: 24,
+    color: '#2196F3',
+    fontWeight: '600',
+  }
 });

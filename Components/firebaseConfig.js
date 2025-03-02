@@ -77,37 +77,67 @@ const generateProductKey = () => {
 // Function to store a new product key
 const storeProductKey = async (productKey) => {
   const db = getDatabase();
-  await set(ref(db, `productKeys/${productKey}`), {
-    key: productKey,
+  // Format the key (keeping dashes, just ensure uppercase)
+  const formattedKey = productKey.toUpperCase();
+  
+  console.log('Storing key:', {
+    original: productKey,
+    formatted: formattedKey
+  });
+
+  // Store in database using the formatted key (with dashes) as the path
+  const keyRef = ref(db, `productKeys/${formattedKey}`);
+  const keyData = {
+    key: formattedKey,
     status: 'unused',
     createdAt: new Date().toISOString(),
     usedBy: null,
     usedAt: null
+  };
+
+  await set(keyRef, keyData);
+  console.log('Successfully stored key in database:', {
+    path: `productKeys/${formattedKey}`,
+    data: keyData
   });
 };
 
 // Function to validate and claim a product key
-const validateProductKey = async (productKey, userId) => {
-  const formattedKey = productKey.replace(/-/g, '').toUpperCase();
-  const keyRef = ref(db, `productKeys/${formattedKey}`);
+const validateProductKey = async (productKey, userEmail) => {
+  console.log('Starting validation for key:', productKey);
   
+  // Format the key to match database format (keeping dashes)
+  const formattedKey = productKey.toUpperCase();
+  console.log('Formatted key for lookup:', formattedKey);
+  
+  // Look up the specific key
+  const keyRef = ref(db, `productKeys/${formattedKey}`);
   const snapshot = await get(keyRef);
+  
   if (!snapshot.exists()) {
+    console.log('Key not found in database');
     throw new Error('Invalid product key');
   }
   
   const keyData = snapshot.val();
+  console.log('Found key data:', keyData);
+  
   if (keyData.status === 'used') {
-    throw new Error('Product key has already been used');
+    console.log('Key is already used by:', keyData.usedBy);
+    throw new Error('This product key has already been used');
   }
   
   // Mark the key as used
-  await set(keyRef, {
+  const updatedData = {
     ...keyData,
     status: 'used',
-    usedBy: userId,
-    usedAt: new Date().toISOString()
-  });
+    usedBy: userEmail,
+    usedAt: new Date().toISOString(),
+    lastUpdated: new Date().toISOString()
+  };
+  
+  await set(keyRef, updatedData);
+  console.log('Successfully updated key as used:', updatedData);
   
   return true;
 };

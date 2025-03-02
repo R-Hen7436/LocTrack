@@ -26,23 +26,30 @@ export default function ProductKeyManager({ navigation }) {
     try {
       const db = getDatabase();
       const keysRef = ref(db, 'productKeys');
+      console.log('Loading keys from database path: productKeys');
       const snapshot = await get(keysRef);
       
       if (snapshot.exists()) {
         const keys = [];
+        console.log('Found keys in database:', snapshot.val());
         snapshot.forEach((child) => {
-          const key = child.key;
+          console.log('Processing key:', child.key, child.val());
           const data = child.val();
           if (filterStatus === 'all' || 
               (filterStatus === 'used' && data.status === 'used') ||
               (filterStatus === 'unused' && data.status === 'unused')) {
-            keys.push({ key, ...data });
+            keys.push({
+              ...data,
+              databaseKey: child.key // Store the actual database key
+            });
           }
         });
         // Sort by createdAt on the client side
         keys.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        console.log('Processed keys:', keys);
         setProductKeys(keys);
       } else {
+        console.log('No keys found in database');
         setProductKeys([]);
       }
     } catch (error) {
@@ -58,14 +65,18 @@ export default function ProductKeyManager({ navigation }) {
       if (numKeys > 0 && numKeys <= 100) {
         for (let i = 0; i < numKeys; i++) {
           const newKey = generateProductKey();
+          console.log('Generated new key:', newKey);
           await storeProductKey(newKey);
+          console.log('Stored key in database');
         }
+        console.log(`Successfully generated ${numKeys} keys`);
         Alert.alert('Success', `Generated ${numKeys} new product key(s)`);
-        loadProductKeys();
+        await loadProductKeys(); // Make sure to await this
       } else {
         Alert.alert('Error', 'Please enter a quantity between 1 and 100');
       }
     } catch (error) {
+      console.error('Error generating keys:', error);
       Alert.alert('Error', 'Failed to generate product keys');
     }
     setLoading(false);
@@ -82,7 +93,8 @@ export default function ProductKeyManager({ navigation }) {
 
   const renderKey = ({ item }) => (
     <View style={styles.keyItem}>
-      <Text style={styles.keyText}>{item.key || item.id}</Text>
+      <Text style={styles.keyText}>{item.key}</Text>
+      <Text style={styles.keySubtext}>DB Key: {item.databaseKey}</Text>
       <View style={styles.keyDetails}>
         <Text style={[
           styles.status, 
@@ -91,11 +103,16 @@ export default function ProductKeyManager({ navigation }) {
           {item.status}
         </Text>
         <Text style={styles.date}>
-          {new Date(item.createdAt).toLocaleDateString()}
+          Created: {new Date(item.createdAt).toLocaleDateString()}
         </Text>
       </View>
-      {item.usedBy && (
-        <Text style={styles.usedBy}>Used by: {item.usedBy}</Text>
+      {item.status === 'used' && (
+        <View style={styles.usedDetails}>
+          <Text style={styles.usedBy}>Used by: {item.usedBy}</Text>
+          <Text style={styles.usedDate}>
+            Used on: {new Date(item.usedAt).toLocaleDateString()}
+          </Text>
+        </View>
       )}
     </View>
   );
@@ -260,10 +277,20 @@ const styles = StyleSheet.create({
     color: '#666',
     fontSize: 14,
   },
+  usedDetails: {
+    marginTop: 8,
+    padding: 8,
+    backgroundColor: '#f8f8f8',
+    borderRadius: 4,
+  },
   usedBy: {
     color: '#666',
+    fontSize: 14,
+    marginBottom: 4,
+  },
+  usedDate: {
+    color: '#888',
     fontSize: 12,
-    marginTop: 5,
   },
   logoutButton: {
     backgroundColor: '#ff4444',
@@ -273,5 +300,10 @@ const styles = StyleSheet.create({
   logoutText: {
     color: 'white',
     fontWeight: 'bold',
+  },
+  keySubtext: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 2,
   },
 }); 
