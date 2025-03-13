@@ -11,6 +11,7 @@ import Navbar from './Navbar';
 
 const GPSStrengthIndicator = ({ accuracy }) => {
   const getSignalStrength = (accuracy) => {
+    if (!accuracy) return -1; // No signal
     if (accuracy <= 10) return 4; // Excellent
     if (accuracy <= 20) return 3; // Good
     if (accuracy <= 50) return 2; // Fair
@@ -30,14 +31,17 @@ const GPSStrengthIndicator = ({ accuracy }) => {
             style={[
               styles.gpsBar,
               {
-                backgroundColor: bar <= strength ? '#4CAF50' : '#E0E0E0',
+                backgroundColor: strength === -1 ? '#FF3B30' : 
+                  bar <= strength ? '#4CAF50' : '#E0E0E0',
                 height: bar * 4,
               },
             ]}
           />
         ))}
       </View>
-      <Text style={styles.gpsAccuracy}>{Math.round(accuracy)}m</Text>
+      <Text style={[styles.gpsAccuracy, strength === -1 && styles.gpsNoSignal]}>
+        {strength === -1 ? 'No Signal' : `${Math.round(accuracy)}m`}
+      </Text>
     </View>
   );
 };
@@ -67,9 +71,9 @@ const [teamGeofence, setTeamGeofence] = useState([]);
 const [teamSubzones, setTeamSubzones] = useState([]);
 const [gpsAccuracy, setGpsAccuracy] = useState(null);
 
-// Add this useEffect right after the state declarations
+// Replace the first useEffect with this updated version
 useEffect(() => {
-  const loadUserRole = async () => {
+  const initializeApp = async () => {
     try {
       const auth = getAuth();
       if (!auth.currentUser) return;
@@ -81,17 +85,15 @@ useEffect(() => {
         const profileData = snapshot.val();
         setUserRole(profileData.role);
         
-        // Auto-trigger location tracking for members
-        if (profileData.role === 'member') {
-          toggleCurrentLocation();
-        }
+        // Auto-trigger location tracking for all users
+        await toggleCurrentLocation();
       }
     } catch (error) {
-      console.error('Error loading user role:', error);
+      console.error('Error initializing app:', error);
     }
   };
 
-  loadUserRole();
+  initializeApp();
 }, []);
 
 // Add this useEffect after your other useEffects
@@ -332,7 +334,10 @@ useEffect(() => {
   let locationSubscription = null;
 
   const startLocationTracking = async () => {
-    if (!currentLocation) return;
+    if (!currentLocation) {
+      setGpsAccuracy(null); // Set to null when location is removed
+      return;
+    }
 
     try {
       // Check if location services are enabled
@@ -387,10 +392,12 @@ useEffect(() => {
             }
           } catch (error) {
             console.error("Error updating location:", error);
+            setGpsAccuracy(null); // Set to null on error
           }
         },
         (error) => {
           console.error("Error in location tracking:", error);
+          setGpsAccuracy(null); // Set to null on error
           if (error.code === 'kCLErrorLocationUnknown' || error.code === 'kCLErrorDenied') {
             startLocationTracking();
           }
@@ -398,6 +405,7 @@ useEffect(() => {
       );
     } catch (error) {
       console.error("Error starting location tracking:", error);
+      setGpsAccuracy(null); // Set to null on error
     }
   };
 
@@ -690,16 +698,6 @@ useEffect(() => {
   }
 }, [isDrawing, points]);
 
-const handleLogout = async () => {
-  try {
-    const auth = getAuth();
-    await signOut(auth);
-  } catch (error) {
-    console.error('Error logging out:', error);
-    alert('Failed to log out');
-  }
-};
-
 if (!db) {
   console.error("Firebase database not initialized");
   return;
@@ -828,22 +826,19 @@ return (
               style={[styles.button, styles.buttonReset]} 
               onPress={() => {
                 setPoints([]);
+                setSubZones([]);
+                // Clear subzones from Firebase
+                const dbRef = ref(db, "geofence/subzones");
+                set(dbRef, {});
               }}
             >
               <Ionicons name="refresh" size={20} color="white" />
-              <Text style={styles.buttonText}>Reset</Text>
+              <Text style={styles.buttonText}>Reset All</Text>
             </TouchableOpacity>
           </View>
         </>
       ) : null}
     </View>
-
-    <TouchableOpacity 
-      style={styles.logoutButton} 
-      onPress={handleLogout}
-    >
-      <Text style={styles.buttonText}>Logout</Text>
-    </TouchableOpacity>
 
     <Navbar activePage="maps" />
   </View>
@@ -995,5 +990,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666',
     fontWeight: '500',
+  },
+  gpsNoSignal: {
+    color: '#FF3B30',
+    fontWeight: '600',
   },
 });
