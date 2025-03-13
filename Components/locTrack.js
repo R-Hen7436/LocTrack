@@ -7,6 +7,40 @@ import { db, auth } from "./firebaseConfig";
 import { getAuth, signOut } from 'firebase/auth';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
+import Navbar from './Navbar';
+
+const GPSStrengthIndicator = ({ accuracy }) => {
+  const getSignalStrength = (accuracy) => {
+    if (accuracy <= 10) return 4; // Excellent
+    if (accuracy <= 20) return 3; // Good
+    if (accuracy <= 50) return 2; // Fair
+    if (accuracy <= 100) return 1; // Poor
+    return 0; // Very Poor
+  };
+
+  const strength = getSignalStrength(accuracy);
+  const bars = [1, 2, 3, 4];
+
+  return (
+    <View style={styles.gpsIndicator}>
+      <View style={styles.gpsBars}>
+        {bars.map((bar) => (
+          <View
+            key={bar}
+            style={[
+              styles.gpsBar,
+              {
+                backgroundColor: bar <= strength ? '#4CAF50' : '#E0E0E0',
+                height: bar * 4,
+              },
+            ]}
+          />
+        ))}
+      </View>
+      <Text style={styles.gpsAccuracy}>{Math.round(accuracy)}m</Text>
+    </View>
+  );
+};
 
 export default function App() {
 const mapRef = useRef(null);
@@ -31,6 +65,7 @@ const navigation = useNavigation();
 const [userRole, setUserRole] = useState(null);
 const [teamGeofence, setTeamGeofence] = useState([]);
 const [teamSubzones, setTeamSubzones] = useState([]);
+const [gpsAccuracy, setGpsAccuracy] = useState(null);
 
 // Add this useEffect right after the state declarations
 useEffect(() => {
@@ -192,14 +227,37 @@ const toggleCurrentLocation = async () => {
 
   setIsFetchingLocation(true);
   try {
-    let { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== "granted") {
-      console.error("Permission to access location was denied");
+    // First check if location services are enabled
+    const enabled = await Location.hasServicesEnabledAsync();
+    if (!enabled) {
+      alert("Please enable location services in your device settings");
       setIsFetchingLocation(false);
       return;
     }
 
-    let location = await Location.getCurrentPositionAsync({});
+    // Check location permissions
+    let { status } = await Location.getForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      // Request permission if not granted
+      const { status: newStatus } = await Location.requestForegroundPermissionsAsync();
+      if (newStatus !== 'granted') {
+        alert("Permission to access location was denied. Please enable it in your device settings.");
+        setIsFetchingLocation(false);
+        return;
+      }
+    }
+
+    // Get current position with balanced accuracy
+    let location = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Balanced,
+      timeInterval: 10000, // Increased to 10 seconds
+      distanceInterval: 10, // Increased to 10 meters
+    });
+
+    if (!location) {
+      throw new Error("Could not get location");
+    }
+
     const { latitude, longitude } = location.coords;
     setCurrentLocation({ latitude, longitude });
     setLocationButtonText("Remove Loc");
@@ -220,32 +278,56 @@ const toggleCurrentLocation = async () => {
       timestamp: new Date().toISOString(),
     });
     
-    // If user is a member, set up continuous location tracking
+    // If user is a member, set up continuous location tracking with optimized settings
     if (userRole === 'member') {
       Location.watchPositionAsync(
         {
-          accuracy: Location.Accuracy.High,
-          timeInterval: 5000,
-          distanceInterval: 5,
+          accuracy: Location.Accuracy.Balanced,
+          timeInterval: 10000, // Increased to 10 seconds
+          distanceInterval: 10, // Increased to 10 meters
         },
         (location) => {
-          const { latitude, longitude } = location.coords;
-          setCurrentLocation({ latitude, longitude });
-          set(dbRef, { 
-            Latitude: latitude, 
-            Longitude: longitude,
-            timestamp: new Date().toISOString(),
-          });
+          if (location) {
+            const { latitude, longitude } = location.coords;
+            setCurrentLocation({ latitude, longitude });
+            set(dbRef, { 
+              Latitude: latitude, 
+              Longitude: longitude,
+              timestamp: new Date().toISOString(),
+            });
+          }
+        },
+        (error) => {
+          console.error("Error in location tracking:", error);
+          // Try to restart tracking if there's an error
+          if (error.code === 'kCLErrorLocationUnknown') {
+            toggleCurrentLocation();
+          }
         }
       );
     }
   } catch (error) {
     console.error("Error fetching location:", error);
+    let errorMessage = "Could not get your location. ";
+    
+    if (error.code === 'kCLErrorLocationUnknown') {
+      errorMessage += "Please check your GPS signal and try again.";
+    } else if (error.code === 'kCLErrorDenied') {
+      errorMessage += "Location access was denied.";
+    } else if (error.code === 'kCLErrorNetwork') {
+      errorMessage += "Network error occurred.";
+    } else {
+      errorMessage += "Please try again.";
+    }
+    
+    alert(errorMessage);
+    setLocationButtonText("My Location");
+  } finally {
+    setIsFetchingLocation(false);
   }
-  setIsFetchingLocation(false);
 };
 
-// Replace the existing location tracking useEffect (around line 167-203) with this:
+// Replace the existing location tracking useEffect with this:
 useEffect(() => {
   let locationSubscription = null;
 
@@ -253,6 +335,27 @@ useEffect(() => {
     if (!currentLocation) return;
 
     try {
+      // Check if location services are enabled
+      const enabled = await Location.hasServicesEnabledAsync();
+      if (!enabled) {
+        console.warn("Location services are disabled");
+        return;
+      }
+
+      // Check and request permissions
+      const { status: existingStatus } = await Location.getForegroundPermissionsAsync();
+      let finalStatus = existingStatus;
+      
+      if (existingStatus !== 'granted') {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        finalStatus = status;
+      }
+      
+      if (finalStatus !== 'granted') {
+        console.warn("Location permission not granted");
+        return;
+      }
+
       const isConnected = await checkDatabaseConnection();
       if (!isConnected) {
         console.warn("No database connection, location updates will not be saved");
@@ -261,28 +364,35 @@ useEffect(() => {
 
       locationSubscription = await Location.watchPositionAsync(
         {
-          accuracy: Location.Accuracy.High,
-          timeInterval: 5000,
-          distanceInterval: 0.508,
+          accuracy: Location.Accuracy.Balanced,
+          timeInterval: 10000,
+          distanceInterval: 10,
         },
         async (location) => {
           try {
-            const { latitude, longitude } = location.coords;
+            const { latitude, longitude, accuracy } = location.coords;
             
-            if (location.coords.accuracy <= 10) {
+            if (location.coords.accuracy <= 20) {
               setCurrentLocation({ latitude, longitude });
+              setGpsAccuracy(accuracy);
               
               const dbRef = ref(db, "UsersCurrentLocation");
               await set(dbRef, { 
                 Latitude: latitude, 
                 Longitude: longitude,
-                Accuracy: location.coords.accuracy,
+                Accuracy: accuracy,
                 Timestamp: new Date().toISOString(),
                 userId: auth.currentUser?.uid
               });
             }
           } catch (error) {
             console.error("Error updating location:", error);
+          }
+        },
+        (error) => {
+          console.error("Error in location tracking:", error);
+          if (error.code === 'kCLErrorLocationUnknown' || error.code === 'kCLErrorDenied') {
+            startLocationTracking();
           }
         }
       );
@@ -291,7 +401,9 @@ useEffect(() => {
     }
   };
 
-  startLocationTracking();
+  if (currentLocation) {
+    startLocationTracking();
+  }
 
   return () => {
     if (locationSubscription) {
@@ -595,14 +707,21 @@ if (!db) {
 
 return (
   <View style={styles.container}>
+    {gpsAccuracy !== null && <GPSStrengthIndicator accuracy={gpsAccuracy} />}
     <MapView 
       ref={mapRef} 
       style={styles.map} 
       initialRegion={initialRegion}
       onPress={(e) => {
-        if (isDrawing && userRole !== 'member') {
+        if (userRole !== 'member') {
           const newPoint = e.nativeEvent.coordinate;
-          setPoints(prevPoints => [...prevPoints, newPoint]);
+          setPoints(prevPoints => {
+            const updatedPoints = [...prevPoints, newPoint];
+            if (updatedPoints.length === 4) {
+              saveCoordinatesToFirebase(updatedPoints);
+            }
+            return updatedPoints;
+          });
         }
       }}
     >
@@ -658,7 +777,7 @@ return (
     </MapView>
 
     {userRole !== 'member' && (
-      <View style={styles.crosshair}>
+      <View style={styles.crosshair} pointerEvents="none">
         <Text style={styles.crosshairText}>+</Text>
       </View>
     )}
@@ -666,6 +785,9 @@ return (
     <View style={styles.toolbarContainer}>
       {userRole !== 'member' ? (
         <>
+          <View style={styles.pointsIndicator}>
+            <Text style={styles.pointsText}>Number of Geofenced Points: {points.length}</Text>
+          </View>
           <View style={styles.inputWrapper}>
             <TextInput
               style={styles.input}
@@ -679,7 +801,6 @@ return (
               }}
             />
           </View>
-          
           <View style={styles.buttonContainer}>
             <TouchableOpacity style={styles.button} onPress={getLocation}>
               <Ionicons name="location" size={20} color="white" />
@@ -706,23 +827,11 @@ return (
             <TouchableOpacity 
               style={[styles.button, styles.buttonReset]} 
               onPress={() => {
-                if (isDrawing) {
-                  if (points.length >= 3) {
-                    setIsDrawing(false);
-                    saveCoordinatesToFirebase(points);
-                  } else {
-                    alert("Please add at least 3 points to create a valid area");
-                  }
-                } else {
-                  setPoints([]);
-                  setIsDrawing(true);
-                }
+                setPoints([]);
               }}
             >
-              <Ionicons name={isDrawing ? "checkmark-circle" : "refresh"} size={20} color="white" />
-              <Text style={styles.buttonText}>
-                {isDrawing ? "Done Set" : "Reset"}
-              </Text>
+              <Ionicons name="refresh" size={20} color="white" />
+              <Text style={styles.buttonText}>Reset</Text>
             </TouchableOpacity>
           </View>
         </>
@@ -736,25 +845,7 @@ return (
       <Text style={styles.buttonText}>Logout</Text>
     </TouchableOpacity>
 
-    <View style={styles.navbar}>
-      <TouchableOpacity style={styles.navItem}>
-        <Ionicons name="grid-outline" size={24} color="white" />
-        <Text style={styles.navText}>Dashboard</Text>
-      </TouchableOpacity>
-      
-      <TouchableOpacity style={[styles.navItem, styles.activeNavItem]}>
-        <Ionicons name="map-outline" size={24} color="white" />
-        <Text style={styles.navText}>Maps</Text>
-      </TouchableOpacity>
-      
-      <TouchableOpacity 
-        style={styles.navItem}
-        onPress={() => navigation.navigate('Profile')}
-      >
-        <Ionicons name="person-outline" size={24} color="white" />
-        <Text style={styles.navText}>Profile</Text>
-      </TouchableOpacity>
-    </View>
+    <Navbar activePage="maps" />
   </View>
 );
 } 
@@ -841,40 +932,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 5,
   },
-  navbar: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    backgroundColor: '#2196F3',
-    paddingVertical: 15,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: -2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 5,
-  },
-  navItem: {
-    alignItems: 'center',
-    gap: 4,
-  },
-  navText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  activeNavItem: {
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    padding: 10,
-    borderRadius: 15,
-  },
   crosshair: {
     position: 'absolute',
     top: '50%',
@@ -884,11 +941,59 @@ const styles = StyleSheet.create({
     height: 24,
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 1000,
+    zIndex: 1,
   },
   crosshairText: {
     fontSize: 24,
     color: '#2196F3',
     fontWeight: '600',
-  }
+  },
+  pointsIndicator: {
+    backgroundColor: 'rgba(33, 150, 243, 0.1)',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    marginBottom: 10,
+    alignSelf: 'center',
+  },
+  pointsText: {
+    color: '#2196F3',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  gpsIndicator: {
+    position: 'absolute',
+    top: 50,
+    left: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    padding: 8,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    zIndex: 1,
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  gpsBars: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 2,
+    height: 16,
+  },
+  gpsBar: {
+    width: 3,
+    borderRadius: 2,
+  },
+  gpsAccuracy: {
+    fontSize: 12,
+    color: '#666',
+    fontWeight: '500',
+  },
 });

@@ -71,7 +71,13 @@ export default function App() {
 
   return (
     <NavigationContainer>
-      <Stack.Navigator>
+      <Stack.Navigator
+        screenOptions={{
+          headerShown: false,
+          presentation: 'card',
+          animation: 'slide_from_right',
+        }}
+      >
         {user ? (
           isVerified ? (
             <>
@@ -88,14 +94,19 @@ export default function App() {
                   <Stack.Screen 
                     name="LocTrack" 
                     component={LocTrack}
-                    options={{ headerShown: false }}
+                    options={{ 
+                      headerShown: false,
+                      animation: 'slide_from_left'
+                    }}
                   />
                   <Stack.Screen 
                     name="Profile" 
                     component={Profile}
                     options={{ 
                       headerShown: true,
-                      title: 'My Profile'
+                      title: 'My Profile',
+                      headerBackVisible: false,
+                      animation: 'slide_from_right'
                     }}
                   />
                 </>
@@ -104,14 +115,19 @@ export default function App() {
                   <Stack.Screen 
                     name="LocTrack" 
                     component={LocTrack}
-                    options={{ headerShown: false }}
+                    options={{ 
+                      headerShown: false,
+                      animation: 'slide_from_left'
+                    }}
                   />
                   <Stack.Screen 
                     name="Profile" 
                     component={Profile}
                     options={{ 
                       headerShown: true,
-                      title: 'My Profile'
+                      title: 'My Profile',
+                      headerBackVisible: false,
+                      animation: 'slide_from_right'
                     }}
                   />
                 </>

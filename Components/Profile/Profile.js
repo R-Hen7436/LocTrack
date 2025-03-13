@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, FlatList } from 'react-native';
 import { getAuth } from 'firebase/auth';
-import { getDatabase, ref, get } from 'firebase/database';
+import { getDatabase, ref, get, set } from 'firebase/database';
 import { Ionicons } from '@expo/vector-icons';
+import Navbar from '../Navbar';
+import { auth, db } from '../firebaseConfig';
 
 export default function Profile({ navigation }) {
   const [userProfile, setUserProfile] = useState(null);
@@ -15,8 +17,6 @@ export default function Profile({ navigation }) {
 
   const loadUserProfile = async () => {
     try {
-      const auth = getAuth();
-      const db = getDatabase();
       const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
       const snapshot = await get(userProfileRef);
       
@@ -25,9 +25,8 @@ export default function Profile({ navigation }) {
         console.log('User Profile Data:', profileData);
         setUserProfile(profileData);
         
-        // If user is owner, load team members
         if (profileData.role === 'owner' && profileData.teamCode) {
-          await loadTeamMembers(profileData.teamCode);
+          await loadTeamMembers();
         }
       }
       setLoading(false);
@@ -37,28 +36,55 @@ export default function Profile({ navigation }) {
     }
   };
 
-  const loadTeamMembers = async (teamCode) => {
+  const loadTeamMembers = async () => {
+    if (!auth.currentUser || userProfile?.role !== 'owner') return;
+    
     try {
-      const db = getDatabase();
-      const usersRef = ref(db, 'users');
-      const snapshot = await get(usersRef);
+      const teamRef = ref(db, `teams/${auth.currentUser.uid}/members`);
+      const snapshot = await get(teamRef);
       
       if (snapshot.exists()) {
         const members = [];
+        const memberPromises = [];
+        
         snapshot.forEach((child) => {
-          const userData = child.val()?.profile;
-          if (userData && userData.teamCode === teamCode && userData.role === 'member') {
-            members.push({
-              id: child.key,
-              ...userData
+          const memberPromise = get(ref(db, `users/${child.key}`))
+            .then((userSnapshot) => {
+              if (userSnapshot.exists()) {
+                const userData = userSnapshot.val();
+                return {
+                  id: child.key,
+                  email: userData.email,
+                  role: userData.role,
+                  name: userData.name || 'No Name'
+                };
+              }
+              return null;
+            })
+            .catch((error) => {
+              console.error(`Error fetching member ${child.key}:`, error);
+              return null;
             });
-          }
+          
+          memberPromises.push(memberPromise);
         });
-        console.log('Found team members:', members);
-        setTeamMembers(members);
+
+        const resolvedMembers = await Promise.all(memberPromises);
+        const validMembers = resolvedMembers.filter(member => member !== null);
+        
+        if (validMembers.length === 0) {
+          // If no valid members found, clear the team members from Firebase
+          await set(teamRef, null);
+          setTeamMembers([]);
+        } else {
+          setTeamMembers(validMembers);
+        }
+      } else {
+        setTeamMembers([]);
       }
     } catch (error) {
-      console.error('Error loading team members:', error);
+      console.error("Error loading team members:", error);
+      setTeamMembers([]);
     }
   };
 
@@ -67,10 +93,10 @@ export default function Profile({ navigation }) {
       <Ionicons name="person" size={24} color="#007AFF" />
       <View style={styles.memberInfo}>
         <Text style={styles.memberName}>
-          {item.firstName} {item.lastName}
+          {item.name}
         </Text>
         <Text style={styles.memberEmail}>{item.email}</Text>
-        <Text style={styles.memberTeamCode}>Team Code: {item.teamCode}</Text>
+        <Text style={styles.memberTeamCode}>Team Code: {userProfile?.teamCode || 'No team code found'}</Text>
       </View>
     </View>
   );
@@ -85,39 +111,42 @@ export default function Profile({ navigation }) {
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <Ionicons name="person-circle-outline" size={80} color="#007AFF" />
-        <Text style={styles.name}>
-          {userProfile?.firstName} {userProfile?.middleName} {userProfile?.lastName}
-        </Text>
-      </View>
+      <View style={styles.content}>
+        <View style={styles.header}>
+          <Ionicons name="person-circle-outline" size={80} color="#007AFF" />
+          <Text style={styles.name}>
+            {userProfile?.firstName} {userProfile?.middleName} {userProfile?.lastName}
+          </Text>
+        </View>
 
-      <View style={styles.infoContainer}>
-        <InfoItem label="Email" value={userProfile?.email} />
-        <InfoItem label="Role" value={userProfile?.role?.charAt(0).toUpperCase() + userProfile?.role?.slice(1)} />
-        {userProfile?.role === 'owner' && (
-          <>
-            <View style={styles.teamCodeContainer}>
-              <Text style={styles.label}>Team Code</Text>
-              <View style={styles.codeBox}>
-                <Text style={styles.teamCode}>{userProfile?.teamCode || 'No team code found'}</Text>
+        <View style={styles.infoContainer}>
+          <InfoItem label="Email" value={userProfile?.email} />
+          <InfoItem label="Role" value={userProfile?.role?.charAt(0).toUpperCase() + userProfile?.role?.slice(1)} />
+          {userProfile?.role === 'owner' && (
+            <>
+              <View style={styles.teamCodeContainer}>
+                <Text style={styles.label}>Team Code</Text>
+                <View style={styles.codeBox}>
+                  <Text style={styles.teamCode}>{userProfile?.teamCode || 'No team code found'}</Text>
+                </View>
               </View>
-            </View>
-            
-            <View style={styles.teamMembersContainer}>
-              <Text style={styles.teamMembersTitle}>Team Members ({teamMembers.length})</Text>
-              <FlatList
-                data={teamMembers}
-                renderItem={renderMember}
-                keyExtractor={(item) => item.id}
-                ListEmptyComponent={
-                  <Text style={styles.noMembers}>No team members yet</Text>
-                }
-              />
-            </View>
-          </>
-        )}
+              
+              <View style={styles.teamMembersContainer}>
+                <Text style={styles.teamMembersTitle}>Team Members ({teamMembers.length})</Text>
+                <FlatList
+                  data={teamMembers}
+                  renderItem={renderMember}
+                  keyExtractor={(item) => item.id}
+                  ListEmptyComponent={
+                    <Text style={styles.noMembers}>No team members yet</Text>
+                  }
+                />
+              </View>
+            </>
+          )}
+        </View>
       </View>
+      <Navbar activePage="profile" />
     </View>
   );
 }
@@ -133,7 +162,11 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#fff',
+  },
+  content: {
+    flex: 1,
     padding: 20,
+    paddingBottom: 100, // Add padding to prevent content from being hidden behind navbar
   },
   header: {
     alignItems: 'center',
