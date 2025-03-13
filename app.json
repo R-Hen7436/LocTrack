@@ -12,12 +12,21 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "The app needs access to your photos to set your profile picture."
+        }
+      ]
+    ],
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "This app needs access to location for accurate position tracking.",
         "NSLocationAlwaysUsageDescription": "This app needs access to location for accurate position tracking.",
-        "UIBackgroundModes": ["location"]
+        "UIBackgroundModes": ["location"],
+        "NSPhotoLibraryUsageDescription": "The app needs access to your photos to set your profile picture."
       }
     },
     "android": {
@@ -28,7 +37,10 @@
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
-        "ACCESS_BACKGROUND_LOCATION"
+        "ACCESS_BACKGROUND_LOCATION",
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
       ]
     },
     "web": {

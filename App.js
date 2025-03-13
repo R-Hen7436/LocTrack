@@ -7,11 +7,13 @@ import Register from './Components/Auth/Register';
 import LocTrack from './Components/locTrack';
 import ForgotPassword from './Components/Auth/ForgotPassword';
 import VerifyEmail from './Components/Auth/VerifyEmail';
-import { View, ActivityIndicator, Text } from 'react-native';
+import { View, ActivityIndicator, Text, TouchableOpacity } from 'react-native';
 import ProductKeyManager from './Components/Admin/ProductKeyManager';
 import { initializeAdmin } from './scripts/initAdmin';
 import { getDatabase, ref, get } from 'firebase/database';
 import Profile from './Components/Profile/Profile';
+import EditProfile from './Components/Profile/EditProfile';
+import Ionicons from 'react-native-vector-icons/Ionicons';
 
 const Stack = createNativeStackNavigator();
 
@@ -102,10 +104,26 @@ export default function App() {
                   <Stack.Screen 
                     name="Profile" 
                     component={Profile}
-                    options={{ 
+                    options={({ navigation, route }) => ({ 
                       headerShown: true,
                       title: 'My Profile',
                       headerBackVisible: false,
+                      animation: 'slide_from_right',
+                      headerRight: () => (
+                        <TouchableOpacity 
+                          onPress={() => route.params?.handleLogout?.()}
+                          style={{ marginRight: 10 }}
+                        >
+                          <Ionicons name="log-out-outline" size={24} color="#FF3B30" />
+                        </TouchableOpacity>
+                      ),
+                    })}
+                  />
+                  <Stack.Screen 
+                    name="EditProfile" 
+                    component={EditProfile}
+                    options={{ 
+                      headerShown: false,
                       animation: 'slide_from_right'
                     }}
                   />
@@ -123,10 +141,26 @@ export default function App() {
                   <Stack.Screen 
                     name="Profile" 
                     component={Profile}
-                    options={{ 
+                    options={({ navigation, route }) => ({ 
                       headerShown: true,
                       title: 'My Profile',
                       headerBackVisible: false,
+                      animation: 'slide_from_right',
+                      headerRight: () => (
+                        <TouchableOpacity 
+                          onPress={() => route.params?.handleLogout?.()}
+                          style={{ marginRight: 10 }}
+                        >
+                          <Ionicons name="log-out-outline" size={24} color="#FF3B30" />
+                        </TouchableOpacity>
+                      ),
+                    })}
+                  />
+                  <Stack.Screen 
+                    name="EditProfile" 
+                    component={EditProfile}
+                    options={{ 
+                      headerShown: false,
                       animation: 'slide_from_right'
                     }}
                   />

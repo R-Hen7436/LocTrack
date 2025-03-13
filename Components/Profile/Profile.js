@@ -1,19 +1,39 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList } from 'react-native';
-import { getAuth, signOut } from 'firebase/auth';
-import { getDatabase, ref, get, set } from 'firebase/database';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, Alert, ScrollView, Image } from 'react-native';
+import { getAuth, signOut, updateProfile } from 'firebase/auth';
+import { ref, get, set } from 'firebase/database';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
+import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import Navbar from '../Navbar';
-import { auth, db } from '../firebaseConfig';
+import { auth, db, storage } from '../firebaseConfig';
+import EditProfile from './EditProfile';
+import { useFocusEffect } from '@react-navigation/native';
 
 export default function Profile({ navigation }) {
   const [userProfile, setUserProfile] = useState(null);
   const [teamMembers, setTeamMembers] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  useFocusEffect(
+    React.useCallback(() => {
+      loadUserProfile();
+    }, [])
+  );
+
   useEffect(() => {
-    loadUserProfile();
-  }, []);
+    // Set the logout handler in navigation params
+    navigation.setParams({
+      handleLogout: async () => {
+        try {
+          await signOut(auth);
+        } catch (error) {
+          console.error('Error logging out:', error);
+          Alert.alert('Error', 'Failed to log out');
+        }
+      }
+    });
+  }, [navigation]);
 
   const loadUserProfile = async () => {
     try {
@@ -88,28 +108,83 @@ export default function Profile({ navigation }) {
     }
   };
 
+  const pickImage = async () => {
+    try {
+      // Request permission
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Please grant permission to access your photos.');
+        return;
+      }
+
+      // Launch image picker
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.5,
+      });
+
+      if (!result.canceled && result.assets && result.assets[0]) {
+        await uploadImage(result.assets[0].uri);
+      }
+    } catch (error) {
+      console.error('Error picking image:', error);
+      Alert.alert('Error', 'Failed to pick image. Please try again.');
+    }
+  };
+
+  const uploadImage = async (uri) => {
+    try {
+      const response = await fetch(uri);
+      const blob = await response.blob();
+      
+      // Use the storage instance from firebaseConfig
+      const imageRef = storageRef(storage, `profile_pictures/${auth.currentUser.uid}`);
+      console.log('Uploading to:', imageRef.fullPath);
+      
+      // Upload image to Firebase Storage
+      const uploadResult = await uploadBytes(imageRef, blob);
+      console.log('Upload successful:', uploadResult);
+      
+      // Get download URL
+      const downloadURL = await getDownloadURL(imageRef);
+      console.log('Download URL:', downloadURL);
+      
+      // Update auth profile
+      await updateProfile(auth.currentUser, {
+        photoURL: downloadURL
+      });
+      
+      // Update database profile
+      const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+      await set(userProfileRef, {
+        ...userProfile,
+        photoURL: downloadURL
+      });
+      
+      // Update local state
+      setUserProfile(prev => ({
+        ...prev,
+        photoURL: downloadURL
+      }));
+      
+      Alert.alert('Success', 'Profile picture updated successfully');
+    } catch (error) {
+      console.error('Error uploading image:', error);
+      Alert.alert('Error', 'Failed to upload image. Please try again.');
+    }
+  };
+
   const renderMember = ({ item }) => (
     <View style={styles.memberCard}>
       <Ionicons name="person" size={24} color="#007AFF" />
       <View style={styles.memberInfo}>
-        <Text style={styles.memberName}>
-          {item.name}
-        </Text>
+        <Text style={styles.memberName}>{item.name}</Text>
         <Text style={styles.memberEmail}>{item.email}</Text>
-        <Text style={styles.memberTeamCode}>Team Code: {userProfile?.teamCode || 'No team code found'}</Text>
       </View>
     </View>
   );
-
-  const handleLogout = async () => {
-    try {
-      const auth = getAuth();
-      await signOut(auth);
-    } catch (error) {
-      console.error('Error logging out:', error);
-      alert('Failed to log out');
-    }
-  };
 
   if (loading) {
     return (
@@ -121,28 +196,54 @@ export default function Profile({ navigation }) {
 
   return (
     <View style={styles.container}>
-      <View style={styles.content}>
-        <View style={styles.header}>
-          <Ionicons name="person-circle-outline" size={80} color="#007AFF" />
-          <Text style={styles.name}>
-            {userProfile?.firstName} {userProfile?.middleName} {userProfile?.lastName}
-          </Text>
-        </View>
+      <ScrollView style={styles.scrollView}>
+        <View style={styles.content}>
+          <View style={styles.profileHeader}>
+            <TouchableOpacity onPress={pickImage}>
+              {userProfile?.photoURL ? (
+                <Image
+                  source={{ uri: userProfile.photoURL }}
+                  style={styles.profileImage}
+                />
+              ) : (
+                <View style={styles.profileImagePlaceholder}>
+                  <Ionicons name="person-circle-outline" size={80} color="#007AFF" />
+                </View>
+              )}
+            </TouchableOpacity>
+            <Text style={styles.name}>
+              {userProfile?.firstName} {userProfile?.middleName} {userProfile?.lastName}
+            </Text>
+            <TouchableOpacity 
+              style={styles.editButton} 
+              onPress={() => navigation.navigate('EditProfile', { userProfile })}
+            >
+              <Text style={styles.editButtonText}>Edit Profile</Text>
+            </TouchableOpacity>
+          </View>
 
-        <View style={styles.infoContainer}>
-          <InfoItem label="Email" value={userProfile?.email} />
-          <InfoItem label="Role" value={userProfile?.role?.charAt(0).toUpperCase() + userProfile?.role?.slice(1)} />
+          <View style={styles.infoSection}>
+            <Text style={styles.sectionTitle}>Profile Information</Text>
+            <View style={styles.infoCard}>
+              <InfoRow label="Email" value={userProfile?.email} />
+              <InfoRow label="Role" value={userProfile?.role?.charAt(0).toUpperCase() + userProfile?.role?.slice(1)} />
+            </View>
+          </View>
+
           {userProfile?.role === 'owner' && (
             <>
-              <View style={styles.teamCodeContainer}>
-                <Text style={styles.label}>Team Code</Text>
-                <View style={styles.codeBox}>
-                  <Text style={styles.teamCode}>{userProfile?.teamCode || 'No team code found'}</Text>
+              <View style={styles.infoSection}>
+                <Text style={styles.sectionTitle}>Team Information</Text>
+                <View style={styles.infoCard}>
+                  <Text style={styles.label}>Team Code</Text>
+                  <View style={styles.codeBox}>
+                    <Text style={styles.teamCode}>{userProfile?.teamCode || 'No team code found'}</Text>
+                  </View>
                 </View>
               </View>
-              
-              <View style={styles.teamMembersContainer}>
-                <Text style={styles.teamMembersTitle}>Team Members ({teamMembers.length})</Text>
+
+              <View style={styles.infoSection}>
+                <Text style={styles.sectionTitle}>Team Members ({teamMembers.length})</Text>
                 <FlatList
                   data={teamMembers}
                   renderItem={renderMember}
@@ -150,26 +251,21 @@ export default function Profile({ navigation }) {
                   ListEmptyComponent={
                     <Text style={styles.noMembers}>No team members yet</Text>
                   }
+                  scrollEnabled={false}
+                  nestedScrollEnabled={true}
                 />
               </View>
             </>
           )}
         </View>
-        <TouchableOpacity 
-          style={styles.logoutButton} 
-          onPress={handleLogout}
-        >
-          <Ionicons name="log-out-outline" size={24} color="white" />
-          <Text style={styles.logoutButtonText}>Logout</Text>
-        </TouchableOpacity>
-      </View>
+      </ScrollView>
       <Navbar activePage="profile" />
     </View>
   );
 }
 
-const InfoItem = ({ label, value }) => (
-  <View style={styles.infoItem}>
+const InfoRow = ({ label, value }) => (
+  <View style={styles.infoRow}>
     <Text style={styles.label}>{label}</Text>
     <Text style={styles.value}>{value}</Text>
   </View>
@@ -180,72 +276,105 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#fff',
   },
-  content: {
-    flex: 1,
-    padding: 20,
-    paddingBottom: 100, // Add padding to prevent content from being hidden behind navbar
+  titleContainer: {
+    paddingTop: 60,
+    paddingBottom: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E5E5',
+    backgroundColor: '#fff',
+    alignItems: 'center',
   },
-  header: {
+  titleText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#000',
+  },
+  scrollView: {
+    flex: 1,
+  },
+  content: {
+    padding: 20,
+    paddingBottom: 120,
+  },
+  profileHeader: {
     alignItems: 'center',
     marginBottom: 30,
   },
   name: {
     fontSize: 24,
-    fontWeight: 'bold',
+    fontWeight: '600',
+    marginTop: 10,
+    marginBottom: 5,
+    color: '#000',
+    textAlign: 'center',
+  },
+  editButton: {
+    backgroundColor: '#007AFF',
+    paddingVertical: 8,
+    paddingHorizontal: 20,
+    borderRadius: 20,
     marginTop: 10,
   },
-  infoContainer: {
-    backgroundColor: '#f5f5f5',
-    borderRadius: 10,
-    padding: 15,
+  editButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '500',
   },
-  infoItem: {
+  infoSection: {
+    marginBottom: 25,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#000',
     marginBottom: 15,
+  },
+  infoCard: {
     backgroundColor: '#fff',
-    padding: 10,
-    borderRadius: 8,
+    borderRadius: 12,
+    padding: 15,
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
+  },
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E5E5',
   },
   label: {
     fontSize: 14,
     color: '#666',
-    marginBottom: 5,
   },
   value: {
     fontSize: 16,
-    color: '#333',
+    color: '#000',
     fontWeight: '500',
-  },
-  teamCodeContainer: {
-    marginTop: 20,
   },
   codeBox: {
     backgroundColor: '#007AFF',
-    padding: 15,
+    padding: 12,
     borderRadius: 8,
     alignItems: 'center',
+    marginTop: 8,
   },
   teamCode: {
-    fontSize: 24,
+    fontSize: 20,
     color: '#fff',
     fontWeight: 'bold',
-    letterSpacing: 2,
-  },
-  teamMembersContainer: {
-    marginTop: 20,
-  },
-  teamMembersTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 10,
-    color: '#333',
+    letterSpacing: 1,
   },
   memberCard: {
     flexDirection: 'row',
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#fff',
     padding: 15,
-    borderRadius: 8,
+    borderRadius: 10,
     marginBottom: 10,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
   },
   memberInfo: {
     marginLeft: 10,
@@ -254,23 +383,18 @@ const styles = StyleSheet.create({
   memberName: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#333',
+    color: '#000',
   },
   memberEmail: {
     fontSize: 14,
     color: '#666',
     marginTop: 2,
   },
-  memberTeamCode: {
-    fontSize: 12,
-    color: '#007AFF',
-    marginTop: 2,
-  },
   noMembers: {
     textAlign: 'center',
     color: '#666',
     fontStyle: 'italic',
-    marginTop: 10,
+    padding: 20,
   },
   logoutButton: {
     backgroundColor: '#FF3B30',
@@ -281,12 +405,31 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    marginTop: 20,
-    marginHorizontal: 20,
+    margin: 20,
+    marginBottom: 80,
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
   },
   logoutButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
+  },
+  profileImage: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    marginBottom: 10,
+  },
+  profileImagePlaceholder: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: '#F0F0F0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 10,
   },
 }); 

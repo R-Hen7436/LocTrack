@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, SafeAreaView, Animated } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, SafeAreaView, Animated, Image } from "react-native";
 import MapView, { Marker, Polygon, Circle } from "react-native-maps";
 import * as Location from "expo-location";
 import { getDatabase, ref, set, push, get, remove, child, onValue } from "firebase/database";
@@ -46,6 +46,24 @@ const GPSStrengthIndicator = ({ accuracy }) => {
   );
 };
 
+// Add this new component for custom marker
+const CustomMarker = ({ coordinate, photoURL }) => (
+  <Marker coordinate={coordinate}>
+    <View style={styles.markerContainer}>
+      {photoURL ? (
+        <Image
+          source={{ uri: photoURL }}
+          style={styles.markerImage}
+        />
+      ) : (
+        <View style={styles.markerFallback}>
+          <Ionicons name="person" size={20} color="#FFFFFF" />
+        </View>
+      )}
+    </View>
+  </Marker>
+);
+
 export default function App() {
 const mapRef = useRef(null);
 const [points, setPoints] = useState([]);
@@ -70,6 +88,7 @@ const [userRole, setUserRole] = useState(null);
 const [teamGeofence, setTeamGeofence] = useState([]);
 const [teamSubzones, setTeamSubzones] = useState([]);
 const [gpsAccuracy, setGpsAccuracy] = useState(null);
+const [usersLocations, setUsersLocations] = useState({});
 
 // Replace the first useEffect with this updated version
 useEffect(() => {
@@ -698,6 +717,46 @@ useEffect(() => {
   }
 }, [isDrawing, points]);
 
+useEffect(() => {
+  const usersLocRef = ref(db, "UsersCurrentLocation");
+  const unsubscribe = onValue(usersLocRef, async (snapshot) => {
+    if (snapshot.exists()) {
+      const locations = {};
+      const userPromises = [];
+
+      snapshot.forEach((child) => {
+        const userId = child.key;
+        const locationData = child.val();
+        
+        // Get user profile data for the photo URL
+        const userPromise = get(ref(db, `users/${userId}/profile`))
+          .then((profileSnapshot) => {
+            if (profileSnapshot.exists()) {
+              const profileData = profileSnapshot.val();
+              locations[userId] = {
+                ...locationData,
+                photoURL: profileData.photoURL,
+                name: `${profileData.firstName} ${profileData.lastName}`
+              };
+            }
+            return null;
+          })
+          .catch((error) => {
+            console.error(`Error fetching user profile ${userId}:`, error);
+            return null;
+          });
+        
+        userPromises.push(userPromise);
+      });
+
+      await Promise.all(userPromises);
+      setUsersLocations(locations);
+    }
+  });
+
+  return () => unsubscribe();
+}, []);
+
 if (!db) {
   console.error("Firebase database not initialized");
   return;
@@ -772,6 +831,16 @@ return (
       {currentLocation && (
         <Marker coordinate={currentLocation} title="Current Location" pinColor="green" />
       )}
+      {Object.entries(usersLocations).map(([userId, userData]) => (
+        <CustomMarker
+          key={userId}
+          coordinate={{
+            latitude: userData.Latitude,
+            longitude: userData.Longitude
+          }}
+          photoURL={userData.photoURL}
+        />
+      ))}
     </MapView>
 
     {userRole !== 'member' && (
@@ -994,5 +1063,28 @@ const styles = StyleSheet.create({
   gpsNoSignal: {
     color: '#FF3B30',
     fontWeight: '600',
+  },
+  markerContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#007AFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    overflow: 'hidden',
+  },
+  markerImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 20,
+  },
+  markerFallback: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#007AFF',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 });

@@ -1,6 +1,7 @@
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, onValue, set, get } from "firebase/database"; // Import Realtime Database
 import { getAuth } from "firebase/auth";
+import { getStorage } from "firebase/storage";
 
 // Your Firebase configuration
 const firebaseConfig = {
@@ -17,11 +18,13 @@ const firebaseConfig = {
 let app;
 let db;
 let auth;
+let storage;
 
 try {
   app = initializeApp(firebaseConfig);
   db = getDatabase(app);
   auth = getAuth(app);
+  storage = getStorage(app);
 } catch (error) {
   console.error("Error initializing Firebase:", error);
 }
@@ -156,4 +159,4 @@ const generateTeamCode = () => {
   return result;
 };
 
-export { db, auth, checkDatabaseConnection, generateProductKey, storeProductKey, validateProductKey, generateTeamCode };
+export { db, auth, storage, checkDatabaseConnection, generateProductKey, storeProductKey, validateProductKey, generateTeamCode };
