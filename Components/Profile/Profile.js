@@ -21,17 +21,23 @@ export default function Profile({ navigation }) {
     }, [])
   );
 
-  useEffect(() => {
-    // Set the logout handler in navigation params
-    navigation.setParams({
-      handleLogout: async () => {
-        try {
-          await signOut(auth);
-        } catch (error) {
-          console.error('Error logging out:', error);
-          Alert.alert('Error', 'Failed to log out');
-        }
-      }
+  React.useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <TouchableOpacity
+          onPress={async () => {
+            try {
+              await signOut(auth);
+            } catch (error) {
+              console.error('Error logging out:', error);
+              Alert.alert('Error', 'Failed to log out');
+            }
+          }}
+          style={{ marginRight: 15 }}
+        >
+          <Ionicons name="log-out-outline" size={24} color="#FF3B30" />
+        </TouchableOpacity>
+      ),
     });
   }, [navigation]);
 

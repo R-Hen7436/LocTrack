@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { getAuth, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, onAuthStateChanged, signOut } from 'firebase/auth';
 import Login from './Components/Auth/Login';
 import Register from './Components/Auth/Register';
 import LocTrack from './Components/locTrack';
@@ -104,20 +104,12 @@ export default function App() {
                   <Stack.Screen 
                     name="Profile" 
                     component={Profile}
-                    options={({ navigation, route }) => ({ 
+                    options={{ 
                       headerShown: true,
                       title: 'My Profile',
                       headerBackVisible: false,
                       animation: 'slide_from_right',
-                      headerRight: () => (
-                        <TouchableOpacity 
-                          onPress={() => route.params?.handleLogout?.()}
-                          style={{ marginRight: 10 }}
-                        >
-                          <Ionicons name="log-out-outline" size={24} color="#FF3B30" />
-                        </TouchableOpacity>
-                      ),
-                    })}
+                    }}
                   />
                   <Stack.Screen 
                     name="EditProfile" 
@@ -141,20 +133,12 @@ export default function App() {
                   <Stack.Screen 
                     name="Profile" 
                     component={Profile}
-                    options={({ navigation, route }) => ({ 
+                    options={{ 
                       headerShown: true,
                       title: 'My Profile',
                       headerBackVisible: false,
                       animation: 'slide_from_right',
-                      headerRight: () => (
-                        <TouchableOpacity 
-                          onPress={() => route.params?.handleLogout?.()}
-                          style={{ marginRight: 10 }}
-                        >
-                          <Ionicons name="log-out-outline" size={24} color="#FF3B30" />
-                        </TouchableOpacity>
-                      ),
-                    })}
+                    }}
                   />
                   <Stack.Screen 
                     name="EditProfile" 
