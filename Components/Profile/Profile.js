@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, Alert, ScrollView, Image } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, Alert, ScrollView, Image, Modal, TextInput, ActivityIndicator } from 'react-native';
 import { getAuth, signOut, updateProfile } from 'firebase/auth';
 import { ref, get, set } from 'firebase/database';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,6 +14,9 @@ export default function Profile({ navigation }) {
   const [userProfile, setUserProfile] = useState(null);
   const [teamMembers, setTeamMembers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isInviteModalVisible, setIsInviteModalVisible] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [isInviting, setIsInviting] = useState(false);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -182,6 +185,84 @@ export default function Profile({ navigation }) {
     }
   };
 
+  const handleInvite = async () => {
+    if (!inviteEmail || !inviteEmail.trim()) {
+      Alert.alert('Error', 'Please enter an email address');
+      return;
+    }
+
+    setIsInviting(true);
+    try {
+      // Create invitation in Firebase
+      const invitationRef = ref(db, `invitations/${auth.currentUser.uid}/${encodeURIComponent(inviteEmail.trim())}`);
+      await set(invitationRef, {
+        teamCode: userProfile.teamCode,
+        ownerEmail: userProfile.email,
+        ownerName: `${userProfile.firstName} ${userProfile.lastName}`,
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+      });
+
+      Alert.alert(
+        'Success',
+        'Invitation sent successfully!',
+        [{ text: 'OK', onPress: () => setIsInviteModalVisible(false) }]
+      );
+      setInviteEmail('');
+    } catch (error) {
+      console.error('Error sending invitation:', error);
+      Alert.alert('Error', 'Failed to send invitation. Please try again.');
+    } finally {
+      setIsInviting(false);
+    }
+  };
+
+  const InviteModal = () => (
+    <Modal
+      visible={isInviteModalVisible}
+      transparent
+      animationType="slide"
+      onRequestClose={() => setIsInviteModalVisible(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <Text style={styles.modalTitle}>Invite Team Member</Text>
+          <TextInput
+            style={styles.emailInput}
+            placeholder="Enter email address"
+            value={inviteEmail}
+            onChangeText={setInviteEmail}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <View style={styles.modalButtons}>
+            <TouchableOpacity
+              style={[styles.modalButton, styles.cancelButton]}
+              onPress={() => {
+                setIsInviteModalVisible(false);
+                setInviteEmail('');
+              }}
+            >
+              <Text style={styles.cancelButtonText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalButton, styles.inviteButton]}
+              onPress={handleInvite}
+              disabled={isInviting}
+            >
+              {isInviting ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Text style={styles.inviteButtonText}>Send Invite</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+
   const renderMember = ({ item }) => (
     <View style={styles.memberCard}>
       <Ionicons name="person" size={24} color="#007AFF" />
@@ -245,6 +326,13 @@ export default function Profile({ navigation }) {
                   <View style={styles.codeBox}>
                     <Text style={styles.teamCode}>{userProfile?.teamCode || 'No team code found'}</Text>
                   </View>
+                  <TouchableOpacity
+                    style={styles.inviteTeamButton}
+                    onPress={() => setIsInviteModalVisible(true)}
+                  >
+                    <Ionicons name="person-add" size={20} color="#FFFFFF" />
+                    <Text style={styles.inviteTeamButtonText}>Invite Member</Text>
+                  </TouchableOpacity>
                 </View>
               </View>
 
@@ -265,6 +353,7 @@ export default function Profile({ navigation }) {
           )}
         </View>
       </ScrollView>
+      <InviteModal />
       <Navbar activePage="profile" />
     </View>
   );
@@ -437,5 +526,76 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 10,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 15,
+    padding: 20,
+    width: '100%',
+    maxWidth: 400,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#000000',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  emailInput: {
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
+    borderRadius: 10,
+    padding: 12,
+    fontSize: 16,
+    marginBottom: 20,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  modalButton: {
+    flex: 1,
+    padding: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  cancelButton: {
+    backgroundColor: '#F2F2F2',
+  },
+  inviteButton: {
+    backgroundColor: '#007AFF',
+  },
+  cancelButtonText: {
+    color: '#666666',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  inviteButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  inviteTeamButton: {
+    backgroundColor: '#007AFF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    borderRadius: 10,
+    marginTop: 15,
+    gap: 8,
+  },
+  inviteTeamButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '500',
   },
 }); 
