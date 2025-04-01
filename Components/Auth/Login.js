@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, ActivityIndicator } from 'react-native';
-import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, ActivityIndicator, Alert } from 'react-native';
+import { getAuth, signInWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
 import { Ionicons } from '@expo/vector-icons';
 import { getDatabase, ref, get, set } from 'firebase/database';
 import InvitationHandler, { checkForInvitation, acceptInvitation } from './InvitationHandler';
@@ -12,6 +12,7 @@ export default function Login({ navigation }) {
   const [showPassword, setShowPassword] = useState(false);
   const [invitation, setInvitation] = useState(null);
   const [isCheckingInvitation, setIsCheckingInvitation] = useState(false);
+  const [isResending, setIsResending] = useState(false);
 
   const handleLogin = async () => {
     try {
@@ -98,6 +99,37 @@ export default function Login({ navigation }) {
     setInvitation(null);
   };
 
+  const handleResendVerification = async () => {
+    if (!email.trim()) {
+      Alert.alert('Error', 'Please enter your email address first');
+      return;
+    }
+
+    setIsResending(true);
+    try {
+      const auth = getAuth();
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      await sendEmailVerification(userCredential.user);
+      Alert.alert('Success', 'Verification email sent! Please check your inbox and spam folder.');
+      await auth.signOut(); // Sign out after sending verification
+    } catch (error) {
+      console.error('Error resending verification:', error);
+      let errorMessage = 'Failed to send verification email. Please try again.';
+      
+      if (error.code === 'auth/invalid-email') {
+        errorMessage = 'Please enter a valid email address';
+      } else if (error.code === 'auth/user-not-found') {
+        errorMessage = 'No account found with this email';
+      } else if (error.code === 'auth/wrong-password') {
+        errorMessage = 'Incorrect password';
+      }
+      
+      Alert.alert('Error', errorMessage);
+    } finally {
+      setIsResending(false);
+    }
+  };
+
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Login</Text>
@@ -108,6 +140,7 @@ export default function Login({ navigation }) {
         value={email}
         onChangeText={setEmail}
         autoCapitalize="none"
+        keyboardType="email-address"
       />
       
       <View style={styles.passwordContainer}>
@@ -131,9 +164,18 @@ export default function Login({ navigation }) {
       </View>
       
       {error ? <Text style={styles.error}>{error}</Text> : null}
-      <TouchableOpacity onPress={() => navigation.navigate('ForgotPassword')}>  
-        <Text style={styles.link2}>Forgot Password?</Text>
-      </TouchableOpacity>
+      
+      <View style={styles.linkContainer}>
+        <TouchableOpacity onPress={() => navigation.navigate('ForgotPassword')}>  
+          <Text style={styles.link2}>Forgot Password?</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={handleResendVerification} disabled={isResending}>
+          <Text style={[styles.link2, isResending && styles.linkDisabled]}>
+            {isResending ? 'Sending...' : 'Resend Verification Email'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
       <TouchableOpacity 
         style={[styles.button, isCheckingInvitation && styles.buttonDisabled]} 
         onPress={handleLogin}
@@ -241,5 +283,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
     justifyContent: 'center',
     padding: 20,
+  },
+  linkContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  linkDisabled: {
+    opacity: 0.5,
   },
 }); 

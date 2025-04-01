@@ -13,6 +13,7 @@ import { initializeAdmin } from './scripts/initAdmin';
 import { getDatabase, ref, get } from 'firebase/database';
 import Profile from './Components/Profile/Profile';
 import EditProfile from './Components/Profile/EditProfile';
+import Dashboard from './Components/IoT/Dashboard';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
 const Stack = createNativeStackNavigator();
@@ -41,12 +42,24 @@ export default function App() {
           
           if (snapshot.exists()) {
             const userData = snapshot.val();
-            setUser({
+            console.log('User Profile Data:', userData);
+            console.log('Is Admin:', userData.isAdmin);
+            console.log('User Role:', userData.role);
+            
+            // Set user with admin status - check both isAdmin and role
+            const isAdminUser = userData.isAdmin === true || userData.role === 'admin';
+            const userWithAdmin = {
               ...user,
-              isAdmin: userData.isAdmin
-            });
-            setIsVerified(userData.isAdmin || user.emailVerified);
+              isAdmin: isAdminUser
+            };
+            console.log('User Object with Admin:', userWithAdmin);
+            setUser(userWithAdmin);
+            
+            // Admin users are always verified
+            setIsVerified(isAdminUser || user.emailVerified);
+            console.log('Is Verified:', isAdminUser || user.emailVerified);
           } else {
+            console.log('No profile found for user');
             setUser(user);
             setIsVerified(user.emailVerified);
           }
@@ -81,75 +94,102 @@ export default function App() {
         }}
       >
         {user ? (
-          isVerified ? (
+          // Check if user is admin first, then check verification
+          user.isAdmin ? (
             <>
-              {user?.isAdmin ? (
-                <>
-                  <Stack.Screen 
-                    name="ProductKeyManager" 
-                    component={ProductKeyManager}
-                    options={{ 
-                      headerShown: true,
-                      title: 'Product Keys'
-                    }}
-                  />
-                  <Stack.Screen 
-                    name="LocTrack" 
-                    component={LocTrack}
-                    options={{ 
-                      headerShown: false,
-                      animation: 'slide_from_left'
-                    }}
-                  />
-                  <Stack.Screen 
-                    name="Profile" 
-                    component={Profile}
-                    options={{ 
-                      headerShown: true,
-                      title: 'My Profile',
-                      headerBackVisible: false,
-                      animation: 'slide_from_right',
-                    }}
-                  />
-                  <Stack.Screen 
-                    name="EditProfile" 
-                    component={EditProfile}
-                    options={{ 
-                      headerShown: false,
-                      animation: 'slide_from_right'
-                    }}
-                  />
-                </>
-              ) : (
-                <>
-                  <Stack.Screen 
-                    name="LocTrack" 
-                    component={LocTrack}
-                    options={{ 
-                      headerShown: false,
-                      animation: 'slide_from_left'
-                    }}
-                  />
-                  <Stack.Screen 
-                    name="Profile" 
-                    component={Profile}
-                    options={{ 
-                      headerShown: true,
-                      title: 'My Profile',
-                      headerBackVisible: false,
-                      animation: 'slide_from_right',
-                    }}
-                  />
-                  <Stack.Screen 
-                    name="EditProfile" 
-                    component={EditProfile}
-                    options={{ 
-                      headerShown: false,
-                      animation: 'slide_from_right'
-                    }}
-                  />
-                </>
-              )}
+              <Stack.Screen 
+                name="LocTrack" 
+                component={LocTrack}
+                options={{ 
+                  headerShown: false,
+                  animation: 'slide_from_left'
+                }}
+              />
+              <Stack.Screen 
+                name="ProductKeyManager" 
+                component={ProductKeyManager}
+                options={{ 
+                  headerShown: true,
+                  title: 'Product Keys',
+                  headerRight: () => (
+                    <TouchableOpacity
+                      onPress={async () => {
+                        try {
+                          await signOut(getAuth());
+                        } catch (error) {
+                          console.error('Error signing out:', error);
+                        }
+                      }}
+                      style={{ marginRight: 15 }}
+                    >
+                      <Ionicons name="log-out-outline" size={24} color="#FF3B30" />
+                    </TouchableOpacity>
+                  ),
+                }}
+              />
+              <Stack.Screen 
+                name="Dashboard" 
+                component={Dashboard}
+                options={{ 
+                  headerShown: false,
+                  animation: 'slide_from_left'
+                }}
+              />
+              <Stack.Screen 
+                name="Profile" 
+                component={Profile}
+                options={{ 
+                  headerShown: true,
+                  title: 'My Profile',
+                  headerBackVisible: false,
+                  animation: 'slide_from_right',
+                }}
+              />
+              <Stack.Screen 
+                name="EditProfile" 
+                component={EditProfile}
+                options={{ 
+                  headerShown: false,
+                  animation: 'slide_from_right'
+                }}
+              />
+            </>
+          ) : isVerified ? (
+            <>
+              <Stack.Screen 
+                name="LocTrack" 
+                component={LocTrack}
+                options={{ 
+                  headerShown: false,
+                  animation: 'slide_from_left'
+                }}
+              />
+              <Stack.Screen 
+                name="Dashboard" 
+                component={Dashboard}
+                options={{ 
+                  headerShown: false,
+                  animation: 'slide_from_left'
+                }}
+              />
+              <Stack.Screen 
+                name="Profile" 
+                component={Profile}
+                options={{ 
+                  headerShown: true,
+                  title: 'My Profile',
+                  headerBackVisible: false,
+                  animation: 'slide_from_right',
+                }}
+              />
+              <Stack.Screen 
+                name="EditProfile" 
+                component={EditProfile}
+                options={{ 
+                  headerShown: false,
+                  animation: 'slide_from_right'
+                }}
+              />
             </>
           ) : (
             <Stack.Screen 

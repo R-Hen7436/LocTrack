@@ -13,7 +13,7 @@ export default function Navbar({ activePage }) {
         onPress={() => navigation.navigate('Dashboard')}
       >
         <Ionicons name="grid-outline" size={24} color="white" />
-        <Text style={styles.navText}>Dashboard</Text>
+        <Text style={styles.navText}>IoTs</Text>
       </TouchableOpacity>
       
       <TouchableOpacity 

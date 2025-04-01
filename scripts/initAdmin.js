@@ -6,6 +6,7 @@ export const initializeAdmin = async () => {
   try {
     const auth = getAuth();
     const adminConfig = getAdminConfig();
+    console.log('Initializing admin with config:', adminConfig);
     
     // Create admin account
     const userCredential = await createUserWithEmailAndPassword(
@@ -13,10 +14,11 @@ export const initializeAdmin = async () => {
       adminConfig.email,
       adminConfig.password
     );
+    console.log('Admin account created:', userCredential.user.uid);
 
-    // Set email verified directly in the user profile
+    // Set admin profile with verified status
     const db = getDatabase();
-    await set(ref(db, `users/${userCredential.user.uid}/profile`), {
+    const adminProfile = {
       firstName: adminConfig.firstName,
       lastName: adminConfig.lastName,
       email: adminConfig.email,
@@ -25,7 +27,10 @@ export const initializeAdmin = async () => {
       isAdmin: true,
       isOwner: false,
       emailVerified: true
-    });
+    };
+    console.log('Setting admin profile:', adminProfile);
+
+    await set(ref(db, `users/${userCredential.user.uid}/profile`), adminProfile);
 
     // Force update the user's email verified status
     await set(ref(db, `users/${userCredential.user.uid}/emailVerified`), true);
@@ -33,6 +38,10 @@ export const initializeAdmin = async () => {
     console.log('Admin account created and verified successfully');
     return true;
   } catch (error) {
+    if (error.code === 'auth/email-already-in-use') {
+      console.log('Admin account already exists');
+      return true;
+    }
     console.error('Error creating admin account:', error);
     return false;
   }

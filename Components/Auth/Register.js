@@ -28,6 +28,13 @@ export default function Register({ navigation }) {
       return;
     }
 
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) {
+      setError('Please enter a valid email address');
+      return;
+    }
+
     // Prevent admin registration through normal flow
     if (email.toLowerCase() === getAdminConfig().email.toLowerCase()) {
       setError('This email address is reserved');
@@ -128,19 +135,30 @@ export default function Register({ navigation }) {
         userId: userCredential.user.uid
       });
       
-      await sendEmailVerification(userCredential.user);
-      setMessage('Registration successful! Please check your email for verification.');
-      if (role === 'owner') {
-        setMessage(message + `\nYour team code is: ${generatedTeamCode}`);
+      try {
+        await sendEmailVerification(userCredential.user);
+        console.log('Verification email sent successfully');
+        setMessage('Registration successful! Please check your email for verification.');
+        if (role === 'owner') {
+          setMessage(message + `\nYour team code is: ${generatedTeamCode}`);
+        }
+      } catch (error) {
+        console.error('Error sending verification email:', error);
+        // Don't block registration if email verification fails
+        setMessage('Registration successful! However, there was an issue sending the verification email. You can request a new verification email from the login screen.');
       }
+      
       setError('');
       
-      navigation.dispatch(
-        CommonActions.reset({
-          index: 0,
-          routes: [{ name: 'Login' }],
-        })
-      );
+      // Add a delay before navigation to show the success message
+      setTimeout(() => {
+        navigation.dispatch(
+          CommonActions.reset({
+            index: 0,
+            routes: [{ name: 'Login' }],
+          })
+        );
+      }, 3000);
     } catch (error) {
       console.error('Registration Error:', error);
       setError(error.message);

@@ -46,8 +46,8 @@ const GPSStrengthIndicator = ({ accuracy }) => {
   );
 };
 
-// Add this new component for custom marker
-const CustomMarker = ({ coordinate, photoURL }) => (
+// Update the CustomMarker component to be more modern
+const CustomMarker = ({ coordinate, photoURL, name }) => (
   <Marker coordinate={coordinate}>
     <View style={styles.markerContainer}>
       {photoURL ? (
@@ -57,7 +57,7 @@ const CustomMarker = ({ coordinate, photoURL }) => (
         />
       ) : (
         <View style={styles.markerFallback}>
-          <Ionicons name="person" size={20} color="#FFFFFF" />
+          <Ionicons name="location" size={20} color="#FFFFFF" />
         </View>
       )}
     </View>
@@ -67,28 +67,23 @@ const CustomMarker = ({ coordinate, photoURL }) => (
 export default function App() {
 const mapRef = useRef(null);
 const [points, setPoints] = useState([]);
-const [subZones, setSubZones] = useState([]);
 const [currentLocation, setCurrentLocation] = useState(null);
 const [isFetchingLocation, setIsFetchingLocation] = useState(false);
- const [locationButtonText, setLocationButtonText] = useState("My Location");
-const [subZoneDiameter, setSubZoneDiameter] = useState(10);
-const [selectedSubZone, setSelectedSubZone] = useState(null);
-const [subZoneCount, setSubZoneCount] = useState(0);
-const [previewCircle, setPreviewCircle] = useState(null);
+const [locationButtonText, setLocationButtonText] = useState("My Location");
 const [isDrawingComplete, setIsDrawingComplete] = useState(false);
 const [isDrawing, setIsDrawing] = useState(false);
 const [initialRegion, setInitialRegion] = useState({
   latitude: 14.5995,
   longitude: 120.9842,
-  latitudeDelta: 0.01,
-  longitudeDelta: 0.01,
+  latitudeDelta: 0.02,
+  longitudeDelta: 0.02,
 });
 const navigation = useNavigation();
 const [userRole, setUserRole] = useState(null);
 const [teamGeofence, setTeamGeofence] = useState([]);
-const [teamSubzones, setTeamSubzones] = useState([]);
 const [gpsAccuracy, setGpsAccuracy] = useState(null);
 const [usersLocations, setUsersLocations] = useState({});
+const [shouldAutoFit, setShouldAutoFit] = useState(true);
 
 // Replace the first useEffect with this updated version
 useEffect(() => {
@@ -102,7 +97,9 @@ useEffect(() => {
       
       if (snapshot.exists()) {
         const profileData = snapshot.val();
+        console.log('User Profile Data:', profileData);
         setUserRole(profileData.role);
+        console.log('Setting user role to:', profileData.role);
         
         // Auto-trigger location tracking for all users
         await toggleCurrentLocation();
@@ -160,13 +157,6 @@ useEffect(() => {
         if (geofenceSnapshot.exists()) {
           setTeamGeofence(geofenceSnapshot.val());
         }
-        
-        // Load subzones
-        const subzonesRef = ref(db, "geofence/subzones");
-        const subzonesSnapshot = await get(subzonesRef);
-        if (subzonesSnapshot.exists()) {
-          setTeamSubzones(Object.values(subzonesSnapshot.val()));
-        }
       }
     } catch (error) {
       console.error("Error loading team geofence:", error);
@@ -175,6 +165,67 @@ useEffect(() => {
 
   loadTeamGeofence();
 }, [userRole]);
+
+// Update the initializeMap function to use fitAllMarkers
+const initializeMap = async () => {
+  try {
+    // Get last known location from Firebase
+    const locationsRef = ref(db, "UsersCurrentLocation");
+    const locSnapshot = await get(locationsRef);
+    
+    // If we have user locations stored, initialize map with them
+    if (locSnapshot.exists() && Object.keys(locSnapshot.val()).length > 0) {
+      // Load user locations into state
+      const locations = {};
+      Object.entries(locSnapshot.val()).forEach(([userId, userData]) => {
+        if (userData.Latitude && userData.Longitude) {
+          locations[userId] = userData;
+        }
+      });
+      
+      setUsersLocations(locations);
+      
+      // If we have a current user location, set it
+      const currentUserLoc = locSnapshot.val()[auth.currentUser.uid];
+      if (currentUserLoc && currentUserLoc.Latitude && currentUserLoc.Longitude) {
+        setCurrentLocation({
+          latitude: currentUserLoc.Latitude,
+          longitude: currentUserLoc.Longitude
+        });
+      }
+      
+      // After loading the locations, we'll call fitAllMarkers after a short delay
+      // to ensure the locations and points are all loaded
+      setTimeout(() => {
+        // Force map update during initialization
+        fitAllMarkers(true);
+      }, 1000);
+    } else {
+      // If no locations stored, try to get the user's current location
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status === 'granted') {
+        const location = await Location.getCurrentPositionAsync({});
+        if (location) {
+          const { latitude, longitude } = location.coords;
+          setInitialRegion({
+            latitude,
+            longitude,
+            latitudeDelta: 0.02,
+            longitudeDelta: 0.02,
+          });
+          
+          // Also set current location if we got it
+          setCurrentLocation({
+            latitude,
+            longitude
+          });
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Error initializing map:", error);
+  }
+};
 
 const getLocation = async () => {
   if (mapRef.current) {
@@ -284,12 +335,25 @@ const toggleCurrentLocation = async () => {
     setLocationButtonText("Remove Loc");
 
     if (mapRef.current) {
+      // Set a better zoom level for the map when location is obtained
       mapRef.current.animateToRegion({
         latitude,
         longitude,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
+        latitudeDelta: 0.02, // More zoomed out for better context
+        longitudeDelta: 0.02, // More zoomed out for better context
       });
+      
+      // Disable auto-fit after we've manually centered
+      setShouldAutoFit(false);
+    }
+
+    // Get user profile data
+    const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+    const profileSnapshot = await get(userProfileRef);
+    let profileData = {};
+    
+    if (profileSnapshot.exists()) {
+      profileData = profileSnapshot.val();
     }
 
     const dbRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
@@ -297,35 +361,94 @@ const toggleCurrentLocation = async () => {
       Latitude: latitude, 
       Longitude: longitude,
       timestamp: new Date().toISOString(),
+      firstName: profileData.firstName || '',
+      lastName: profileData.lastName || '',
+      photoURL: profileData.photoURL || '',
+      role: profileData.role || '',
+      teamCode: profileData.teamCode || ''
     });
+    
+    // Only fit all markers if there are multiple users to show
+    // For just the current user, we already centered the map above
+    if (Object.keys(usersLocations).length > 1) {
+      setTimeout(() => {
+        setShouldAutoFit(true);
+        fitAllMarkers();
+      }, 500);
+    }
     
     // If user is a member, set up continuous location tracking with optimized settings
     if (userRole === 'member') {
-      Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.Balanced,
-          timeInterval: 10000, // Increased to 10 seconds
-          distanceInterval: 10, // Increased to 10 meters
-        },
-        (location) => {
-          if (location) {
-            const { latitude, longitude } = location.coords;
-            setCurrentLocation({ latitude, longitude });
-            set(dbRef, { 
-              Latitude: latitude, 
-              Longitude: longitude,
-              timestamp: new Date().toISOString(),
-            });
+      try {
+        console.log("Setting up continuous location tracking for member...");
+        const locationSubscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.Balanced,
+            timeInterval: 10000, // 10 seconds
+            distanceInterval: 10, // 10 meters
+          },
+          async (location) => {
+            try {
+              console.log("Member location update received:", location.coords);
+              const { latitude, longitude, accuracy } = location.coords;
+              
+              if (location.coords.accuracy <= 30) { // Increased accuracy threshold
+                console.log("Updating member location state:", { latitude, longitude });
+                // Update location without triggering map adjustments
+                setCurrentLocation((prev) => {
+                  // Only update if position has changed significantly (more than 5 meters)
+                  if (!prev || 
+                      calculateDistance(
+                        { latitude: prev.latitude, longitude: prev.longitude },
+                        { latitude, longitude }
+                      ) > 5) {
+                    return { latitude, longitude };
+                  }
+                  return prev;
+                });
+                
+                setGpsAccuracy(accuracy);
+                
+                // Ensure we have auth and current user before updating Firebase
+                if (auth && auth.currentUser && auth.currentUser.uid) {
+                  console.log("Updating member location in Firebase...");
+                  const dbRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
+                  await set(dbRef, { 
+                    Latitude: latitude, 
+                    Longitude: longitude,
+                    Accuracy: accuracy,
+                    Timestamp: new Date().toISOString(),
+                    userId: auth.currentUser.uid,
+                    firstName: profileData.firstName || '',
+                    lastName: profileData.lastName || '',
+                    photoURL: profileData.photoURL || '',
+                    role: profileData.role || '',
+                    teamCode: profileData.teamCode || ''
+                  });
+                  console.log("Member location updated in Firebase");
+                } else {
+                  console.warn("Auth or currentUser not available, skipping location update");
+                }
+              } else {
+                console.log("Location accuracy too low:", accuracy);
+              }
+            } catch (error) {
+              console.error("Error in member location callback:", error);
+            }
           }
-        },
-        (error) => {
-          console.error("Error in location tracking:", error);
-          // Try to restart tracking if there's an error
-          if (error.code === 'kCLErrorLocationUnknown') {
-            toggleCurrentLocation();
+        );
+        
+        // Store the subscription for cleanup
+        console.log("Location tracking subscription created for member");
+        return () => {
+          if (locationSubscription) {
+            locationSubscription.remove();
+            console.log("Location tracking subscription removed");
           }
-        }
-      );
+        };
+      } catch (error) {
+        console.error("Error setting up location tracking for member:", error);
+      }
     }
   } catch (error) {
     console.error("Error fetching location:", error);
@@ -397,17 +520,34 @@ useEffect(() => {
             const { latitude, longitude, accuracy } = location.coords;
             
             if (location.coords.accuracy <= 20) {
+              // Update location state
               setCurrentLocation({ latitude, longitude });
               setGpsAccuracy(accuracy);
               
-              const dbRef = ref(db, "UsersCurrentLocation");
-              await set(dbRef, { 
-                Latitude: latitude, 
-                Longitude: longitude,
-                Accuracy: accuracy,
-                Timestamp: new Date().toISOString(),
-                userId: auth.currentUser?.uid
-              });
+              // Make sure we have auth and currentUser before updating Firebase
+              if (auth && auth.currentUser && auth.currentUser.uid) {
+                // Get the user profile data for this user
+                const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+                const profileSnapshot = await get(userProfileRef);
+                const profileData = profileSnapshot.exists() ? profileSnapshot.val() : {};
+                
+                // Use the proper path with the user's ID
+                const dbRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
+                await set(dbRef, { 
+                  Latitude: latitude, 
+                  Longitude: longitude,
+                  Accuracy: accuracy,
+                  Timestamp: new Date().toISOString(),
+                  userId: auth.currentUser.uid,
+                  firstName: profileData.firstName || '',
+                  lastName: profileData.lastName || '',
+                  photoURL: profileData.photoURL || '',
+                  role: profileData.role || '',
+                  teamCode: profileData.teamCode || ''
+                });
+              } else {
+                console.warn("Auth or currentUser not available, skipping location update");
+              }
             }
           } catch (error) {
             console.error("Error updating location:", error);
@@ -482,88 +622,6 @@ const checkDatabaseConnection = async () => {
   }
 };
 
-// Add this helper function to find the next available number
-const findNextAvailableNumber = (existingSubzones) => {
-  const usedNumbers = new Set();
-  
-  // Get all existing subzone numbers
-  existingSubzones.forEach(key => {
-    if (key.startsWith('Subzone ')) {
-      const num = parseInt(key.split(' ')[1]);
-      if (!isNaN(num)) usedNumbers.add(num);
-    }
-  });
-  
-  // Find the first available number
-  let nextNum = 1;
-  while (usedNumbers.has(nextNum)) {
-    nextNum++;
-  }
-  return nextNum;
-};
-
-const addSubZone = async () => {
-  if (!await checkDatabaseConnection()) {
-    alert("No connection to database. Please check your internet connection.");
-    return;
-  }
-  if (!mapRef.current || points.length < 3) {
-    alert("Please define the geofence area first (minimum 3 points needed).");
-    return;
-  }
-
-  const region = await mapRef.current.getMapBoundaries();
-  const centerLatitude = (region.northEast.latitude + region.southWest.latitude) / 2;
-  const centerLongitude = (region.northEast.longitude + region.southWest.longitude) / 2;
-  const newSubZone = { latitude: centerLatitude, longitude: centerLongitude, diameter: subZoneDiameter };
-
-  // Check if the subzone is inside the geofence
-  if (!isPointInsidePolygon(newSubZone, points)) {
-    alert("Subzone must be inside the geofence.");
-    return;
-  }
-
-  // Check if the subzone overlaps with existing subzones
-  for (let zone of subZones) {
-    const distance = calculateDistance(zone, newSubZone);
-    if (distance < (zone.diameter / 2 + newSubZone.diameter / 2)) {
-      alert("Subzone overlaps with an existing one.");
-      return;
-    }
-  }
-
-  // Check if subzone crosses the polygon's sides
-  for (let i = 0; i < points.length; i++) {
-    let p1 = points[i];
-    let p2 = points[(i + 1) % points.length];
-
-    let d1 = calculateDistance(p1, newSubZone);
-    let d2 = calculateDistance(p2, newSubZone);
-    
-    if (d1 < newSubZone.diameter / 2 || d2 < newSubZone.diameter / 2) {
-      alert("Subzone cannot cross the geofence boundary.");
-      return;
-    }
-  }
-
-  try {
-    // Get current subzones to find next available number
-    const subzonesRef = ref(db, "geofence/subzones");
-    const snapshot = await get(subzonesRef);
-    const existingKeys = snapshot.exists() ? Object.keys(snapshot.val()) : [];
-    const nextNumber = findNextAvailableNumber(existingKeys);
-
-    // Save the valid subzone
-    setSubZones((prevZones) => [...prevZones, newSubZone]);
-    const dbRef = ref(db, `geofence/subzones/Subzone ${nextNumber}`);
-    await set(dbRef, newSubZone);
-    console.log(`Subzone ${nextNumber} saved to Firebase:`, newSubZone);
-  } catch (error) {
-    console.error("Error saving subzone:", error);
-    alert("Failed to save subzone. Please try again.");
-  }
-};
-
 const saveCoordinatesToFirebase = (coordinates) => {
   const dbRef = ref(db, "geofence/coordinates");
   set(dbRef, coordinates)
@@ -571,191 +629,135 @@ const saveCoordinatesToFirebase = (coordinates) => {
     .catch((error) => console.error("Error saving coordinates:", error));
 };
 
-const checkCrosshairOverSubZone = async () => {
+// Add this helper function to check if a location change is significant
+const isSignificantLocationChange = (prevLocation, newLocation, threshold = 10) => {
+  if (!prevLocation) return true; // Always significant if no previous location
+  
+  return calculateDistance(
+    { latitude: prevLocation.latitude, longitude: prevLocation.longitude },
+    { latitude: newLocation.latitude, longitude: newLocation.longitude }
+  ) > threshold; // Only significant if moved more than threshold meters
+};
+
+// Then modify our fitAllMarkers function to avoid unnecessary adjustments
+const fitAllMarkers = (forceUpdate = false) => {
   if (!mapRef.current) return;
   
-  const region = await mapRef.current.getMapBoundaries();
-  const centerLatitude = (region.northEast.latitude + region.southWest.latitude) / 2;
-  const centerLongitude = (region.northEast.longitude + region.southWest.longitude) / 2;
-  const crosshairPoint = { latitude: centerLatitude, longitude: centerLongitude };
-
-  // Check each subzone
-  for (let zone of subZones) {
-    const distance = calculateDistance(zone, crosshairPoint);
-    if (distance <= zone.diameter / 2) {
-      setSelectedSubZone(zone);
-      return;
-    }
-  }
-  setSelectedSubZone(null);
-};
-
-const removeSubZone = async () => {
-  if (!selectedSubZone) return;
-
-  try {
-    // Remove from state
-    setSubZones(prevZones => prevZones.filter(zone => 
-      zone.latitude !== selectedSubZone.latitude || 
-      zone.longitude !== selectedSubZone.longitude
-    ));
-
-    // Remove from Firebase
-    const dbRef = ref(db, "geofence/subzones");
-    const snapshot = await get(dbRef);
-    
-    if (snapshot.exists()) {
-      snapshot.forEach((childSnapshot) => {
-        const zoneData = childSnapshot.val();
-        if (zoneData.latitude === selectedSubZone.latitude && 
-            zoneData.longitude === selectedSubZone.longitude) {
-          remove(ref(db, `geofence/subzones/${childSnapshot.key}`));
-        }
-      });
-    }
-
-    setSelectedSubZone(null);
-    console.log("Subzone removed successfully");
-  } catch (error) {
-    console.error("Error removing subzone:", error);
-    alert("Failed to remove subzone. Please try again.");
-  }
-};
-
-const updatePreviewCircle = async () => {
-  if (!mapRef.current) return;
+  // Only update if we're forcing an update or auto-fit is enabled
+  if (!forceUpdate && !shouldAutoFit) return;
   
-  const region = await mapRef.current.getMapBoundaries();
-  const centerLatitude = (region.northEast.latitude + region.southWest.latitude) / 2;
-  const centerLongitude = (region.northEast.longitude + region.southWest.longitude) / 2;
+  // Re-enable auto-fit for the next location change
+  setShouldAutoFit(true);
   
-  setPreviewCircle({
-    latitude: centerLatitude,
-    longitude: centerLongitude,
-    diameter: subZoneDiameter
-  });
-};
-
-useEffect(() => {
-  const loadSubZones = async () => {
-    if (!db) {
-      console.error("Database not initialized");
-      return;
-    }
-
-    try {
-      const dbRef = ref(db, "geofence/subzones");
-      if (!dbRef) {
-        console.error("Failed to create database reference");
-        return;
-      }
-
-      const snapshot = await get(dbRef);
-      if (snapshot.exists()) {
-        const subZonesData = [];
-        let maxNumber = 0;
-        
-        snapshot.forEach((childSnapshot) => {
-          subZonesData.push(childSnapshot.val());
-          // Extract number from "Subzone X" format
-          const subzoneNumber = parseInt(childSnapshot.key.split(' ')[1]);
-          maxNumber = Math.max(maxNumber, subzoneNumber);
+  // Create an array of all coordinates to include in the view
+  const allCoordinates = [];
+  
+  // Add current location if available
+  if (currentLocation) {
+    allCoordinates.push({
+      latitude: currentLocation.latitude,
+      longitude: currentLocation.longitude
+    });
+  }
+  
+  // Add all user locations
+  if (usersLocations) {
+    Object.values(usersLocations).forEach(user => {
+      if (user.Latitude && user.Longitude) {
+        allCoordinates.push({
+          latitude: user.Latitude,
+          longitude: user.Longitude
         });
-        
-        setSubZones(subZonesData);
-        setSubZoneCount(maxNumber);
       }
-    } catch (error) {
-      console.error("Error loading subzones:", error);
-      // Add more specific error handling
-      if (error.message.includes('sendRequest')) {
-        console.error("Firebase connection error. Please check your internet connection.");
-      }
-    }
-  };
-
-  loadSubZones();
-}, []);
-
-useEffect(() => {
-  const interval = setInterval(checkCrosshairOverSubZone, 500);
-  return () => clearInterval(interval);
-}, [subZones]);
-
-useEffect(() => {
-  const interval = setInterval(updatePreviewCircle, 500);
-  return () => clearInterval(interval);
-}, [subZoneDiameter]);
-
-useEffect(() => {
-  const loadCoordinates = async () => {
-    try {
-      const coordRef = ref(db, "geofence/coordinates");
-      const snapshot = await get(coordRef);
-      
-      if (snapshot.exists()) {
-        const coordinates = snapshot.val();
-        if (Array.isArray(coordinates) && coordinates.length >= 3) {
-          setPoints(coordinates);
-          setIsDrawing(false); 
-          setIsDrawingComplete(true); 
-          console.log("Coordinates loaded from Firebase:", coordinates);
-        }
-      }
-    } catch (error) {
-      console.error("Error loading coordinates:", error);
-    }
-  };
-
-  loadCoordinates();
-}, []); 
-
-useEffect(() => {
-  if (!isDrawing && points.length >= 3) {
-    setIsDrawingComplete(true);
-    saveCoordinatesToFirebase(points);
+    });
   }
-}, [isDrawing, points]);
+  
+  // For owners, add geofence points if available
+  if (userRole !== 'member' && points.length > 0) {
+    points.forEach(point => {
+      allCoordinates.push(point);
+    });
+  }
+  
+  // For members, add team geofence points if available
+  if (userRole === 'member' && teamGeofence.length > 0) {
+    teamGeofence.forEach(point => {
+      allCoordinates.push(point);
+    });
+  }
+  
+  // If we have coordinates, fit the map to show all of them
+  if (allCoordinates.length > 0) {
+    // Use much larger edge padding for a more zoomed-out view
+    mapRef.current.fitToCoordinates(allCoordinates, {
+      edgePadding: { top: 200, right: 200, bottom: 300, left: 200 },
+      animated: true
+    });
+  } else {
+    // If no coordinates, just use a default view with more zoom-out
+    mapRef.current.animateToRegion({
+      ...initialRegion,
+      latitudeDelta: 0.02,  // More zoomed out for better context
+      longitudeDelta: 0.02
+    }, 1000);
+  }
+};
 
+// Update the useEffect to only auto-fit when needed
 useEffect(() => {
-  const usersLocRef = ref(db, "UsersCurrentLocation");
-  const unsubscribe = onValue(usersLocRef, async (snapshot) => {
-    if (snapshot.exists()) {
-      const locations = {};
-      const userPromises = [];
+  // Only auto-fit if the flag is true
+  if (shouldAutoFit && (Object.keys(usersLocations).length > 0 || currentLocation)) {
+    fitAllMarkers();
+    // Disable auto-fitting after the first adjustment
+    setShouldAutoFit(false);
+  }
+}, [usersLocations, currentLocation, shouldAutoFit]);
 
-      snapshot.forEach((child) => {
-        const userId = child.key;
-        const locationData = child.val();
-        
-        // Get user profile data for the photo URL
-        const userPromise = get(ref(db, `users/${userId}/profile`))
-          .then((profileSnapshot) => {
-            if (profileSnapshot.exists()) {
-              const profileData = profileSnapshot.val();
-              locations[userId] = {
-                ...locationData,
-                photoURL: profileData.photoURL,
-                name: `${profileData.firstName} ${profileData.lastName}`
-              };
-            }
-            return null;
-          })
-          .catch((error) => {
-            console.error(`Error fetching user profile ${userId}:`, error);
-            return null;
-          });
-        
-        userPromises.push(userPromise);
-      });
-
-      await Promise.all(userPromises);
-      setUsersLocations(locations);
-    }
-  });
-
-  return () => unsubscribe();
+// Add this useEffect to initialize the map when first loaded
+useEffect(() => {
+  initializeMap();
 }, []);
+
+// Add this useEffect to properly load all user locations
+useEffect(() => {
+  // This function loads all user locations from Firebase
+  const loadAllUserLocations = async () => {
+    try {
+      console.log("Loading all user locations...");
+      const locationsRef = ref(db, "UsersCurrentLocation");
+      
+      // Use onValue to get real-time updates
+      const unsubscribe = onValue(locationsRef, (snapshot) => {
+        if (snapshot.exists()) {
+          console.log("User locations data found:", snapshot.val());
+          const locationsData = snapshot.val();
+          
+          // Convert the data to our expected format
+          const formattedLocations = {};
+          Object.entries(locationsData).forEach(([userId, userData]) => {
+            if (userData && userData.Latitude && userData.Longitude) {
+              console.log(`Found location for user ${userId}:`, userData);
+              formattedLocations[userId] = userData;
+            }
+          });
+          
+          // Update the state with all locations
+          setUsersLocations(formattedLocations);
+          console.log("Updated usersLocations with:", formattedLocations);
+        } else {
+          console.log("No user locations found in database");
+        }
+      });
+      
+      // Return cleanup function
+      return unsubscribe;
+    } catch (error) {
+      console.error("Error loading user locations:", error);
+    }
+  };
+  
+  loadAllUserLocations();
+}, [db]); // Only run this once when the database is available
 
 if (!db) {
   console.error("Firebase database not initialized");
@@ -769,18 +771,12 @@ return (
       ref={mapRef} 
       style={styles.map} 
       initialRegion={initialRegion}
-      onPress={(e) => {
-        if (userRole !== 'member') {
-          const newPoint = e.nativeEvent.coordinate;
-          setPoints(prevPoints => {
-            const updatedPoints = [...prevPoints, newPoint];
-            if (updatedPoints.length === 4) {
-              saveCoordinatesToFirebase(updatedPoints);
-            }
-            return updatedPoints;
-          });
-        }
-      }}
+      showsUserLocation={false}
+      showsMyLocationButton={false}
+      showsCompass={true}
+      rotateEnabled={true}
+      minZoomLevel={10}  // Set minimum zoom level
+      maxZoomLevel={20}  // Set maximum zoom level
     >
       {userRole === 'member' ? (
         <>
@@ -792,16 +788,6 @@ return (
               strokeWidth={2} 
             />
           )}
-          {teamSubzones.map((zone, index) => (
-            <Circle
-              key={index}
-              center={{ latitude: zone.latitude, longitude: zone.longitude }}
-              radius={zone.diameter * 0.5}
-              fillColor="rgba(255,0,0,0.2)"
-              strokeColor="red"
-              strokeWidth={2}
-            />
-          ))}
         </>
       ) : (
         <>
@@ -816,31 +802,27 @@ return (
               strokeWidth={2} 
             />
           )}
-          {subZones.map((zone, index) => (
-            <Circle
-              key={index}
-              center={{ latitude: zone.latitude, longitude: zone.longitude }}
-              radius={zone.diameter * 0.5}
-              fillColor="rgba(255,0,0,0.3)"
-              strokeColor="red"
-              strokeWidth={2}
-            />
-          ))}
         </>
       )}
       {currentLocation && (
-        <Marker coordinate={currentLocation} title="Current Location" pinColor="green" />
-      )}
-      {Object.entries(usersLocations).map(([userId, userData]) => (
         <CustomMarker
-          key={userId}
-          coordinate={{
-            latitude: userData.Latitude,
-            longitude: userData.Longitude
-          }}
-          photoURL={userData.photoURL}
+          coordinate={currentLocation}
         />
-      ))}
+      )}
+      {Object.entries(usersLocations).map(([userId, userData]) => {
+        console.log(`Rendering marker for user ${userId}:`, userData);
+        return (
+          <CustomMarker
+            key={userId}
+            coordinate={{
+              latitude: userData.Latitude,
+              longitude: userData.Longitude
+            }}
+            photoURL={userData.photoURL}
+            name={userData.name}
+          />
+        );
+      })}
     </MapView>
 
     {userRole !== 'member' && (
@@ -855,19 +837,7 @@ return (
           <View style={styles.pointsIndicator}>
             <Text style={styles.pointsText}>Number of Geofenced Points: {points.length}</Text>
           </View>
-          <View style={styles.inputWrapper}>
-            <TextInput
-              style={styles.input}
-              placeholder="Enter Diameter (meters)"
-              keyboardType="numeric"
-              placeholderTextColor="#666"
-              onChangeText={(text) => {
-                const newDiameter = parseFloat(text) || 10;
-                setSubZoneDiameter(newDiameter);
-                updatePreviewCircle();
-              }}
-            />
-          </View>
+
           <View style={styles.buttonContainer}>
             <TouchableOpacity style={styles.button} onPress={getLocation}>
               <Ionicons name="location" size={20} color="white" />
@@ -882,31 +852,44 @@ return (
             </TouchableOpacity>
 
             <TouchableOpacity 
-              style={[styles.button, styles.buttonSubZone, selectedSubZone && { backgroundColor: '#FF3B30' }]} 
-              onPress={selectedSubZone ? removeSubZone : addSubZone}
-            >
-              <Ionicons name={selectedSubZone ? "trash" : "add-circle"} size={20} color="white" />
-              <Text style={styles.buttonText}>
-                {selectedSubZone ? "Remove" : "Add Zone"}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
               style={[styles.button, styles.buttonReset]} 
               onPress={() => {
                 setPoints([]);
-                setSubZones([]);
-                // Clear subzones from Firebase
-                const dbRef = ref(db, "geofence/subzones");
-                set(dbRef, {});
               }}
             >
               <Ionicons name="refresh" size={20} color="white" />
               <Text style={styles.buttonText}>Reset All</Text>
             </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={[styles.button, styles.buttonCenter]} 
+              onPress={() => {
+                // Manual centering should force the map update
+                fitAllMarkers(true);
+              }}
+            >
+              <Ionicons name="expand" size={20} color="white" />
+              <Text style={styles.buttonText}>Center Map</Text>
+            </TouchableOpacity>
           </View>
         </>
-      ) : null}
+      ) : (
+        <>
+          <View style={styles.memberMessage}>
+            <Text style={styles.memberText}>Member View - Location tracking active</Text>
+          </View>
+          <TouchableOpacity 
+            style={[styles.button, styles.buttonCenter, styles.memberCenterButton]} 
+            onPress={() => {
+              // Manual centering should force the map update
+              fitAllMarkers(true);
+            }}
+          >
+            <Ionicons name="expand" size={20} color="white" />
+            <Text style={styles.buttonText}>Center Map</Text>
+          </TouchableOpacity>
+        </>
+      )}
     </View>
 
     <Navbar activePage="maps" />
@@ -971,9 +954,6 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   buttonSecondary: {
-    backgroundColor: "#2196F3",
-  },
-  buttonSubZone: {
     backgroundColor: "#2196F3",
   },
   buttonReset: {
@@ -1065,26 +1045,54 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   markerContainer: {
+    backgroundColor: '#2196F3',
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#007AFF',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 2,
     borderColor: '#FFFFFF',
-    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
   },
   markerImage: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 20,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
   },
   markerFallback: {
-    width: '100%',
-    height: '100%',
-    backgroundColor: '#007AFF',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#2196F3',
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+  },
+  memberMessage: {
+    padding: 15,
+    alignItems: 'center',
+  },
+  memberText: {
+    color: '#2196F3',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  buttonCenter: {
+    backgroundColor: "#2196F3",
+  },
+  memberCenterButton: {
+    marginTop: 10,
+    width: '100%',
   },
 });
