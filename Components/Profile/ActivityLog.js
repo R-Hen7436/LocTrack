@@ -125,15 +125,15 @@ export default function ActivityLog() {
       : timestamp.toLocaleDateString();
     
     return (
-      <View style={styles.logItem} key={item.id}>
-        <View style={[styles.iconContainer, { backgroundColor: `${icon.color}20` }]}>
+      <View style={styles.activityItem} key={item.id}>
+        <View style={[styles.activityIcon, { backgroundColor: `${icon.color}20` }]}>
           <Ionicons name={icon.name} size={20} color={icon.color} />
         </View>
-        <View style={styles.logContent}>
-          <Text style={styles.logText}>
+        <View style={styles.activityInfo}>
+          <Text style={styles.activityText}>
             {getActionDescription(item.actionType, item.details)}
           </Text>
-          <Text style={styles.logTime}>{timeString}</Text>
+          <Text style={styles.activityTime}>{timeString}</Text>
         </View>
       </View>
     );
@@ -144,21 +144,15 @@ export default function ActivityLog() {
   
   return (
     <View style={styles.container}>
-      <View style={styles.headerRow}>
+      <View style={styles.header}>
         <Text style={styles.title}>Recent Activity</Text>
         {logs.length > 3 && (
           <TouchableOpacity 
             onPress={() => setExpanded(!expanded)}
-            style={styles.expandButton}
           >
-            <Text style={styles.expandButtonText}>
+            <Text style={styles.showLessText}>
               {expanded ? 'Show Less' : 'Show More'}
             </Text>
-            <Ionicons 
-              name={expanded ? 'chevron-up' : 'chevron-down'} 
-              size={16} 
-              color="#007AFF" 
-            />
           </TouchableOpacity>
         )}
       </View>
@@ -168,7 +162,7 @@ export default function ActivityLog() {
           <ActivityIndicator size="small" color="#007AFF" />
         </View>
       ) : logs.length > 0 ? (
-        <View style={styles.logsList}>
+        <View style={[styles.logsList, expanded && styles.expandedList]}>
           {displayLogs.map(item => renderLogItem(item))}
         </View>
       ) : (
@@ -178,11 +172,9 @@ export default function ActivityLog() {
       )}
       
       {logs.length > 0 && (
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>
-            {logs.length} {logs.length === 1 ? 'activity' : 'activities'} recorded
-          </Text>
-        </View>
+        <Text style={styles.activityCountText}>
+          {logs.length} {logs.length === 1 ? 'activity' : 'activities'} recorded
+        </Text>
       )}
     </View>
   );
@@ -191,50 +183,71 @@ export default function ActivityLog() {
 const styles = StyleSheet.create({
   container: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 10,
-    padding: 15,
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: '#E5E5E5',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
   },
   title: {
     fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 15,
+    fontWeight: '600',
+    color: '#000',
+  },
+  showLessText: {
+    color: '#007AFF',
+    fontSize: 14,
+    padding: 4,
+  },
+  activityItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  activityIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#E8F5E9',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  activityInfo: {
+    flex: 1,
+  },
+  activityText: {
+    fontSize: 15,
+    color: '#1A1A1A',
+    marginBottom: 4,
+  },
+  activityTime: {
+    fontSize: 13,
+    color: '#8E8E93',
   },
   loadingContainer: {
     padding: 20,
     alignItems: 'center',
   },
   logsList: {
-    maxHeight: 300,
+    maxHeight: 200,
   },
-  logItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
-  },
-  iconContainer: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  logContent: {
-    flex: 1,
-  },
-  logText: {
-    fontSize: 14,
-    color: '#333333',
-    marginBottom: 4,
-  },
-  logTime: {
-    fontSize: 12,
-    color: '#8E8E93',
+  expandedList: {
+    maxHeight: 400,
   },
   emptyContainer: {
     padding: 20,
@@ -244,26 +257,11 @@ const styles = StyleSheet.create({
     color: '#8E8E93',
     fontStyle: 'italic',
   },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  expandButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  expandButtonText: {
-    fontSize: 14,
-    color: '#007AFF',
-    marginRight: 5,
-  },
-  footer: {
-    padding: 10,
-    alignItems: 'center',
-  },
-  footerText: {
+  activityCountText: {
     color: '#8E8E93',
+    fontSize: 13,
     fontStyle: 'italic',
+    marginTop: 8,
+    textAlign: 'center',
   },
 }); 

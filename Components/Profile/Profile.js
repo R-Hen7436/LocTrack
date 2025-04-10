@@ -42,6 +42,25 @@ const getInitials = (firstName, lastName) => {
 // Add delay function to ensure auth is initialized
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+const formatLastSeen = (timestamp) => {
+  if (!timestamp) return 'Never';
+  
+  const lastSeen = new Date(timestamp);
+  const now = new Date();
+  const diffMinutes = Math.floor((now - lastSeen) / (1000 * 60));
+  
+  if (diffMinutes < 1) return 'Just now';
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 7) return `${diffDays}d ago`;
+  
+  return lastSeen.toLocaleDateString();
+};
+
 export default function Profile({ navigation }) {
   const [userProfile, setUserProfile] = useState(null);
   const [teamMembers, setTeamMembers] = useState([]);
@@ -269,7 +288,8 @@ export default function Profile({ navigation }) {
                 name: formatName(userData.firstName || '', userData.middleName || '', userData.lastName || ''),
                 email: userData.email || member.email || '',
                 isActive: userData.isActive !== false,
-                photoURL: userData.photoURL || ''
+                photoURL: userData.photoURL || '',
+                lastSeen: userData.lastSeen || '',
               };
             }
             return member;
@@ -525,17 +545,7 @@ export default function Profile({ navigation }) {
             {userProfile?.role === 'owner' && (
               <>
                 <View style={styles.card}>
-                  <View style={styles.cardHeader}>
-                    <Text style={styles.cardTitle}>Team Information</Text>
-                    <TouchableOpacity 
-                      style={styles.cardHeaderButton}
-                      onPress={() => navigation.navigate('TeamSettings', { teamCode: userProfile.teamCode })}
-                    >
-                      <Text style={styles.cardHeaderButtonText}>Settings</Text>
-                      <Ionicons name="settings-outline" size={16} color="#007AFF" />
-                    </TouchableOpacity>
-                  </View>
-                  
+                  <Text style={styles.cardTitle}>Team Information</Text>
                   <View style={styles.teamCodeContainer}>
                     <View>
                       <Text style={styles.infoLabel}>Team Code</Text>
@@ -557,30 +567,13 @@ export default function Profile({ navigation }) {
                       </TouchableOpacity>
                     </View>
                   </View>
-                  
-                  <View style={styles.divider} />
-                  
-                  <InviteTeamMemberButton 
-                    teamCode={userProfile.teamCode} 
-                    onInviteSent={loadTeamMembers}
-                  />
                 </View>
 
                 <View style={styles.card}>
-                  <View style={styles.cardHeader}>
-                    <Text style={styles.cardTitle}>Team Members ({teamMembers.length})</Text>
-                    <TouchableOpacity 
-                      style={styles.cardHeaderButton}
-                      onPress={() => navigation.navigate('Members', { teamCode: userProfile.teamCode })}
-                    >
-                      <Text style={styles.cardHeaderButtonText}>View All</Text>
-                      <Ionicons name="chevron-forward" size={16} color="#007AFF" />
-                    </TouchableOpacity>
-                  </View>
-                  
+                  <Text style={styles.cardTitle}>Team Members ({teamMembers.length})</Text>
                   {teamMembers.length > 0 ? (
                     <View>
-                      {teamMembers.slice(0, 3).map(item => (
+                      {teamMembers.map(item => (
                         <View key={item.id} style={styles.memberItem}>
                           <View style={styles.memberInfo}>
                             {item.photoURL ? (
@@ -595,48 +588,21 @@ export default function Profile({ navigation }) {
                             <View style={styles.memberTextInfo}>
                               <Text style={styles.memberName}>{item.name || 'Unknown User'}</Text>
                               <Text style={styles.memberEmail}>{item.email || 'No email'}</Text>
+                              <Text style={styles.lastSeen}>
+                                {item.isActive ? 'Active now' : `Last seen ${formatLastSeen(item.lastSeen)}`}
+                              </Text>
                             </View>
-                            <View style={styles.memberStatusBadge}>
-                              <View style={[styles.statusIndicator, { backgroundColor: item.isActive ? '#4CD964' : '#FF9500' }]} />
-                              <Text style={styles.memberStatus}>{item.isActive ? 'Active' : 'Inactive'}</Text>
-                            </View>
-                          </View>
-                          
-                          <View style={styles.memberActions}>
-                            <TouchableOpacity
-                              style={styles.memberAction}
-                              onPress={() => handleTransferOwnership(item)}
-                            >
-                              <Ionicons name="star" size={18} color="#FFD700" />
-                            </TouchableOpacity>
-                            
-                            <TouchableOpacity
-                              style={styles.memberAction}
-                              onPress={() => handleRemoveMember(item)}
-                            >
-                              <Ionicons name="close-circle" size={18} color="#FF3B30" />
-                            </TouchableOpacity>
+                            <View style={[
+                              styles.statusDot,
+                              { backgroundColor: item.isActive ? '#4CD964' : '#8E8E93' }
+                            ]} />
                           </View>
                         </View>
                       ))}
-                      
-                      {teamMembers.length > 3 && (
-                        <TouchableOpacity 
-                          style={styles.viewMoreButton}
-                          onPress={() => navigation.navigate('Members', { teamCode: userProfile.teamCode })}
-                        >
-                          <Text style={styles.viewMoreText}>View all {teamMembers.length} members</Text>
-                          <Ionicons name="chevron-forward" size={16} color="#007AFF" />
-                        </TouchableOpacity>
-                      )}
                     </View>
                   ) : (
                     <View style={styles.emptyTeamContainer}>
                       <Text style={styles.emptyTeamText}>No team members yet</Text>
-                      <InviteTeamMemberButton 
-                        teamCode={userProfile.teamCode} 
-                        onInviteSent={loadTeamMembers}
-                      />
                     </View>
                   )}
                 </View>
@@ -1088,15 +1054,18 @@ const styles = StyleSheet.create({
   },
   memberTextInfo: {
     flex: 1,
+    marginLeft: 12,
   },
   memberName: {
     fontSize: 16,
     fontWeight: '500',
+    color: '#000',
     marginBottom: 2,
   },
   memberEmail: {
     fontSize: 14,
-    color: '#666666',
+    color: '#666',
+    marginBottom: 2,
   },
   memberStatusBadge: {
     flexDirection: 'row',
@@ -1257,5 +1226,18 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    position: 'absolute',
+    top: 8,
+    right: 8,
+  },
+  lastSeen: {
+    fontSize: 12,
+    color: '#8E8E93',
+    marginTop: 2,
   },
 }); 

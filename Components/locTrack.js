@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect } from "react";
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, SafeAreaView, Animated, Image } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, SafeAreaView, Animated, Image, Alert, Platform } from "react-native";
 import MapView, { Marker, Polygon, Circle } from "react-native-maps";
 import * as Location from "expo-location";
-import { getDatabase, ref, set, push, get, remove, child, onValue } from "firebase/database";
+import { getDatabase, ref, set, push, get, remove, child, onValue, onDisconnect } from "firebase/database";
 import { db, auth } from "./firebaseConfig";
 import { getAuth, signOut } from 'firebase/auth';
 import { Ionicons } from '@expo/vector-icons';
@@ -351,62 +351,24 @@ const distanceFromPointToLine = (point, lineStart, lineEnd) => {
 };
 
 const toggleCurrentLocation = async () => {
-  if (currentLocation && userRole !== 'member') {
-    setCurrentLocation(null);
-    setLocationButtonText("My Location");
-    console.log("Location removed");
-    return;
-  }
-
-  setIsFetchingLocation(true);
   try {
-    // First check if location services are enabled
-    const enabled = await Location.hasServicesEnabledAsync();
-    if (!enabled) {
-      alert("Please enable location services in your device settings");
-      setIsFetchingLocation(false);
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission Denied', 'Location permission is required to share your location.');
       return;
     }
 
-    // Check location permissions
-    let { status } = await Location.getForegroundPermissionsAsync();
-    if (status !== 'granted') {
-      // Request permission if not granted
-      const { status: newStatus } = await Location.requestForegroundPermissionsAsync();
-      if (newStatus !== 'granted') {
-        alert("Permission to access location was denied. Please enable it in your device settings.");
-        setIsFetchingLocation(false);
-        return;
-      }
-    }
-
-    // Get current position with balanced accuracy
-    let location = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.Balanced,
-      timeInterval: 10000, // Increased to 10 seconds
-      distanceInterval: 10, // Increased to 10 meters
+    const location = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Balanced
     });
-
-    if (!location) {
-      throw new Error("Could not get location");
-    }
 
     const { latitude, longitude } = location.coords;
     setCurrentLocation({ latitude, longitude });
-    setLocationButtonText("Remove Loc");
 
-    if (mapRef.current) {
-      // Set a better zoom level for the map when location is obtained
-      mapRef.current.animateToRegion({
-        latitude,
-        longitude,
-        latitudeDelta: 0.02, // More zoomed out for better context
-        longitudeDelta: 0.02, // More zoomed out for better context
-      });
-      
-      // Disable auto-fit after we've manually centered
-      setShouldAutoFit(false);
-    }
+    // Update user's location and presence
+    const db = getDatabase();
+    const userPresenceRef = ref(db, `users/${auth.currentUser.uid}/presence`);
+    const userLocationRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
 
     // Get user profile data
     const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
@@ -417,8 +379,8 @@ const toggleCurrentLocation = async () => {
       profileData = profileSnapshot.val();
     }
 
-    const dbRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
-    await set(dbRef, { 
+    // Update location with presence data
+    await set(userLocationRef, { 
       Latitude: latitude, 
       Longitude: longitude,
       timestamp: new Date().toISOString(),
@@ -426,109 +388,96 @@ const toggleCurrentLocation = async () => {
       lastName: profileData.lastName || '',
       photoURL: profileData.photoURL || '',
       role: profileData.role || '',
-      teamCode: profileData.teamCode || ''
+      teamCode: profileData.teamCode || '',
+      isActive: true,
+      lastSeen: new Date().toISOString()
     });
-    
-    // Only fit all markers if there are multiple users to show
-    // For just the current user, we already centered the map above
-    if (Object.keys(usersLocations).length > 1) {
-      setTimeout(() => {
-        setShouldAutoFit(true);
-        fitAllMarkers();
-      }, 500);
-    }
-    
-    // If user is a member, set up continuous location tracking with optimized settings
+
+    // Set up presence system
+    const presenceData = {
+      status: 'online',
+      lastSeen: new Date().toISOString(),
+      deviceInfo: Platform.OS
+    };
+    await set(userPresenceRef, presenceData);
+
+    // Set up disconnect hook
+    const connectedRef = ref(db, '.info/connected');
+    onValue(connectedRef, (snap) => {
+      if (snap.val() === true) {
+        // When we disconnect, update the last seen time and status
+        onDisconnect(userPresenceRef).update({
+          status: 'offline',
+          lastSeen: new Date().toISOString()
+        });
+
+        // Also update location active status
+        onDisconnect(userLocationRef).update({
+          isActive: false,
+          lastSeen: new Date().toISOString()
+        });
+      }
+    });
+
+    // If user is a member, set up continuous location tracking
     if (userRole === 'member') {
       try {
-        console.log("Setting up continuous location tracking for member...");
         const locationSubscription = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy.Balanced,
-            timeInterval: 10000, // 10 seconds
-            distanceInterval: 10, // 10 meters
+            timeInterval: 30000,
+            distanceInterval: 20,
+            foregroundService: {
+              notificationTitle: "Location Tracking",
+              notificationBody: "Your location is being shared",
+            },
           },
           async (location) => {
             try {
-              console.log("Member location update received:", location.coords);
               const { latitude, longitude, accuracy } = location.coords;
               
-              if (location.coords.accuracy <= 30) { // Increased accuracy threshold
-                console.log("Updating member location state:", { latitude, longitude });
-                // Update location without triggering map adjustments
-                setCurrentLocation((prev) => {
-                  // Only update if position has changed significantly (more than 5 meters)
-                  if (!prev || 
-                      calculateDistance(
-                        { latitude: prev.latitude, longitude: prev.longitude },
-                        { latitude, longitude }
-                      ) > 5) {
-                    return { latitude, longitude };
-                  }
-                  return prev;
-                });
-                
-                setGpsAccuracy(accuracy);
-                
-                // Ensure we have auth and current user before updating Firebase
-                if (auth && auth.currentUser && auth.currentUser.uid) {
-                  console.log("Updating member location in Firebase...");
-                  const dbRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
-                  await set(dbRef, { 
+              if (accuracy <= 50) {
+                const significantChange = !currentLocation || 
+                  calculateDistance(
+                    { latitude: currentLocation.latitude, longitude: currentLocation.longitude },
+                    { latitude, longitude }
+                  ) > 20;
+
+                if (significantChange) {
+                  setCurrentLocation({ latitude, longitude });
+                  setGpsAccuracy(accuracy);
+                  
+                  // Update location with presence
+                  await set(userLocationRef, { 
                     Latitude: latitude, 
                     Longitude: longitude,
-                    Accuracy: accuracy,
-                    Timestamp: new Date().toISOString(),
-                    userId: auth.currentUser.uid,
-                    firstName: profileData.firstName || '',
-                    lastName: profileData.lastName || '',
-                    photoURL: profileData.photoURL || '',
-                    role: profileData.role || '',
-                    teamCode: profileData.teamCode || ''
+                    timestamp: new Date().toISOString(),
+                    accuracy: accuracy,
+                    isActive: true,
+                    lastSeen: new Date().toISOString(),
+                    ...profileData
                   });
-                  console.log("Member location updated in Firebase");
-                } else {
-                  console.warn("Auth or currentUser not available, skipping location update");
+
+                  // Update presence
+                  await set(userPresenceRef, {
+                    status: 'online',
+                    lastSeen: new Date().toISOString(),
+                    deviceInfo: Platform.OS
+                  });
                 }
-              } else {
-                console.log("Location accuracy too low:", accuracy);
               }
             } catch (error) {
-              console.error("Error in member location callback:", error);
+              console.error("Error updating location:", error);
             }
           }
         );
-        
-        // Store the subscription for cleanup
-        console.log("Location tracking subscription created for member");
-        return () => {
-          if (locationSubscription) {
-            locationSubscription.remove();
-            console.log("Location tracking subscription removed");
-          }
-        };
       } catch (error) {
-        console.error("Error setting up location tracking for member:", error);
+        console.error("Error setting up location tracking:", error);
       }
     }
   } catch (error) {
-    console.error("Error fetching location:", error);
-    let errorMessage = "Could not get your location. ";
-    
-    if (error.code === 'kCLErrorLocationUnknown') {
-      errorMessage += "Please check your GPS signal and try again.";
-    } else if (error.code === 'kCLErrorDenied') {
-      errorMessage += "Location access was denied.";
-    } else if (error.code === 'kCLErrorNetwork') {
-      errorMessage += "Network error occurred.";
-    } else {
-      errorMessage += "Please try again.";
-    }
-    
-    alert(errorMessage);
-    setLocationButtonText("My Location");
-  } finally {
-    setIsFetchingLocation(false);
+    console.error("Error toggling location:", error);
+    Alert.alert('Error', 'Failed to update location');
   }
 };
 
@@ -928,8 +877,9 @@ return (
           coordinate={currentLocation}
         />
       )}
-      {usersLocations
+      {Object.entries(usersLocations || {})
         .filter(([userId, userData]) => {
+          if (!userData || !userData.Latitude || !userData.Longitude) return false;
           if (userId === auth.currentUser?.uid) return false;
           
           if (userData.role === 'admin' || userData.isAdmin) {
