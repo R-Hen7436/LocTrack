@@ -170,11 +170,6 @@ export default function Login({ navigation }) {
         <TouchableOpacity onPress={() => navigation.navigate('ForgotPassword')}>  
           <Text style={styles.link2}>Forgot Password?</Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={handleResendVerification} disabled={isResending}>
-          <Text style={[styles.link2, isResending && styles.linkDisabled]}>
-            {isResending ? 'Sending...' : 'Resend Verification Email'}
-          </Text>
-        </TouchableOpacity>
       </View>
 
       <TouchableOpacity 

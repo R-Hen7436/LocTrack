@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { getUserAuditLogs } from '../../utils/auditUtils';
 import { getAuth } from 'firebase/auth';
@@ -90,6 +90,7 @@ const getActionIcon = (action) => {
 export default function ActivityLog() {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   
   useEffect(() => {
     loadLogs();
@@ -138,9 +139,29 @@ export default function ActivityLog() {
     );
   };
   
+  // Display only 3 logs if not expanded
+  const displayLogs = expanded ? logs : logs.slice(0, 3);
+  
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Recent Activity</Text>
+      <View style={styles.headerRow}>
+        <Text style={styles.title}>Recent Activity</Text>
+        {logs.length > 3 && (
+          <TouchableOpacity 
+            onPress={() => setExpanded(!expanded)}
+            style={styles.expandButton}
+          >
+            <Text style={styles.expandButtonText}>
+              {expanded ? 'Show Less' : 'Show More'}
+            </Text>
+            <Ionicons 
+              name={expanded ? 'chevron-up' : 'chevron-down'} 
+              size={16} 
+              color="#007AFF" 
+            />
+          </TouchableOpacity>
+        )}
+      </View>
       
       {loading ? (
         <View style={styles.loadingContainer}>
@@ -148,11 +169,19 @@ export default function ActivityLog() {
         </View>
       ) : logs.length > 0 ? (
         <View style={styles.logsList}>
-          {logs.map(item => renderLogItem(item))}
+          {displayLogs.map(item => renderLogItem(item))}
         </View>
       ) : (
         <View style={styles.emptyContainer}>
           <Text style={styles.emptyText}>No recent activity</Text>
+        </View>
+      )}
+      
+      {logs.length > 0 && (
+        <View style={styles.footer}>
+          <Text style={styles.footerText}>
+            {logs.length} {logs.length === 1 ? 'activity' : 'activities'} recorded
+          </Text>
         </View>
       )}
     </View>
@@ -212,6 +241,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   emptyText: {
+    color: '#8E8E93',
+    fontStyle: 'italic',
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  expandButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  expandButtonText: {
+    fontSize: 14,
+    color: '#007AFF',
+    marginRight: 5,
+  },
+  footer: {
+    padding: 10,
+    alignItems: 'center',
+  },
+  footerText: {
     color: '#8E8E93',
     fontStyle: 'italic',
   },

@@ -419,192 +419,248 @@ export default function Profile({ navigation }) {
     );
   };
 
-  const InviteModal = () => (
-    <Modal
-      visible={isInviteModalVisible}
-      transparent
-      animationType="slide"
-      onRequestClose={() => setIsInviteModalVisible(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <Text style={styles.modalTitle}>Invite Team Member</Text>
-          <TextInput
-            style={styles.emailInput}
-            placeholder="Enter email address"
-            value={inviteEmail}
-            onChangeText={setInviteEmail}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-          <View style={styles.modalButtons}>
-            <TouchableOpacity
-              style={[styles.modalButton, styles.cancelButton]}
-              onPress={() => {
-                setIsInviteModalVisible(false);
-                setInviteEmail('');
-              }}
-            >
-              <Text style={styles.cancelButtonText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.modalButton, styles.inviteButton]}
-              onPress={handleInvite}
-              disabled={isInviting}
-            >
-              {isInviting ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
-              ) : (
-                <Text style={styles.inviteButtonText}>Send Invite</Text>
-              )}
-            </TouchableOpacity>
+  const InviteModal = () => {
+    return (
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={isInviteModalVisible}
+        onRequestClose={() => setIsInviteModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Invite Team Member</Text>
+            
+            <TextInput
+              style={styles.emailInput}
+              placeholder="Enter email address"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              value={inviteEmail}
+              onChangeText={setInviteEmail}
+              placeholderTextColor="#999"
+            />
+            
+            <View style={styles.modalButtons}>
+              <TouchableOpacity 
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => {
+                  setInviteEmail('');
+                  setIsInviteModalVisible(false);
+                }}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={[styles.modalButton, styles.inviteModalButton]}
+                onPress={handleInvite}
+                disabled={isInviting}
+              >
+                {isInviting ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.inviteModalButtonText}>Invite</Text>
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
-      </View>
-    </Modal>
-  );
+      </Modal>
+    );
+  };
 
   return (
     <View style={styles.container}>
-      <View style={styles.content}>
-        <SafeAreaView style={styles.safeArea}>
-          {loading ? (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color="#007AFF" />
-              <Text style={styles.loadingText}>Loading profile...</Text>
-            </View>
-          ) : (
-            <ScrollView contentContainerStyle={styles.scrollContainer}>
-              {userProfile ? (
-                <>
-                  <View style={styles.profileCard}>
-                    <View style={styles.profileHeader}>
-                      <TouchableOpacity onPress={pickImage} style={styles.profileImageContainer}>
-                        {userProfile.photoURL ? (
-                          <Image source={{ uri: userProfile.photoURL }} style={styles.profileImage} />
-                        ) : (
-                          <View style={styles.profileImageFallback}>
-                            <Text style={styles.profileImageFallbackText}>
-                              {getInitials(userProfile.firstName, userProfile.lastName)}
-                            </Text>
-                          </View>
-                        )}
-                      </TouchableOpacity>
-                      <View style={styles.profileInfo}>
-                        <Text style={styles.userName}>
-                          {formatName(userProfile.firstName, userProfile.middleName, userProfile.lastName)}
-                        </Text>
-                        <Text style={styles.userRole}>{userProfile.role ? userProfile.role.charAt(0).toUpperCase() + userProfile.role.slice(1) : 'User'}</Text>
-                      </View>
+      <SafeAreaView style={styles.safeArea}>
+        {loading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#007AFF" />
+            <Text style={styles.loadingText}>Loading profile...</Text>
+          </View>
+        ) : (
+          <ScrollView contentContainerStyle={styles.scrollContainer}>
+            {/* Profile Card */}
+            <View style={styles.card}>
+              <View style={styles.profileHeader}>
+                <TouchableOpacity onPress={pickImage} style={styles.profileImageContainer}>
+                  {userProfile?.photoURL ? (
+                    <Image source={{ uri: userProfile.photoURL }} style={styles.profileImage} />
+                  ) : (
+                    <View style={styles.profileImageFallback}>
+                      <Text style={styles.profileImageFallbackText}>
+                        {getInitials(userProfile?.firstName, userProfile?.lastName)}
+                      </Text>
                     </View>
+                  )}
+                </TouchableOpacity>
+                <View style={styles.profileInfo}>
+                  <Text style={styles.userName}>
+                    {formatName(userProfile?.firstName, userProfile?.middleName, userProfile?.lastName)}
+                  </Text>
+                  <Text style={styles.userRole}>
+                    {userProfile?.role ? userProfile.role.charAt(0).toUpperCase() + userProfile.role.slice(1) : 'User'}
+                  </Text>
+                  <TouchableOpacity 
+                    style={styles.editButton} 
+                    onPress={() => navigation.navigate('EditProfile', { userProfile })}
+                  >
+                    <Text style={styles.editButtonText}>Edit Profile</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+
+            {/* Personal Information */}
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Personal Information</Text>
+              <View style={styles.infoItem}>
+                <Text style={styles.infoLabel}>Email</Text>
+                <Text style={styles.infoValue}>{userProfile?.email || 'Not provided'}</Text>
+              </View>
+              <View style={styles.infoItem}>
+                <Text style={styles.infoLabel}>Role</Text>
+                <Text style={styles.infoValue}>
+                  {userProfile?.role 
+                    ? userProfile.role.charAt(0).toUpperCase() + userProfile.role.slice(1) 
+                    : 'Not specified'}
+                </Text>
+              </View>
+            </View>
+
+            {/* Activity Log */}
+            <ActivityLog />
+
+            {/* Team Section - Only for owners */}
+            {userProfile?.role === 'owner' && (
+              <>
+                <View style={styles.card}>
+                  <View style={styles.cardHeader}>
+                    <Text style={styles.cardTitle}>Team Information</Text>
                     <TouchableOpacity 
-                      style={styles.editButton} 
-                      onPress={() => navigation.navigate('EditProfile', { userProfile })}
+                      style={styles.cardHeaderButton}
+                      onPress={() => navigation.navigate('TeamSettings', { teamCode: userProfile.teamCode })}
                     >
-                      <Text style={styles.editButtonText}>Edit Profile</Text>
+                      <Text style={styles.cardHeaderButtonText}>Settings</Text>
+                      <Ionicons name="settings-outline" size={16} color="#007AFF" />
                     </TouchableOpacity>
                   </View>
-
-                  <View style={styles.infoSection}>
-                    <Text style={styles.sectionTitle}>Personal Information</Text>
-                    <View style={styles.infoCard}>
-                      <InfoRow label="Email" value={userProfile.email || 'Not provided'} />
-                      <InfoRow 
-                        label="Role" 
-                        value={
-                          userProfile.role 
-                            ? userProfile.role.charAt(0).toUpperCase() + userProfile.role.slice(1) 
-                            : 'Not specified'
-                        } 
-                      />
+                  
+                  <View style={styles.teamCodeContainer}>
+                    <View>
+                      <Text style={styles.infoLabel}>Team Code</Text>
+                      <Text style={styles.teamCodeDescription}>Share this code to invite team members</Text>
+                    </View>
+                    <View style={styles.codeBox}>
+                      <Text style={styles.teamCode}>{userProfile.teamCode || 'No team code found'}</Text>
+                      <TouchableOpacity 
+                        onPress={() => {
+                          if (userProfile.teamCode) {
+                            Clipboard.setString(userProfile.teamCode);
+                            Alert.alert('Copied', 'Team code copied to clipboard');
+                          }
+                        }}
+                        disabled={!userProfile.teamCode}
+                        style={styles.copyButton}
+                      >
+                        <Ionicons name="copy-outline" size={20} color="#007AFF" />
+                      </TouchableOpacity>
                     </View>
                   </View>
+                  
+                  <View style={styles.divider} />
+                  
+                  <TouchableOpacity
+                    style={styles.inviteButton}
+                    onPress={() => setIsInviteModalVisible(true)}
+                  >
+                    <Ionicons name="person-add" size={20} color="#FFFFFF" />
+                    <Text style={styles.inviteButtonText}>Invite Team Member</Text>
+                  </TouchableOpacity>
+                </View>
 
-                  <ActivityLog />
-
-                  {userProfile.role === 'owner' && (
-                    <>
-                      <View style={styles.infoSection}>
-                        <Text style={styles.sectionTitle}>Team Information</Text>
-                        <View style={styles.infoCard}>
-                          <Text style={styles.label}>Team Code</Text>
-                          <View style={styles.codeBox}>
-                            <Text style={styles.teamCode}>{userProfile.teamCode || 'No team code found'}</Text>
-                            <TouchableOpacity 
-                              onPress={() => {
-                                if (userProfile.teamCode) {
-                                  Clipboard.setString(userProfile.teamCode);
-                                  Alert.alert('Copied', 'Team code copied to clipboard');
-                                }
-                              }}
-                              disabled={!userProfile.teamCode}
+                <View style={styles.card}>
+                  <View style={styles.cardHeader}>
+                    <Text style={styles.cardTitle}>Team Members ({teamMembers.length})</Text>
+                    <TouchableOpacity 
+                      style={styles.cardHeaderButton}
+                      onPress={() => navigation.navigate('Members', { teamCode: userProfile.teamCode })}
+                    >
+                      <Text style={styles.cardHeaderButtonText}>View All</Text>
+                      <Ionicons name="chevron-forward" size={16} color="#007AFF" />
+                    </TouchableOpacity>
+                  </View>
+                  
+                  {teamMembers.length > 0 ? (
+                    <View>
+                      {teamMembers.slice(0, 3).map(item => (
+                        <View key={item.id} style={styles.memberItem}>
+                          <View style={styles.memberInfo}>
+                            {item.photoURL ? (
+                              <Image source={{ uri: item.photoURL }} style={styles.memberAvatar} />
+                            ) : (
+                              <View style={styles.memberAvatarFallback}>
+                                <Text style={styles.memberAvatarText}>
+                                  {item.name ? item.name[0].toUpperCase() : '?'}
+                                </Text>
+                              </View>
+                            )}
+                            <View style={styles.memberTextInfo}>
+                              <Text style={styles.memberName}>{item.name || 'Unknown User'}</Text>
+                              <Text style={styles.memberEmail}>{item.email || 'No email'}</Text>
+                            </View>
+                            <View style={styles.memberStatusBadge}>
+                              <View style={[styles.statusIndicator, { backgroundColor: item.isActive ? '#4CD964' : '#FF9500' }]} />
+                              <Text style={styles.memberStatus}>{item.isActive ? 'Active' : 'Inactive'}</Text>
+                            </View>
+                          </View>
+                          
+                          <View style={styles.memberActions}>
+                            <TouchableOpacity
+                              style={styles.memberAction}
+                              onPress={() => handleTransferOwnership(item)}
                             >
-                              <Ionicons name="copy-outline" size={20} color="#007AFF" />
+                              <Ionicons name="star" size={18} color="#FFD700" />
+                            </TouchableOpacity>
+                            
+                            <TouchableOpacity
+                              style={styles.memberAction}
+                              onPress={() => handleRemoveMember(item)}
+                            >
+                              <Ionicons name="close-circle" size={18} color="#FF3B30" />
                             </TouchableOpacity>
                           </View>
-                          <TouchableOpacity
-                            style={styles.inviteTeamButton}
-                            onPress={() => setIsInviteModalVisible(true)}
-                          >
-                            <Ionicons name="person-add" size={20} color="#FFFFFF" />
-                            <Text style={styles.inviteTeamButtonText}>Invite Member</Text>
-                          </TouchableOpacity>
                         </View>
-                      </View>
-
-                      <View style={styles.infoSection}>
-                        <Text style={styles.sectionTitle}>Team Members ({teamMembers.length})</Text>
-                        {teamMembers.length > 0 ? (
-                          <View>
-                            {teamMembers.map(item => (
-                              <View key={item.id} style={styles.memberCard}>
-                                <View style={styles.memberInfo}>
-                                  <Ionicons name="person" size={24} color="#007AFF" />
-                                  <View style={styles.memberTextInfo}>
-                                    <Text style={styles.memberName}>{item.name || 'Unknown User'}</Text>
-                                    <Text style={styles.memberEmail}>{item.email || 'No email'}</Text>
-                                    <Text style={styles.memberJoined}>
-                                      Joined: {item.joinedAt ? new Date(item.joinedAt).toLocaleDateString() : 'Unknown'}
-                                    </Text>
-                                  </View>
-                                </View>
-                                
-                                <View style={styles.memberActions}>
-                                  <TouchableOpacity
-                                    style={styles.memberAction}
-                                    onPress={() => handleTransferOwnership(item)}
-                                  >
-                                    <Ionicons name="star" size={18} color="#FFD700" />
-                                  </TouchableOpacity>
-                                  
-                                  <TouchableOpacity
-                                    style={styles.memberAction}
-                                    onPress={() => handleRemoveMember(item)}
-                                  >
-                                    <Ionicons name="close-circle" size={18} color="#FF3B30" />
-                                  </TouchableOpacity>
-                                </View>
-                              </View>
-                            ))}
-                          </View>
-                        ) : (
-                          <Text style={styles.noMembers}>No team members yet</Text>
-                        )}
-                      </View>
-                    </>
+                      ))}
+                      
+                      {teamMembers.length > 3 && (
+                        <TouchableOpacity 
+                          style={styles.viewMoreButton}
+                          onPress={() => navigation.navigate('Members', { teamCode: userProfile.teamCode })}
+                        >
+                          <Text style={styles.viewMoreText}>View all {teamMembers.length} members</Text>
+                          <Ionicons name="chevron-forward" size={16} color="#007AFF" />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  ) : (
+                    <View style={styles.emptyTeamContainer}>
+                      <Text style={styles.emptyTeamText}>No team members yet</Text>
+                      <TouchableOpacity
+                        style={styles.inviteButton}
+                        onPress={() => setIsInviteModalVisible(true)}
+                      >
+                        <Ionicons name="person-add" size={20} color="#FFFFFF" />
+                        <Text style={styles.inviteButtonText}>Invite Team Member</Text>
+                      </TouchableOpacity>
+                    </View>
                   )}
-                </>
-              ) : (
-                <View style={styles.profileCard}>
-                  <ActivityIndicator size="large" color="#007AFF" />
-                  <Text style={styles.loadingText}>Unable to load profile</Text>
                 </View>
-              )}
-            </ScrollView>
-          )}
-        </SafeAreaView>
-      </View>
+              </>
+            )}
+          </ScrollView>
+        )}
+      </SafeAreaView>
       <InviteModal />
       <Navbar activePage="profile" />
     </View>
@@ -621,17 +677,14 @@ const InfoRow = ({ label, value }) => (
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
-  },
-  content: {
-    flex: 1,
+    backgroundColor: '#F0F2F5',
   },
   safeArea: {
     flex: 1,
   },
   scrollContainer: {
     flexGrow: 1,
-    padding: 20,
+    padding: 16,
     paddingBottom: 120, // Extra padding for the navbar
   },
   loadingContainer: {
@@ -646,24 +699,23 @@ const styles = StyleSheet.create({
     color: '#666',
     textAlign: 'center',
   },
-  profileCard: {
+  card: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 15,
-    padding: 20,
-    marginBottom: 20,
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
     shadowColor: "#000",
     shadowOffset: {
       width: 0,
       height: 2,
     },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.05,
     shadowRadius: 4,
-    elevation: 3,
+    elevation: 2,
   },
   profileHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 20,
   },
   profileImageContainer: {
     width: 80,
@@ -694,44 +746,35 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   userName: {
-    fontSize: 22,
-    fontWeight: '600',
-    color: '#000',
-    marginBottom: 5,
-  },
-  userRole: {
-    fontSize: 16,
-    color: '#666',
-  },
-  editButton: {
-    backgroundColor: '#007AFF',
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 10,
-    alignSelf: 'center',
-  },
-  editButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '500',
-  },
-  infoSection: {
-    marginBottom: 25,
-  },
-  sectionTitle: {
     fontSize: 18,
     fontWeight: '600',
     color: '#000',
-    marginBottom: 15,
+    marginBottom: 4,
   },
-  infoCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 15,
-    borderWidth: 1,
-    borderColor: '#E5E5E5',
+  userRole: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 10,
   },
-  infoRow: {
+  editButton: {
+    backgroundColor: '#007AFF',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    alignSelf: 'flex-start',
+  },
+  editButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  cardTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#000',
+    marginBottom: 12,
+  },
+  infoItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -739,16 +782,40 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#E5E5E5',
   },
-  label: {
+  infoLabel: {
     fontSize: 16,
     color: '#666',
   },
-  value: {
+  infoValue: {
     fontSize: 16,
     color: '#000',
     fontWeight: '500',
     maxWidth: '60%',
     textAlign: 'right',
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  cardHeaderButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  cardHeaderButtonText: {
+    fontSize: 14,
+    color: '#007AFF',
+    fontWeight: '500',
+  },
+  teamCodeContainer: {
+    marginBottom: 16,
+  },
+  teamCodeDescription: {
+    fontSize: 14,
+    color: '#888888',
+    marginTop: 4,
   },
   codeBox: {
     flexDirection: 'row',
@@ -765,39 +832,91 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     letterSpacing: 1,
   },
-  memberCard: {
-    backgroundColor: '#FFFFFF',
+  copyButton: {
+    padding: 8,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#E5E5E5',
+    marginVertical: 16,
+  },
+  inviteButton: {
+    backgroundColor: '#007AFF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
     borderRadius: 10,
-    padding: 15,
-    marginBottom: 10,
+    gap: 8,
+  },
+  inviteButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  memberItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#E5E5E5',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E5E5',
   },
   memberInfo: {
     flexDirection: 'row',
     alignItems: 'center',
     flex: 1,
   },
+  memberAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    marginRight: 10,
+  },
+  memberAvatarFallback: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F0F0F0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  memberAvatarText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#007AFF',
+  },
   memberTextInfo: {
-    marginLeft: 10,
     flex: 1,
   },
   memberName: {
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '500',
+    marginBottom: 2,
   },
   memberEmail: {
     fontSize: 14,
     color: '#666666',
-    marginTop: 2,
   },
-  memberJoined: {
+  memberStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+    borderRadius: 10,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    marginLeft: 10,
+  },
+  statusIndicator: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 5,
+  },
+  memberStatus: {
     fontSize: 12,
-    color: '#888888',
-    marginTop: 4,
+    color: '#666666',
   },
   memberActions: {
     flexDirection: 'row',
@@ -806,26 +925,29 @@ const styles = StyleSheet.create({
     padding: 8,
     marginLeft: 8,
   },
-  inviteTeamButton: {
-    backgroundColor: '#007AFF',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
+  viewMoreButton: {
+    backgroundColor: '#F5F5F5',
     padding: 12,
     borderRadius: 10,
-    marginTop: 15,
+    marginTop: 10,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
     gap: 8,
   },
-  inviteTeamButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
+  viewMoreText: {
+    fontSize: 14,
+    color: '#007AFF',
     fontWeight: '500',
   },
-  noMembers: {
-    textAlign: 'center',
-    color: '#666',
-    fontStyle: 'italic',
+  emptyTeamContainer: {
     padding: 20,
+    alignItems: 'center',
+  },
+  emptyTeamText: {
+    color: '#666',
+    marginBottom: 20,
+    fontStyle: 'italic',
   },
   // Modal styles
   modalOverlay: {
@@ -871,7 +993,7 @@ const styles = StyleSheet.create({
   cancelButton: {
     backgroundColor: '#F2F2F2',
   },
-  inviteButton: {
+  inviteModalButton: {
     backgroundColor: '#007AFF',
   },
   cancelButtonText: {
@@ -879,7 +1001,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  inviteButtonText: {
+  inviteModalButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',

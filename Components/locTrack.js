@@ -46,13 +46,17 @@ const GPSStrengthIndicator = ({ accuracy }) => {
   );
 };
 
-// Update the CustomMarker component to be more modern and handle missing data better
+// Update the CustomMarker component to remove the second dot
 const CustomMarker = ({ coordinate, photoURL, name }) => {
   // Get first character of name if it exists, otherwise use empty string
   const nameInitial = name && typeof name === 'string' && name.trim() !== '' ? name.trim()[0].toUpperCase() : '';
   
   return (
-    <Marker coordinate={coordinate}>
+    <Marker 
+      coordinate={coordinate}
+      tracksViewChanges={false}
+      anchor={{ x: 0.5, y: 0.5 }}
+    >
       <View style={styles.markerContainer}>
         {photoURL ? (
           <Image
@@ -78,28 +82,50 @@ const CustomMarker = ({ coordinate, photoURL, name }) => {
   );
 };
 
-// Add this helper function at the top level of the file
+// Improved function to format user names
 const formatUserName = (userData) => {
   if (!userData) return '';
   
-  const parts = [];
-  if (userData.firstName && userData.firstName.trim()) {
-    parts.push(userData.firstName.trim());
-  }
-  if (userData.lastName && userData.lastName.trim()) {
-    parts.push(userData.lastName.trim());
+  // Create a clean name from firstName and lastName
+  const firstName = userData.firstName && userData.firstName.trim() ? userData.firstName.trim() : '';
+  const lastName = userData.lastName && userData.lastName.trim() ? userData.lastName.trim() : '';
+  
+  // Build the full name
+  if (firstName && lastName) {
+    return `${firstName} ${lastName}`;
+  } else if (firstName) {
+    return firstName;
+  } else if (lastName) {
+    return lastName;
   }
   
-  if (parts.length > 0) {
-    return parts.join(' ');
-  }
-  
-  // Use email if available as fallback
+  // Fallback to email if available
   if (userData.email) {
-    return userData.email.split('@')[0]; // Use part before @ as display name
+    const emailParts = userData.email.split('@');
+    return emailParts[0].charAt(0).toUpperCase() + emailParts[0].slice(1);
   }
   
   return ''; // Return empty string if no usable name data
+};
+
+// Create a special marker for the current user
+const CurrentUserMarker = ({ coordinate }) => {
+  return (
+    <Marker 
+      coordinate={coordinate}
+      tracksViewChanges={false}
+      anchor={{ x: 0.5, y: 0.5 }}
+    >
+      <View style={styles.currentUserMarkerContainer}>
+        <View style={styles.currentUserMarker}>
+          <Ionicons name="navigate" size={20} color="#FFFFFF" />
+        </View>
+        <View style={styles.currentUserLabelContainer}>
+          <Text style={styles.currentUserLabel}>You</Text>
+        </View>
+      </View>
+    </Marker>
+  );
 };
 
 export default function App() {
@@ -870,8 +896,9 @@ return (
       showsMyLocationButton={false}
       showsCompass={true}
       rotateEnabled={true}
-      minZoomLevel={10}  // Set minimum zoom level
-      maxZoomLevel={20}  // Set maximum zoom level
+      minZoomLevel={10}
+      maxZoomLevel={20}
+      followsUserLocation={false}
     >
       {userRole === 'member' ? (
         <>
@@ -900,21 +927,25 @@ return (
         </>
       )}
       {currentLocation && (
-        <CustomMarker
+        <CurrentUserMarker
           coordinate={currentLocation}
         />
       )}
-      {Object.entries(usersLocations).map(([userId, userData]) => (
-        <CustomMarker
-          key={userId}
-          coordinate={{
-            latitude: userData.Latitude,
-            longitude: userData.Longitude
-          }}
-          photoURL={userData.photoURL}
-          name={userData.name || ''}
-        />
-      ))}
+      {/* Don't render current user's marker from usersLocations if we're already showing CurrentUserMarker */}
+      {Object.entries(usersLocations)
+        .filter(([userId]) => userId !== auth.currentUser?.uid) // Filter out current user
+        .map(([userId, userData]) => (
+          <CustomMarker
+            key={userId}
+            coordinate={{
+              latitude: userData.Latitude,
+              longitude: userData.Longitude
+            }}
+            photoURL={userData.photoURL}
+            name={formatUserName(userData)}
+          />
+        ))
+      }
     </MapView>
 
     {userRole !== 'member' && (
@@ -1137,57 +1168,45 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   markerContainer: {
-    backgroundColor: '#2196F3',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  markerImage: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
     borderWidth: 2,
-    borderColor: '#FFFFFF',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
-  },
-  markerImage: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
+    borderColor: 'white',
   },
   markerFallback: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#2196F3',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#007AFF',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 2,
-    borderColor: '#FFFFFF',
-  },
-  markerLabelContainer: {
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 10,
-    marginTop: 5,
-  },
-  markerLabel: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: 'bold',
-    textAlign: 'center',
+    borderColor: 'white',
   },
   markerInitial: {
     color: '#FFFFFF',
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: 'bold',
+  },
+  markerLabelContainer: {
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginTop: 4,
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
+    maxWidth: 150,
+  },
+  markerLabel: {
+    color: '#333333',
+    fontSize: 14,
+    fontWeight: '500',
   },
   memberMessage: {
     padding: 15,
@@ -1204,5 +1223,33 @@ const styles = StyleSheet.create({
   memberCenterButton: {
     marginTop: 10,
     width: '100%',
+  },
+  currentUserMarkerContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  currentUserMarker: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#007AFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: 'white',
+  },
+  currentUserLabelContainer: {
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginTop: 4,
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
+  },
+  currentUserLabel: {
+    color: '#333333',
+    fontSize: 14,
+    fontWeight: '500',
   },
 });
