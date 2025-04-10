@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
-import { getAuth, createUserWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
+import { getAuth, createUserWithEmailAndPassword, sendEmailVerification, updateProfile } from 'firebase/auth';
 import { getDatabase, ref, set, get } from 'firebase/database';
 import { Ionicons } from '@expo/vector-icons';
 import { CommonActions } from '@react-navigation/native';
 import { getAdminConfig } from '../Admin/adminConfig';
-import { generateProductKey, validateProductKey, generateTeamCode } from '../firebaseConfig';
+import { generateProductKey, validateProductKey, generateTeamCode, formatUserDisplayName } from '../firebaseConfig';
 
 export default function Register({ navigation }) {
   const [firstName, setFirstName] = useState('');
@@ -159,10 +159,65 @@ export default function Register({ navigation }) {
           })
         );
       }, 3000);
+
+      // Update the display name in Firebase Auth
+      await updateProfile(userCredential.user, {
+        displayName: formatUserDisplayName(firstName, lastName)
+      });
     } catch (error) {
       console.error('Registration Error:', error);
       setError(error.message);
       setMessage('');
+    }
+  };
+
+  const createUserProfile = async (user, newTeamCode, isOwner) => {
+    try {
+      const database = getDatabase();
+      const userProfileRef = ref(database, `users/${user.uid}/profile`);
+      
+      // Basic profile data
+      const profileData = {
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        email: email.trim().toLowerCase(),
+        role: isOwner ? 'owner' : 'member',
+        teamCode: isOwner ? newTeamCode : teamCode,
+        photoURL: '',
+        createdAt: new Date().toISOString(),
+      };
+      
+      // Save user profile
+      await set(userProfileRef, profileData);
+      
+      // If owner, create team record
+      if (isOwner) {
+        const teamRef = ref(database, `teams/${newTeamCode}`);
+        await set(teamRef, {
+          name: `${firstName.trim()}'s Team`,
+          createdBy: user.uid,
+          createdAt: new Date().toISOString(),
+          members: {
+            [user.uid]: {
+              role: 'owner',
+              joinedAt: new Date().toISOString(),
+            }
+          }
+        });
+      } 
+      // If member, add to existing team
+      else if (teamCode) {
+        const teamMemberRef = ref(database, `teams/${teamCode}/members/${user.uid}`);
+        await set(teamMemberRef, {
+          role: 'member',
+          joinedAt: new Date().toISOString(),
+        });
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('Error creating user profile:', error);
+      throw error;
     }
   };
 

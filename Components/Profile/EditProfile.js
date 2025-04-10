@@ -15,6 +15,14 @@ export default function EditProfile({ navigation, route }) {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
+  // Add a helper function to format the name properly
+  const formatFullName = (firstName, lastName) => {
+    const parts = [];
+    if (firstName && firstName.trim()) parts.push(firstName.trim());
+    if (lastName && lastName.trim()) parts.push(lastName.trim());
+    return parts.join(' ');
+  };
+
   const handleSave = async () => {
     try {
       // Validate required fields
@@ -39,7 +47,7 @@ export default function EditProfile({ navigation, route }) {
       if (editedProfile.firstName !== userProfile.firstName || 
           editedProfile.lastName !== userProfile.lastName) {
         await updateProfile(auth.currentUser, {
-          displayName: `${editedProfile.firstName} ${editedProfile.lastName}`
+          displayName: formatFullName(editedProfile.firstName, editedProfile.lastName)
         });
       }
 

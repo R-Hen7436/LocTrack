@@ -1,30 +1,28 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { getDatabase, ref, get, set, remove } from 'firebase/database';
+import { getAuth } from 'firebase/auth';
+import { logAudit, AUDIT_ACTIONS } from '../../utils/auditLogger';
 
-export const checkForInvitation = async (email) => {
+export const checkPendingInvitations = async (email) => {
   try {
     const db = getDatabase();
     const invitationsRef = ref(db, 'invitations');
     const snapshot = await get(invitationsRef);
-
+    
     if (snapshot.exists()) {
       const invitations = snapshot.val();
-      const invitation = Object.entries(invitations).find(([_, inv]) => 
-        inv.inviteeEmail.toLowerCase() === email.toLowerCase() && 
-        inv.status === 'pending'
-      );
-
-      if (invitation) {
+      // Check if there's an invitation for this email
+      if (invitations[encodeURIComponent(email)]) {
         return {
-          id: invitation[0],
-          ...invitation[1]
+          ...invitations[encodeURIComponent(email)],
+          id: encodeURIComponent(email)
         };
       }
     }
     return null;
   } catch (error) {
-    console.error('Error checking for invitation:', error);
+    console.error('Error checking invitations:', error);
     return null;
   }
 };
@@ -48,13 +46,25 @@ export const acceptInvitation = async (invitation, userId) => {
       await set(userProfileRef, {
         ...userData,
         teamCode: invitation.teamCode,
-        role: 'member'
+        role: 'member',
+        isOwner: false
       });
     }
 
     // Remove the invitation
     const invitationRef = ref(db, `invitations/${invitation.id}`);
     await remove(invitationRef);
+    
+    // Log the audit event
+    await logAudit(
+      AUDIT_ACTIONS.MEMBER_JOINED,
+      {
+        teamCode: invitation.teamCode,
+        ownerEmail: invitation.ownerEmail
+      },
+      userId,
+      invitation.ownerId
+    );
 
     return true;
   } catch (error) {
@@ -63,7 +73,43 @@ export const acceptInvitation = async (invitation, userId) => {
   }
 };
 
+export const declineInvitation = async (invitation) => {
+  try {
+    const db = getDatabase();
+    const invitationRef = ref(db, `invitations/${invitation.id}`);
+    await remove(invitationRef);
+    return true;
+  } catch (error) {
+    console.error('Error declining invitation:', error);
+    return false;
+  }
+};
+
 export default function InvitationHandler({ invitation, onAccept, onDecline }) {
+  const handleAccept = async () => {
+    const auth = getAuth();
+    if (!auth.currentUser) {
+      Alert.alert('Error', 'You must be logged in to accept an invitation');
+      return;
+    }
+
+    const result = await acceptInvitation(invitation, auth.currentUser.uid);
+    if (result) {
+      onAccept && onAccept();
+    } else {
+      Alert.alert('Error', 'Failed to accept invitation. Please try again.');
+    }
+  };
+
+  const handleDecline = async () => {
+    const result = await declineInvitation(invitation);
+    if (result) {
+      onDecline && onDecline();
+    } else {
+      Alert.alert('Error', 'Failed to decline invitation. Please try again.');
+    }
+  };
+
   return (
     <View style={styles.container}>
       <View style={styles.card}>
@@ -78,14 +124,14 @@ export default function InvitationHandler({ invitation, onAccept, onDecline }) {
         <View style={styles.buttonContainer}>
           <TouchableOpacity 
             style={[styles.button, styles.acceptButton]} 
-            onPress={onAccept}
+            onPress={handleAccept}
           >
             <Text style={styles.buttonText}>Accept</Text>
           </TouchableOpacity>
           
           <TouchableOpacity 
             style={[styles.button, styles.declineButton]} 
-            onPress={onDecline}
+            onPress={handleDecline}
           >
             <Text style={[styles.buttonText, styles.declineText]}>Decline</Text>
           </TouchableOpacity>
@@ -100,64 +146,61 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    padding: 20,
+    backgroundColor: 'rgba(0,0,0,0.5)',
   },
   card: {
-    backgroundColor: 'white',
-    borderRadius: 15,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
     padding: 20,
-    width: '90%',
+    width: '100%',
     maxWidth: 400,
     shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
     elevation: 5,
   },
   title: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: 'bold',
     marginBottom: 15,
     textAlign: 'center',
   },
   message: {
     fontSize: 16,
-    marginBottom: 10,
+    marginBottom: 15,
     textAlign: 'center',
   },
   details: {
     fontSize: 14,
     color: '#666',
-    marginBottom: 20,
+    marginBottom: 25,
     textAlign: 'center',
   },
   buttonContainer: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
-    marginTop: 10,
+    justifyContent: 'space-between',
   },
   button: {
-    paddingVertical: 10,
-    paddingHorizontal: 20,
+    flex: 1,
+    padding: 12,
     borderRadius: 8,
-    minWidth: 100,
+    alignItems: 'center',
+    marginHorizontal: 8,
   },
   acceptButton: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#007AFF',
   },
   declineButton: {
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: '#FF5252',
+    backgroundColor: '#F2F2F2',
   },
   buttonText: {
-    color: 'white',
     fontSize: 16,
-    textAlign: 'center',
+    fontWeight: 'bold',
+    color: '#FFFFFF',
   },
   declineText: {
-    color: '#FF5252',
+    color: '#FF3B30',
   },
 }); 

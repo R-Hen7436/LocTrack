@@ -7,8 +7,11 @@ import Register from './Components/Auth/Register';
 import LocTrack from './Components/locTrack';
 import ForgotPassword from './Components/Auth/ForgotPassword';
 import VerifyEmail from './Components/Auth/VerifyEmail';
+import InvitationScreen from './Components/Auth/InvitationScreen';
 import { View, ActivityIndicator, Text, TouchableOpacity } from 'react-native';
 import ProductKeyManager from './Components/Admin/ProductKeyManager';
+import AdminDashboard from './Components/Admin/AdminDashboard';
+import UserDetail from './Components/Admin/UserDetail';
 import { initializeAdmin } from './scripts/initAdmin';
 import { getDatabase, ref, get } from 'firebase/database';
 import Profile from './Components/Profile/Profile';
@@ -128,6 +131,23 @@ export default function App() {
                 }}
               />
               <Stack.Screen 
+                name="AdminDashboard" 
+                component={AdminDashboard}
+                options={{ 
+                  headerShown: true,
+                  title: 'Admin Dashboard',
+                  animation: 'slide_from_bottom'
+                }}
+              />
+              <Stack.Screen 
+                name="UserDetail" 
+                component={UserDetail}
+                options={{ 
+                  headerShown: true,
+                  animation: 'slide_from_right'
+                }}
+              />
+              <Stack.Screen 
                 name="Dashboard" 
                 component={Dashboard}
                 options={{ 
@@ -215,6 +235,16 @@ export default function App() {
               name="ForgotPassword" 
               component={ForgotPassword}
               options={{ headerShown: false }}
+            />
+            <Stack.Screen 
+              name="InvitationScreen" 
+              component={InvitationScreen}
+              options={{ 
+                headerShown: true,
+                title: 'Team Invitation',
+                headerBackVisible: false,
+                gestureEnabled: false,
+              }}
             />
           </>
         )}

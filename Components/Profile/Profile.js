@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, Alert, ScrollView, Image, Modal, TextInput, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView, Image, Modal, TextInput, ActivityIndicator, SafeAreaView } from 'react-native';
 import { getAuth, signOut, updateProfile } from 'firebase/auth';
-import { ref, get, set } from 'firebase/database';
+import { ref, get, set, remove } from 'firebase/database';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
@@ -9,6 +9,37 @@ import Navbar from '../Navbar';
 import { auth, db, storage } from '../firebaseConfig';
 import EditProfile from './EditProfile';
 import { useFocusEffect } from '@react-navigation/native';
+import { getDatabase } from 'firebase/database';
+import { Clipboard } from 'react-native';
+import { logAudit } from '../../utils/auditUtils';
+import { AUDIT_ACTIONS } from '../../constants/auditActions';
+import ActivityLog from './ActivityLog';
+
+// Add this helper function at the top level, before the component definition
+// Format name function to safely handle empty or null fields
+const formatName = (firstName, middleName, lastName) => {
+  const parts = [];
+  if (firstName && firstName.trim()) parts.push(firstName.trim());
+  if (middleName && middleName.trim()) parts.push(middleName.trim());
+  if (lastName && lastName.trim()) parts.push(lastName.trim());
+  
+  return parts.length > 0 ? parts.join(' ') : 'User';
+}
+
+// Add a helper function to safely get initials
+const getInitials = (firstName, lastName) => {
+  let initials = '';
+  if (firstName && firstName.trim()) {
+    initials += firstName.trim()[0].toUpperCase();
+  }
+  if (lastName && lastName.trim()) {
+    initials += lastName.trim()[0].toUpperCase();
+  }
+  return initials || '?';
+};
+
+// Add delay function to ensure auth is initialized
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 export default function Profile({ navigation }) {
   const [userProfile, setUserProfile] = useState(null);
@@ -18,9 +49,21 @@ export default function Profile({ navigation }) {
   const [inviteEmail, setInviteEmail] = useState('');
   const [isInviting, setIsInviting] = useState(false);
 
+  useEffect(() => {
+    console.log("Profile component mounted");
+    console.log("Auth state:", auth?.currentUser?.uid);
+  }, []);
+
   useFocusEffect(
     React.useCallback(() => {
-      loadUserProfile();
+      console.log("Focus effect triggered");
+      if (auth?.currentUser?.uid) {
+        console.log("Loading profile for user:", auth.currentUser.uid);
+        loadUserProfile();
+      } else {
+        console.error("No current user in auth");
+        setLoading(false);
+      }
     }, [])
   );
 
@@ -44,20 +87,76 @@ export default function Profile({ navigation }) {
     });
   }, [navigation]);
 
-  const loadUserProfile = async () => {
+  // Load profile with retry logic
+  const loadUserProfile = async (retryCount = 0) => {
     try {
+      setLoading(true);
+      
+      // Check if auth is initialized
+      if (!auth || !auth.currentUser) {
+        console.log("Auth not ready, waiting...");
+        if (retryCount < 3) {
+          // Wait 1 second and retry
+          await delay(1000);
+          return loadUserProfile(retryCount + 1);
+        } else {
+          console.error("Failed to get auth after retries");
+          setLoading(false);
+          return;
+        }
+      }
+      
+      console.log("Loading profile for user ID:", auth.currentUser.uid);
       const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
       const snapshot = await get(userProfileRef);
       
       if (snapshot.exists()) {
         const profileData = snapshot.val();
-        console.log('User Profile Data:', profileData);
-        setUserProfile(profileData);
+        console.log('User Profile Data loaded:', profileData);
         
-        if (profileData.role === 'owner' && profileData.teamCode) {
+        // Ensure all required fields exist with fallbacks
+        const cleanedProfile = {
+          firstName: profileData.firstName || '',
+          lastName: profileData.lastName || '',
+          middleName: profileData.middleName || '',
+          email: profileData.email || auth.currentUser.email || '',
+          photoURL: profileData.photoURL || auth.currentUser.photoURL || '',
+          role: profileData.role || 'member',
+          teamCode: profileData.teamCode || '',
+          ...profileData // keep any other fields
+        };
+        
+        setUserProfile(cleanedProfile);
+        
+        if (cleanedProfile.role === 'owner' && cleanedProfile.teamCode) {
           await loadTeamMembers();
         }
+      } else {
+        console.log("No profile data found, creating default profile");
+        
+        // Create default profile from auth data
+        const defaultProfile = {
+          firstName: auth.currentUser.displayName ? auth.currentUser.displayName.split(' ')[0] : '',
+          lastName: auth.currentUser.displayName ? auth.currentUser.displayName.split(' ').slice(1).join(' ') : '',
+          middleName: '',
+          email: auth.currentUser.email || '',
+          photoURL: auth.currentUser.photoURL || '',
+          role: 'member',
+          teamCode: '',
+          createdAt: new Date().toISOString()
+        };
+        
+        setUserProfile(defaultProfile);
+        
+        // Save the default profile
+        try {
+          await set(userProfileRef, defaultProfile);
+          console.log("Created default profile for user");
+        } catch (error) {
+          console.error("Error creating default profile:", error);
+        }
       }
+      
       setLoading(false);
     } catch (error) {
       console.error('Error loading profile:', error);
@@ -69,51 +168,40 @@ export default function Profile({ navigation }) {
     if (!auth.currentUser || userProfile?.role !== 'owner') return;
     
     try {
-      const teamRef = ref(db, `teams/${auth.currentUser.uid}/members`);
+      const teamCode = userProfile.teamCode;
+      if (!teamCode) return;
+      
+      const db = getDatabase();
+      const teamRef = ref(db, `teams/${teamCode}/members`);
       const snapshot = await get(teamRef);
       
+      const members = [];
+      
       if (snapshot.exists()) {
-        const members = [];
-        const memberPromises = [];
-        
         snapshot.forEach((child) => {
-          const memberPromise = get(ref(db, `users/${child.key}`))
-            .then((userSnapshot) => {
-              if (userSnapshot.exists()) {
-                const userData = userSnapshot.val();
-                return {
-                  id: child.key,
-                  email: userData.email,
-                  role: userData.role,
-                  name: userData.name || 'No Name'
-                };
-              }
-              return null;
-            })
-            .catch((error) => {
-              console.error(`Error fetching member ${child.key}:`, error);
-              return null;
-            });
-          
-          memberPromises.push(memberPromise);
+          members.push({
+            id: child.key,
+            ...child.val()
+          });
         });
-
-        const resolvedMembers = await Promise.all(memberPromises);
-        const validMembers = resolvedMembers.filter(member => member !== null);
-        
-        if (validMembers.length === 0) {
-          // If no valid members found, clear the team members from Firebase
-          await set(teamRef, null);
-          setTeamMembers([]);
-        } else {
-          setTeamMembers(validMembers);
-        }
-      } else {
-        setTeamMembers([]);
       }
+      
+      for (const member of members) {
+        const userRef = ref(db, `users/${member.id}/profile`);
+        const userSnapshot = await get(userRef);
+        
+        if (userSnapshot.exists()) {
+          const userData = userSnapshot.val();
+          member.name = formatName(userData.firstName, userData.middleName, userData.lastName);
+          member.email = userData.email || '';
+          member.isActive = userData.isActive !== false;
+        }
+      }
+      
+      setTeamMembers(members);
     } catch (error) {
-      console.error("Error loading team members:", error);
-      setTeamMembers([]);
+      console.error('Error loading team members:', error);
+      Alert.alert('Error', 'Failed to load team members');
     }
   };
 
@@ -193,15 +281,29 @@ export default function Profile({ navigation }) {
 
     setIsInviting(true);
     try {
-      // Create invitation in Firebase
-      const invitationRef = ref(db, `invitations/${auth.currentUser.uid}/${encodeURIComponent(inviteEmail.trim())}`);
+      const invitationRef = ref(db, `invitations/${encodeURIComponent(inviteEmail.trim())}`);
+      
+      const existingInvitation = await get(invitationRef);
+      if (existingInvitation.exists()) {
+        Alert.alert('Error', 'An invitation has already been sent to this email');
+        setIsInviting(false);
+        return;
+      }
+      
       await set(invitationRef, {
         teamCode: userProfile.teamCode,
-        ownerEmail: userProfile.email,
-        ownerName: `${userProfile.firstName} ${userProfile.lastName}`,
+        ownerId: auth.currentUser.uid,
+        ownerEmail: userProfile.email || '',
+        ownerName: formatName(userProfile.firstName, userProfile.middleName, userProfile.lastName),
         status: 'pending',
         createdAt: new Date().toISOString(),
       });
+
+      await logAudit(
+        AUDIT_ACTIONS.MEMBER_INVITED, 
+        { inviteeEmail: inviteEmail.trim() },
+        auth.currentUser.uid
+      );
 
       Alert.alert(
         'Success',
@@ -215,6 +317,106 @@ export default function Profile({ navigation }) {
     } finally {
       setIsInviting(false);
     }
+  };
+
+  const handleRemoveMember = (member) => {
+    Alert.alert(
+      'Remove Member',
+      `Are you sure you want to remove ${member.name || member.email} from your team?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Remove', 
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const db = getDatabase();
+              
+              await remove(ref(db, `teams/${userProfile.teamCode}/members/${member.id}`));
+              
+              const memberProfileRef = ref(db, `users/${member.id}/profile`);
+              const memberSnapshot = await get(memberProfileRef);
+              
+              if (memberSnapshot.exists()) {
+                const profileData = memberSnapshot.val();
+                await set(memberProfileRef, {
+                  ...profileData,
+                  teamCode: null,
+                  role: 'member'
+                });
+              }
+              
+              await logAudit(
+                AUDIT_ACTIONS.MEMBER_REMOVED, 
+                { memberEmail: member.email, memberName: member.name },
+                auth.currentUser.uid,
+                member.id
+              );
+              
+              await loadTeamMembers();
+              
+              Alert.alert('Success', 'Team member removed successfully');
+            } catch (error) {
+              console.error('Error removing team member:', error);
+              Alert.alert('Error', 'Failed to remove team member');
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleTransferOwnership = (member) => {
+    const memberName = member.name || member.email || 'this user';
+    Alert.alert(
+      'Transfer Ownership',
+      `Are you sure you want to transfer ownership to ${memberName}? You will become a team member.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Transfer', 
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const db = getDatabase();
+              
+              // Update the team member's profile
+              const memberProfileRef = ref(db, `users/${member.id}/profile`);
+              const memberSnapshot = await get(memberProfileRef);
+              
+              if (memberSnapshot.exists()) {
+                const profileData = memberSnapshot.val();
+                await set(memberProfileRef, {
+                  ...profileData,
+                  role: 'owner'
+                });
+              }
+              
+              // Update current user's profile
+              const ownerProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+              await set(ownerProfileRef, {
+                ...userProfile,
+                role: 'member'
+              });
+
+              await logAudit(
+                AUDIT_ACTIONS.OWNERSHIP_TRANSFERRED, 
+                { newOwnerId: member.id, newOwnerName: memberName },
+                auth.currentUser.uid
+              );
+              
+              // Get the updated profile
+              await loadUserProfile();
+              
+              Alert.alert('Success', 'Ownership transferred successfully');
+            } catch (error) {
+              console.error('Error transferring ownership:', error);
+              Alert.alert('Error', 'Failed to transfer ownership. Please try again.');
+            }
+          }
+        }
+      ]
+    );
   };
 
   const InviteModal = () => (
@@ -263,96 +465,146 @@ export default function Profile({ navigation }) {
     </Modal>
   );
 
-  const renderMember = ({ item }) => (
-    <View style={styles.memberCard}>
-      <Ionicons name="person" size={24} color="#007AFF" />
-      <View style={styles.memberInfo}>
-        <Text style={styles.memberName}>{item.name}</Text>
-        <Text style={styles.memberEmail}>{item.email}</Text>
-      </View>
-    </View>
-  );
-
-  if (loading) {
-    return (
-      <View style={styles.container}>
-        <Text>Loading...</Text>
-      </View>
-    );
-  }
-
   return (
     <View style={styles.container}>
-      <ScrollView style={styles.scrollView}>
-        <View style={styles.content}>
-          <View style={styles.profileHeader}>
-            <TouchableOpacity onPress={pickImage}>
-              {userProfile?.photoURL ? (
-                <Image
-                  source={{ uri: userProfile.photoURL }}
-                  style={styles.profileImage}
-                />
+      <View style={styles.content}>
+        <SafeAreaView style={styles.safeArea}>
+          {loading ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color="#007AFF" />
+              <Text style={styles.loadingText}>Loading profile...</Text>
+            </View>
+          ) : (
+            <ScrollView contentContainerStyle={styles.scrollContainer}>
+              {userProfile ? (
+                <>
+                  <View style={styles.profileCard}>
+                    <View style={styles.profileHeader}>
+                      <TouchableOpacity onPress={pickImage} style={styles.profileImageContainer}>
+                        {userProfile.photoURL ? (
+                          <Image source={{ uri: userProfile.photoURL }} style={styles.profileImage} />
+                        ) : (
+                          <View style={styles.profileImageFallback}>
+                            <Text style={styles.profileImageFallbackText}>
+                              {getInitials(userProfile.firstName, userProfile.lastName)}
+                            </Text>
+                          </View>
+                        )}
+                      </TouchableOpacity>
+                      <View style={styles.profileInfo}>
+                        <Text style={styles.userName}>
+                          {formatName(userProfile.firstName, userProfile.middleName, userProfile.lastName)}
+                        </Text>
+                        <Text style={styles.userRole}>{userProfile.role ? userProfile.role.charAt(0).toUpperCase() + userProfile.role.slice(1) : 'User'}</Text>
+                      </View>
+                    </View>
+                    <TouchableOpacity 
+                      style={styles.editButton} 
+                      onPress={() => navigation.navigate('EditProfile', { userProfile })}
+                    >
+                      <Text style={styles.editButtonText}>Edit Profile</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={styles.infoSection}>
+                    <Text style={styles.sectionTitle}>Personal Information</Text>
+                    <View style={styles.infoCard}>
+                      <InfoRow label="Email" value={userProfile.email || 'Not provided'} />
+                      <InfoRow 
+                        label="Role" 
+                        value={
+                          userProfile.role 
+                            ? userProfile.role.charAt(0).toUpperCase() + userProfile.role.slice(1) 
+                            : 'Not specified'
+                        } 
+                      />
+                    </View>
+                  </View>
+
+                  <ActivityLog />
+
+                  {userProfile.role === 'owner' && (
+                    <>
+                      <View style={styles.infoSection}>
+                        <Text style={styles.sectionTitle}>Team Information</Text>
+                        <View style={styles.infoCard}>
+                          <Text style={styles.label}>Team Code</Text>
+                          <View style={styles.codeBox}>
+                            <Text style={styles.teamCode}>{userProfile.teamCode || 'No team code found'}</Text>
+                            <TouchableOpacity 
+                              onPress={() => {
+                                if (userProfile.teamCode) {
+                                  Clipboard.setString(userProfile.teamCode);
+                                  Alert.alert('Copied', 'Team code copied to clipboard');
+                                }
+                              }}
+                              disabled={!userProfile.teamCode}
+                            >
+                              <Ionicons name="copy-outline" size={20} color="#007AFF" />
+                            </TouchableOpacity>
+                          </View>
+                          <TouchableOpacity
+                            style={styles.inviteTeamButton}
+                            onPress={() => setIsInviteModalVisible(true)}
+                          >
+                            <Ionicons name="person-add" size={20} color="#FFFFFF" />
+                            <Text style={styles.inviteTeamButtonText}>Invite Member</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+
+                      <View style={styles.infoSection}>
+                        <Text style={styles.sectionTitle}>Team Members ({teamMembers.length})</Text>
+                        {teamMembers.length > 0 ? (
+                          <View>
+                            {teamMembers.map(item => (
+                              <View key={item.id} style={styles.memberCard}>
+                                <View style={styles.memberInfo}>
+                                  <Ionicons name="person" size={24} color="#007AFF" />
+                                  <View style={styles.memberTextInfo}>
+                                    <Text style={styles.memberName}>{item.name || 'Unknown User'}</Text>
+                                    <Text style={styles.memberEmail}>{item.email || 'No email'}</Text>
+                                    <Text style={styles.memberJoined}>
+                                      Joined: {item.joinedAt ? new Date(item.joinedAt).toLocaleDateString() : 'Unknown'}
+                                    </Text>
+                                  </View>
+                                </View>
+                                
+                                <View style={styles.memberActions}>
+                                  <TouchableOpacity
+                                    style={styles.memberAction}
+                                    onPress={() => handleTransferOwnership(item)}
+                                  >
+                                    <Ionicons name="star" size={18} color="#FFD700" />
+                                  </TouchableOpacity>
+                                  
+                                  <TouchableOpacity
+                                    style={styles.memberAction}
+                                    onPress={() => handleRemoveMember(item)}
+                                  >
+                                    <Ionicons name="close-circle" size={18} color="#FF3B30" />
+                                  </TouchableOpacity>
+                                </View>
+                              </View>
+                            ))}
+                          </View>
+                        ) : (
+                          <Text style={styles.noMembers}>No team members yet</Text>
+                        )}
+                      </View>
+                    </>
+                  )}
+                </>
               ) : (
-                <View style={styles.profileImagePlaceholder}>
-                  <Ionicons name="person-circle-outline" size={80} color="#007AFF" />
+                <View style={styles.profileCard}>
+                  <ActivityIndicator size="large" color="#007AFF" />
+                  <Text style={styles.loadingText}>Unable to load profile</Text>
                 </View>
               )}
-            </TouchableOpacity>
-            <Text style={styles.name}>
-              {userProfile?.firstName} {userProfile?.middleName} {userProfile?.lastName}
-            </Text>
-            <TouchableOpacity 
-              style={styles.editButton} 
-              onPress={() => navigation.navigate('EditProfile', { userProfile })}
-            >
-              <Text style={styles.editButtonText}>Edit Profile</Text>
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.infoSection}>
-            <Text style={styles.sectionTitle}>Profile Information</Text>
-            <View style={styles.infoCard}>
-              <InfoRow label="Email" value={userProfile?.email} />
-              <InfoRow label="Role" value={userProfile?.role?.charAt(0).toUpperCase() + userProfile?.role?.slice(1)} />
-            </View>
-          </View>
-
-          {userProfile?.role === 'owner' && (
-            <>
-              <View style={styles.infoSection}>
-                <Text style={styles.sectionTitle}>Team Information</Text>
-                <View style={styles.infoCard}>
-                  <Text style={styles.label}>Team Code</Text>
-                  <View style={styles.codeBox}>
-                    <Text style={styles.teamCode}>{userProfile?.teamCode || 'No team code found'}</Text>
-                  </View>
-                  <TouchableOpacity
-                    style={styles.inviteTeamButton}
-                    onPress={() => setIsInviteModalVisible(true)}
-                  >
-                    <Ionicons name="person-add" size={20} color="#FFFFFF" />
-                    <Text style={styles.inviteTeamButtonText}>Invite Member</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              <View style={styles.infoSection}>
-                <Text style={styles.sectionTitle}>Team Members ({teamMembers.length})</Text>
-                <FlatList
-                  data={teamMembers}
-                  renderItem={renderMember}
-                  keyExtractor={(item) => item.id}
-                  ListEmptyComponent={
-                    <Text style={styles.noMembers}>No team members yet</Text>
-                  }
-                  scrollEnabled={false}
-                  nestedScrollEnabled={true}
-                />
-              </View>
-            </>
+            </ScrollView>
           )}
-        </View>
-      </ScrollView>
+        </SafeAreaView>
+      </View>
       <InviteModal />
       <Navbar activePage="profile" />
     </View>
@@ -362,7 +614,7 @@ export default function Profile({ navigation }) {
 const InfoRow = ({ label, value }) => (
   <View style={styles.infoRow}>
     <Text style={styles.label}>{label}</Text>
-    <Text style={styles.value}>{value}</Text>
+    <Text style={styles.value}>{value || 'Not provided'}</Text>
   </View>
 );
 
@@ -371,44 +623,92 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#fff',
   },
-  titleContainer: {
-    paddingTop: 60,
-    paddingBottom: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E5E5',
-    backgroundColor: '#fff',
-    alignItems: 'center',
-  },
-  titleText: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#000',
-  },
-  scrollView: {
+  content: {
     flex: 1,
   },
-  content: {
+  safeArea: {
+    flex: 1,
+  },
+  scrollContainer: {
+    flexGrow: 1,
     padding: 20,
-    paddingBottom: 120,
+    paddingBottom: 120, // Extra padding for the navbar
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  loadingText: {
+    marginTop: 15,
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+  },
+  profileCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 15,
+    padding: 20,
+    marginBottom: 20,
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
   profileHeader: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 30,
+    marginBottom: 20,
   },
-  name: {
+  profileImageContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    marginRight: 15,
+    overflow: 'hidden',
+  },
+  profileImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 40,
+  },
+  profileImageFallback: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 40,
+    backgroundColor: '#F0F0F0',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  profileImageFallbackText: {
     fontSize: 24,
     fontWeight: '600',
-    marginTop: 10,
-    marginBottom: 5,
+    color: '#007AFF',
+  },
+  profileInfo: {
+    flex: 1,
+  },
+  userName: {
+    fontSize: 22,
+    fontWeight: '600',
     color: '#000',
-    textAlign: 'center',
+    marginBottom: 5,
+  },
+  userRole: {
+    fontSize: 16,
+    color: '#666',
   },
   editButton: {
     backgroundColor: '#007AFF',
-    paddingVertical: 8,
+    paddingVertical: 10,
     paddingHorizontal: 20,
-    borderRadius: 20,
-    marginTop: 10,
+    borderRadius: 10,
+    alignSelf: 'center',
   },
   editButtonText: {
     color: '#FFFFFF',
@@ -435,55 +735,91 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 10,
+    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#E5E5E5',
   },
   label: {
-    fontSize: 14,
+    fontSize: 16,
     color: '#666',
   },
   value: {
     fontSize: 16,
     color: '#000',
     fontWeight: '500',
+    maxWidth: '60%',
+    textAlign: 'right',
   },
   codeBox: {
-    backgroundColor: '#007AFF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F5F5F5',
     padding: 12,
     borderRadius: 8,
-    alignItems: 'center',
     marginTop: 8,
   },
   teamCode: {
-    fontSize: 20,
-    color: '#fff',
+    fontSize: 18,
+    color: '#007AFF',
     fontWeight: 'bold',
     letterSpacing: 1,
   },
   memberCard: {
-    flexDirection: 'row',
-    backgroundColor: '#fff',
-    padding: 15,
+    backgroundColor: '#FFFFFF',
     borderRadius: 10,
+    padding: 15,
     marginBottom: 10,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#E5E5E5',
   },
   memberInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  memberTextInfo: {
     marginLeft: 10,
     flex: 1,
   },
   memberName: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#000',
   },
   memberEmail: {
     fontSize: 14,
-    color: '#666',
+    color: '#666666',
     marginTop: 2,
+  },
+  memberJoined: {
+    fontSize: 12,
+    color: '#888888',
+    marginTop: 4,
+  },
+  memberActions: {
+    flexDirection: 'row',
+  },
+  memberAction: {
+    padding: 8,
+    marginLeft: 8,
+  },
+  inviteTeamButton: {
+    backgroundColor: '#007AFF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    borderRadius: 10,
+    marginTop: 15,
+    gap: 8,
+  },
+  inviteTeamButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '500',
   },
   noMembers: {
     textAlign: 'center',
@@ -491,42 +827,7 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     padding: 20,
   },
-  logoutButton: {
-    backgroundColor: '#FF3B30',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    margin: 20,
-    marginBottom: 80,
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-  },
-  logoutButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  profileImage: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    marginBottom: 10,
-  },
-  profileImagePlaceholder: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: '#F0F0F0',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
+  // Modal styles
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
@@ -582,20 +883,5 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
-  },
-  inviteTeamButton: {
-    backgroundColor: '#007AFF',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 12,
-    borderRadius: 10,
-    marginTop: 15,
-    gap: 8,
-  },
-  inviteTeamButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '500',
   },
 }); 

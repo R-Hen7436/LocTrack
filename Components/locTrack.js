@@ -46,23 +46,61 @@ const GPSStrengthIndicator = ({ accuracy }) => {
   );
 };
 
-// Update the CustomMarker component to be more modern
-const CustomMarker = ({ coordinate, photoURL, name }) => (
-  <Marker coordinate={coordinate}>
-    <View style={styles.markerContainer}>
-      {photoURL ? (
-        <Image
-          source={{ uri: photoURL }}
-          style={styles.markerImage}
-        />
-      ) : (
-        <View style={styles.markerFallback}>
-          <Ionicons name="location" size={20} color="#FFFFFF" />
-        </View>
-      )}
-    </View>
-  </Marker>
-);
+// Update the CustomMarker component to be more modern and handle missing data better
+const CustomMarker = ({ coordinate, photoURL, name }) => {
+  // Get first character of name if it exists, otherwise use empty string
+  const nameInitial = name && typeof name === 'string' && name.trim() !== '' ? name.trim()[0].toUpperCase() : '';
+  
+  return (
+    <Marker coordinate={coordinate}>
+      <View style={styles.markerContainer}>
+        {photoURL ? (
+          <Image
+            source={{ uri: photoURL }}
+            style={styles.markerImage}
+          />
+        ) : (
+          <View style={styles.markerFallback}>
+            {nameInitial ? (
+              <Text style={styles.markerInitial}>{nameInitial}</Text>
+            ) : (
+              <Ionicons name="person" size={20} color="#FFFFFF" />
+            )}
+          </View>
+        )}
+        {name && typeof name === 'string' && name.trim() !== '' && (
+          <View style={styles.markerLabelContainer}>
+            <Text style={styles.markerLabel}>{name}</Text>
+          </View>
+        )}
+      </View>
+    </Marker>
+  );
+};
+
+// Add this helper function at the top level of the file
+const formatUserName = (userData) => {
+  if (!userData) return '';
+  
+  const parts = [];
+  if (userData.firstName && userData.firstName.trim()) {
+    parts.push(userData.firstName.trim());
+  }
+  if (userData.lastName && userData.lastName.trim()) {
+    parts.push(userData.lastName.trim());
+  }
+  
+  if (parts.length > 0) {
+    return parts.join(' ');
+  }
+  
+  // Use email if available as fallback
+  if (userData.email) {
+    return userData.email.split('@')[0]; // Use part before @ as display name
+  }
+  
+  return ''; // Return empty string if no usable name data
+};
 
 export default function App() {
 const mapRef = useRef(null);
@@ -723,29 +761,86 @@ useEffect(() => {
   // This function loads all user locations from Firebase
   const loadAllUserLocations = async () => {
     try {
-      console.log("Loading all user locations...");
+      // Only log once at the beginning of loading
+      console.log("Loading user locations...");
       const locationsRef = ref(db, "UsersCurrentLocation");
       
       // Use onValue to get real-time updates
       const unsubscribe = onValue(locationsRef, (snapshot) => {
         if (snapshot.exists()) {
-          console.log("User locations data found:", snapshot.val());
           const locationsData = snapshot.val();
           
           // Convert the data to our expected format
           const formattedLocations = {};
-          Object.entries(locationsData).forEach(([userId, userData]) => {
-            if (userData && userData.Latitude && userData.Longitude) {
-              console.log(`Found location for user ${userId}:`, userData);
-              formattedLocations[userId] = userData;
-            }
-          });
           
-          // Update the state with all locations
-          setUsersLocations(formattedLocations);
-          console.log("Updated usersLocations with:", formattedLocations);
+          // Process each location entry and fetch corresponding user profile data
+          const fetchUserProfiles = async () => {
+            for (const [userId, userData] of Object.entries(locationsData)) {
+              if (userData && userData.Latitude && userData.Longitude) {
+                try {
+                  // Get user's profile data
+                  const userProfileRef = ref(db, `users/${userId}/profile`);
+                  const profileSnapshot = await get(userProfileRef);
+                  
+                  if (profileSnapshot.exists()) {
+                    const profileData = profileSnapshot.val();
+                    
+                    // Prepare a proper display name
+                    let displayName = '';
+                    if (profileData.firstName && profileData.firstName.trim() !== '') {
+                      displayName = profileData.firstName;
+                      if (profileData.lastName && profileData.lastName.trim() !== '') {
+                        displayName += ' ' + profileData.lastName;
+                      }
+                    } else if (profileData.lastName && profileData.lastName.trim() !== '') {
+                      displayName = profileData.lastName;
+                    }
+                    
+                    // Combine location data with profile data
+                    formattedLocations[userId] = {
+                      ...userData,
+                      firstName: profileData.firstName || '',
+                      lastName: profileData.lastName || '',
+                      photoURL: profileData.photoURL || '',
+                      role: profileData.role || '',
+                      teamCode: profileData.teamCode || '',
+                      name: formatUserName(profileData)
+                    };
+                  } else {
+                    // If no profile data, still include location data but with empty fields
+                    formattedLocations[userId] = {
+                      ...userData,
+                      firstName: '',
+                      lastName: '',
+                      photoURL: '',
+                      role: '',
+                      teamCode: '',
+                      name: ''
+                    };
+                  }
+                } catch (error) {
+                  console.error(`Error fetching profile for user ${userId}`);
+                  formattedLocations[userId] = {
+                    ...userData,
+                    firstName: '',
+                    lastName: '',
+                    photoURL: '',
+                    role: '',
+                    teamCode: '',
+                    name: ''
+                  };
+                }
+              }
+            }
+            
+            // Update the state with all locations
+            setUsersLocations(formattedLocations);
+          };
+          
+          fetchUserProfiles();
         } else {
           console.log("No user locations found in database");
+          setUsersLocations({});
         }
       });
       
@@ -809,20 +904,17 @@ return (
           coordinate={currentLocation}
         />
       )}
-      {Object.entries(usersLocations).map(([userId, userData]) => {
-        console.log(`Rendering marker for user ${userId}:`, userData);
-        return (
-          <CustomMarker
-            key={userId}
-            coordinate={{
-              latitude: userData.Latitude,
-              longitude: userData.Longitude
-            }}
-            photoURL={userData.photoURL}
-            name={userData.name}
-          />
-        );
-      })}
+      {Object.entries(usersLocations).map(([userId, userData]) => (
+        <CustomMarker
+          key={userId}
+          coordinate={{
+            latitude: userData.Latitude,
+            longitude: userData.Longitude
+          }}
+          photoURL={userData.photoURL}
+          name={userData.name || ''}
+        />
+      ))}
     </MapView>
 
     {userRole !== 'member' && (
@@ -1078,6 +1170,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 2,
     borderColor: '#FFFFFF',
+  },
+  markerLabelContainer: {
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    marginTop: 5,
+  },
+  markerLabel: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  markerInitial: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: 'bold',
   },
   memberMessage: {
     padding: 15,

@@ -3,7 +3,9 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, ActivityInd
 import { getAuth, signInWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
 import { Ionicons } from '@expo/vector-icons';
 import { getDatabase, ref, get, set } from 'firebase/database';
-import InvitationHandler, { checkForInvitation, acceptInvitation } from './InvitationHandler';
+import InvitationHandler, { checkForInvitation, acceptInvitation, checkPendingInvitations } from './InvitationHandler';
+import { logAudit } from '../../utils/auditUtils';
+import { AUDIT_ACTIONS } from '../../constants/auditActions';
 
 export default function Login({ navigation }) {
   const [email, setEmail] = useState('');
@@ -13,68 +15,67 @@ export default function Login({ navigation }) {
   const [invitation, setInvitation] = useState(null);
   const [isCheckingInvitation, setIsCheckingInvitation] = useState(false);
   const [isResending, setIsResending] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
+    setError('');
+    setLoading(true);
+
     try {
-      setIsCheckingInvitation(true);
       const auth = getAuth();
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       
+      // Log the login event
+      await logAudit(AUDIT_ACTIONS.USER_LOGIN, { email });
+      
+      // Get user profile data
       const db = getDatabase();
       const userProfileRef = ref(db, `users/${userCredential.user.uid}/profile`);
       const snapshot = await get(userProfileRef);
       
       if (snapshot.exists()) {
         const userData = snapshot.val();
+        
+        // Check if user has admin privileges
         if (!userCredential.user.emailVerified && !userData.isAdmin) {
-          await auth.signOut();
-          setError('Please verify your email before logging in');
-          setEmail('');
-          setPassword('');
+          // Redirect to email verification
+          navigation.navigate('VerifyEmail', { email });
           return;
         }
         
-        if (userData.isAdmin) {
-          await set(ref(db, `adminSessions/${userCredential.user.uid}`), {
-            lastLogin: new Date().toISOString()
-          });
-        }
-
         // Check for pending invitations
-        const pendingInvitation = await checkForInvitation(email);
-        if (pendingInvitation) {
-          setInvitation(pendingInvitation);
+        const invitation = await checkPendingInvitations(email);
+        if (invitation) {
+          // Handle invitation UI flow
+          navigation.navigate('InvitationScreen', { invitation });
+          return;
         }
       }
-    } catch (error) {
-      let errorMessage = "An error occurred. Please try again.";
-
-      switch (error.code) {
-        case 'auth/invalid-email':
-          errorMessage = 'Invalid email address format';
-          break;
-        case 'auth/user-not-found':
-          errorMessage = 'Email not registered';
-          break;
-        case 'auth/wrong-password':
-          errorMessage = 'Incorrect password';
-          break;
-        case 'auth/too-many-requests':
-          errorMessage = 'Too many attempts. Please try again later';
-          break;
-        case 'auth/network-request-failed':
-          errorMessage = 'Network error. Please check your connection';
-          break;
+      
+      // Update profile last login
+      if (snapshot.exists()) {
+        const userData = snapshot.val();
+        await set(userProfileRef, {
+          ...userData,
+          lastLogin: new Date().toISOString()
+        });
       }
-      setError(errorMessage);
+      
       setEmail('');
       setPassword('');
-
-      setTimeout(() => {
-        setError('');
-      }, 3000);
-    } finally {
-      setIsCheckingInvitation(false);
+      setLoading(false);
+      
+    } catch (error) {
+      let errorMessage = 'Login failed. Please check your email and password.';
+      if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password') {
+        errorMessage = 'Invalid email or password.';
+      } else if (error.code === 'auth/too-many-requests') {
+        errorMessage = 'Too many unsuccessful login attempts. Please try again later.';
+      }
+      
+      console.error('Login error:', error.code, error.message);
+      setError(errorMessage);
+      setLoading(false);
     }
   };
 
@@ -177,11 +178,11 @@ export default function Login({ navigation }) {
       </View>
 
       <TouchableOpacity 
-        style={[styles.button, isCheckingInvitation && styles.buttonDisabled]} 
+        style={[styles.button, loading && styles.buttonDisabled]} 
         onPress={handleLogin}
-        disabled={isCheckingInvitation}
+        disabled={loading}
       >
-        {isCheckingInvitation ? (
+        {loading ? (
           <ActivityIndicator color="#FFFFFF" />
         ) : (
           <Text style={styles.buttonText}>Login</Text>
