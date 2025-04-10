@@ -4,8 +4,9 @@ import { getDatabase, ref, get, query, orderByChild, set } from 'firebase/databa
 import { Ionicons } from '@expo/vector-icons';
 import { getAuth, signOut } from 'firebase/auth';
 import Navbar from '../Navbar';
+import { useFocusEffect } from '@react-navigation/native';
 
-export default function AdminDashboard({ navigation }) {
+export default function AdminDashboard({ navigation, route }) {
   const [users, setUsers] = useState([]);
   const [filteredUsers, setFilteredUsers] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -18,9 +19,43 @@ export default function AdminDashboard({ navigation }) {
     totalMembers: 0
   });
 
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Dashboard focused, loading users...');
+      loadUsers();
+    }, [])
+  );
+
+  // Handle user deletion
   useEffect(() => {
-    loadUsers();
-  }, []);
+    if (route.params?.deletedUserId) {
+      console.log('User was deleted, removing from list:', route.params.deletedUserId);
+      // Update the users list by removing the deleted user
+      setUsers(prevUsers => prevUsers.filter(user => user.id !== route.params.deletedUserId));
+      setFilteredUsers(prevUsers => prevUsers.filter(user => user.id !== route.params.deletedUserId));
+      
+      // Update stats
+      const deletedUser = users.find(user => user.id === route.params.deletedUserId);
+      if (deletedUser) {
+        setStats(prevStats => {
+          const newStats = { ...prevStats };
+          newStats.totalUsers--;
+          
+          if (deletedUser.role === 'owner') newStats.totalOwners--;
+          if (deletedUser.role === 'member') newStats.totalMembers--;
+          
+          return newStats;
+        });
+      }
+      
+      // Clear the params to prevent repeated processing
+      navigation.setParams({ deletedUserId: null, refreshUsers: null });
+    } else if (route.params?.refreshUsers) {
+      console.log('Refreshing user list');
+      loadUsers();
+      navigation.setParams({ refreshUsers: null });
+    }
+  }, [route.params?.deletedUserId, route.params?.refreshUsers]);
 
   React.useLayoutEffect(() => {
     navigation.setOptions({
@@ -252,13 +287,6 @@ export default function AdminDashboard({ navigation }) {
         />
       )}
 
-      <TouchableOpacity 
-        style={styles.fab}
-        onPress={() => navigation.navigate('ProductKeyManager')}
-      >
-        <Ionicons name="key" size={24} color="#FFFFFF" />
-      </TouchableOpacity>
-      
       <Navbar activePage="admin" />
     </View>
   );
@@ -268,6 +296,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     padding: 16,
+    paddingBottom: 100,
     backgroundColor: '#F2F2F7',
   },
   searchContainer: {
@@ -324,7 +353,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   listContent: {
-    paddingBottom: 80,
+    paddingBottom: 100,
   },
   userCard: {
     backgroundColor: '#FFFFFF',
@@ -422,21 +451,5 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontSize: 16,
     color: '#999',
-  },
-  fab: {
-    position: 'absolute',
-    bottom: 80,
-    right: 20,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#007AFF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
   },
 }); 

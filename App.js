@@ -13,7 +13,7 @@ import ProductKeyManager from './Components/Admin/ProductKeyManager';
 import AdminDashboard from './Components/Admin/AdminDashboard';
 import UserDetail from './Components/Admin/UserDetail';
 import { initializeAdmin } from './scripts/initAdmin';
-import { getDatabase, ref, get } from 'firebase/database';
+import { getDatabase, ref, get, set } from 'firebase/database';
 import Profile from './Components/Profile/Profile';
 import EditProfile from './Components/Profile/EditProfile';
 import Dashboard from './Components/IoT/Dashboard';
@@ -39,30 +39,68 @@ export default function App() {
 
       const unsubscribe = onAuthStateChanged(auth, async (user) => {
         if (user) {
-          const db = getDatabase();
-          const userProfileRef = ref(db, `users/${user.uid}/profile`);
-          const snapshot = await get(userProfileRef);
-          
-          if (snapshot.exists()) {
-            const userData = snapshot.val();
-            console.log('User Profile Data:', userData);
-            console.log('Is Admin:', userData.isAdmin);
-            console.log('User Role:', userData.role);
+          try {
+            console.log("User logged in:", user.uid, user.email);
+            const db = getDatabase();
+            const userProfileRef = ref(db, `users/${user.uid}/profile`);
+            const snapshot = await get(userProfileRef);
             
-            // Set user with admin status - check both isAdmin and role
-            const isAdminUser = userData.isAdmin === true || userData.role === 'admin';
-            const userWithAdmin = {
-              ...user,
-              isAdmin: isAdminUser
-            };
-            console.log('User Object with Admin:', userWithAdmin);
-            setUser(userWithAdmin);
-            
-            // Admin users are always verified
-            setIsVerified(isAdminUser || user.emailVerified);
-            console.log('Is Verified:', isAdminUser || user.emailVerified);
-          } else {
-            console.log('No profile found for user');
+            if (snapshot.exists()) {
+              const userData = snapshot.val();
+              console.log('User Profile Data:', userData);
+              console.log('Is Admin:', userData.isAdmin);
+              console.log('User Role:', userData.role);
+              
+              // Set user with admin status - check both isAdmin and role
+              const isAdminUser = userData.isAdmin === true || userData.role === 'admin';
+              const userWithAdmin = {
+                ...user,
+                isAdmin: isAdminUser
+              };
+              console.log('User Object with Admin:', userWithAdmin);
+              setUser(userWithAdmin);
+              
+              // Admin users are always verified
+              setIsVerified(isAdminUser || user.emailVerified);
+              console.log('Is Verified:', isAdminUser || user.emailVerified);
+            } else {
+              console.log('No profile found for user:', user.uid);
+              
+              // Create a default profile for the user if none exists
+              const defaultProfile = {
+                firstName: user.displayName ? user.displayName.split(' ')[0] : '',
+                lastName: user.displayName ? user.displayName.split(' ').slice(1).join(' ') : '',
+                email: user.email,
+                createdAt: new Date().toISOString(),
+                role: 'member',
+                isAdmin: false,
+                isOwner: false,
+                emailVerified: user.emailVerified
+              };
+              
+              // If this is the hardcoded admin email, set admin role
+              if (user.email.toLowerCase() === 'ab@loctrack.com') {
+                defaultProfile.role = 'admin';
+                defaultProfile.isAdmin = true;
+                defaultProfile.emailVerified = true;
+                console.log('Setting admin role for hardcoded admin account');
+              }
+              
+              console.log('Creating default profile:', defaultProfile);
+              await set(ref(db, `users/${user.uid}/profile`), defaultProfile);
+              
+              // Update user object with admin status
+              const userWithAdmin = {
+                ...user,
+                isAdmin: defaultProfile.isAdmin
+              };
+              
+              setUser(userWithAdmin);
+              setIsVerified(defaultProfile.isAdmin || user.emailVerified);
+            }
+          } catch (error) {
+            console.error('Error loading user profile:', error);
+            // Fall back to basic user info
             setUser(user);
             setIsVerified(user.emailVerified);
           }
@@ -101,19 +139,12 @@ export default function App() {
           user.isAdmin ? (
             <>
               <Stack.Screen 
-                name="LocTrack" 
-                component={LocTrack}
-                options={{ 
-                  headerShown: false,
-                  animation: 'slide_from_left'
-                }}
-              />
-              <Stack.Screen 
-                name="ProductKeyManager" 
-                component={ProductKeyManager}
+                name="AdminDashboard" 
+                component={AdminDashboard}
                 options={{ 
                   headerShown: true,
-                  title: 'Product Keys',
+                  title: 'Admin Dashboard',
+                  headerBackVisible: false,
                   headerRight: () => (
                     <TouchableOpacity
                       onPress={async () => {
@@ -131,12 +162,19 @@ export default function App() {
                 }}
               />
               <Stack.Screen 
-                name="AdminDashboard" 
-                component={AdminDashboard}
+                name="LocTrack" 
+                component={LocTrack}
+                options={{ 
+                  headerShown: false,
+                  animation: 'slide_from_left'
+                }}
+              />
+              <Stack.Screen 
+                name="ProductKeyManager" 
+                component={ProductKeyManager}
                 options={{ 
                   headerShown: true,
-                  title: 'Admin Dashboard',
-                  animation: 'slide_from_bottom'
+                  title: 'Product Keys',
                 }}
               />
               <Stack.Screen 

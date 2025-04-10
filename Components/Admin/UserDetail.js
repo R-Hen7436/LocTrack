@@ -193,7 +193,12 @@ export default function UserDetail({ route, navigation }) {
                 await remove(ref(db, `teams/${userData.teamCode}`));
               }
               
-              navigation.goBack();
+              // Navigate back with success parameter
+              navigation.navigate('AdminDashboard', { 
+                deletedUserId: userId,
+                refreshUsers: true
+              });
+              
               Alert.alert('Success', 'User deleted successfully');
             } catch (error) {
               console.error('Error deleting user:', error);

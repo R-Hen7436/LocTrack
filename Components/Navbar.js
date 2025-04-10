@@ -1,11 +1,68 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
+import { getAuth } from 'firebase/auth';
+import { getDatabase, ref, get } from 'firebase/database';
 
 export default function Navbar({ activePage }) {
   const navigation = useNavigation();
+  const [isAdmin, setIsAdmin] = useState(false);
+  
+  useEffect(() => {
+    const checkAdminStatus = async () => {
+      try {
+        const auth = getAuth();
+        if (!auth.currentUser) return;
+        
+        const db = getDatabase();
+        const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+        const snapshot = await get(userProfileRef);
+        
+        if (snapshot.exists()) {
+          const userData = snapshot.val();
+          setIsAdmin(userData.isAdmin === true || userData.role === 'admin');
+        }
+      } catch (error) {
+        console.error('Error checking admin status:', error);
+      }
+    };
+    
+    checkAdminStatus();
+  }, []);
 
+  if (isAdmin) {
+    // Admin navbar
+    return (
+      <View style={styles.navbar}>
+        <TouchableOpacity 
+          style={[styles.navItem, activePage === 'admin' && styles.activeNavItem]}
+          onPress={() => navigation.navigate('AdminDashboard')}
+        >
+          <Ionicons name="people-outline" size={24} color="white" />
+          <Text style={styles.navText}>Users</Text>
+        </TouchableOpacity>
+        
+        <TouchableOpacity 
+          style={[styles.navItem, activePage === 'keys' && styles.activeNavItem]}
+          onPress={() => navigation.navigate('ProductKeyManager')}
+        >
+          <Ionicons name="key-outline" size={24} color="white" />
+          <Text style={styles.navText}>Keys</Text>
+        </TouchableOpacity>
+        
+        <TouchableOpacity 
+          style={[styles.navItem, activePage === 'profile' && styles.activeNavItem]}
+          onPress={() => navigation.navigate('Profile')}
+        >
+          <Ionicons name="person-outline" size={24} color="white" />
+          <Text style={styles.navText}>Profile</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // Regular user navbar
   return (
     <View style={styles.navbar}>
       <TouchableOpacity 
