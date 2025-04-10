@@ -4,6 +4,7 @@ export const AUDIT_ACTIONS = {
   USER_LOGIN: 'user_login',
   USER_LOGOUT: 'user_logout',
   PASSWORD_RESET: 'password_reset',
+  PASSWORD_CHANGED: 'password_changed',
   EMAIL_VERIFIED: 'email_verified',
   
   // Admin actions

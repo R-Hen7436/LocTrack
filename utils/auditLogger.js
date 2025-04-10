@@ -89,7 +89,6 @@ export const getUserAuditLogs = async (userId, limit = 100) => {
     const db = getDatabase();
     const auditRef = ref(db, 'auditLogs');
     
-    // Get logs where user is either the actor or target
     const query = await get(auditRef);
     
     if (!query.exists()) {
@@ -107,10 +106,8 @@ export const getUserAuditLogs = async (userId, limit = 100) => {
       }
     });
     
-    // Sort by timestamp (newest first)
     logs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
     
-    // Apply limit
     return logs.slice(0, limit);
   } catch (error) {
     console.error('Error getting audit logs:', error);

@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, ActivityIndicator, Alert } from 'react-native';
-import { getAuth, signInWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
+import { getAuth, signInWithEmailAndPassword, sendEmailVerification, updateProfile } from 'firebase/auth';
 import { Ionicons } from '@expo/vector-icons';
 import { getDatabase, ref, get, set } from 'firebase/database';
 import InvitationHandler, { checkForInvitation, acceptInvitation, checkPendingInvitations } from './InvitationHandler';
 import { logAudit } from '../../utils/auditUtils';
 import { AUDIT_ACTIONS } from '../../constants/auditActions';
+import { formatUserDisplayName } from '../firebaseConfig';
 
 export default function Login({ navigation }) {
   const [email, setEmail] = useState('');
@@ -33,13 +34,46 @@ export default function Login({ navigation }) {
       const userProfileRef = ref(db, `users/${userCredential.user.uid}/profile`);
       const snapshot = await get(userProfileRef);
       
+      console.log('Auth display name:', userCredential.user.displayName);
+      
       if (snapshot.exists()) {
         const userData = snapshot.val();
+        console.log('User profile data from database:', userData);
+        
+        // Check if names exist in profile but not in Auth display name
+        if ((userData.firstName || userData.lastName) && 
+            (!userCredential.user.displayName || userCredential.user.displayName === 'User')) {
+          
+          console.log('Updating Auth display name from profile data');
+          
+          // Format display name from profile data
+          const displayName = formatUserDisplayName(
+            userData.firstName || '', 
+            userData.middleName || '', 
+            userData.lastName || ''
+          );
+          
+          // Update Auth display name
+          await updateProfile(userCredential.user, {
+            displayName: displayName
+          });
+          
+          console.log('Updated Auth display name to:', displayName);
+        }
+        
+        // Check if password change is required (for users with temporary passwords)
+        if (userData.requiresPasswordChange === true) {
+          console.log('User needs to change temporary password');
+          navigation.navigate('ChangePassword', { email });
+          setLoading(false);
+          return;
+        }
         
         // Check if user has admin privileges
         if (!userCredential.user.emailVerified && !userData.isAdmin) {
           // Redirect to email verification
           navigation.navigate('VerifyEmail', { email });
+          setLoading(false);
           return;
         }
         
@@ -48,8 +82,35 @@ export default function Login({ navigation }) {
         if (invitation) {
           // Handle invitation UI flow
           navigation.navigate('InvitationScreen', { invitation });
+          setLoading(false);
           return;
         }
+      } else {
+        // No profile found, create one from auth data
+        console.log('No user profile found, creating from auth data');
+        
+        // Extract name parts from display name
+        const displayNameParts = userCredential.user.displayName ? 
+          userCredential.user.displayName.split(' ') : [];
+          
+        const firstName = displayNameParts.length > 0 ? displayNameParts[0] : '';
+        const lastName = displayNameParts.length > 1 ? 
+          displayNameParts.slice(1).join(' ') : '';
+        
+        const defaultProfile = {
+          firstName: firstName,
+          lastName: lastName,
+          middleName: '',
+          email: userCredential.user.email,
+          photoURL: userCredential.user.photoURL || '',
+          role: 'member',
+          isOwner: false,
+          createdAt: new Date().toISOString(),
+          lastLogin: new Date().toISOString()
+        };
+        
+        console.log('Creating default profile:', defaultProfile);
+        await set(userProfileRef, defaultProfile);
       }
       
       // Update profile last login
@@ -229,7 +290,7 @@ const styles = StyleSheet.create({
     height: 48,
   },
   button: {
-    backgroundColor: 'black',
+    backgroundColor: '#007AFF',
     padding: 15,
     borderRadius: 5,
     marginBottom: 10,
@@ -251,9 +312,8 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   link2: {
-    color: 'blue',
+    color: '#007AFF',
     textAlign: 'right',
-    marginBotttom: 10,
   },
   passwordContainer: {
     flexDirection: 'row',
@@ -281,9 +341,8 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   linkContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 10,
+    alignItems: 'flex-end',
+    marginBottom: 5,
   },
   linkDisabled: {
     opacity: 0.5,

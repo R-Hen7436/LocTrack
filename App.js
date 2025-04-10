@@ -7,6 +7,7 @@ import Register from './Components/Auth/Register';
 import LocTrack from './Components/locTrack';
 import ForgotPassword from './Components/Auth/ForgotPassword';
 import VerifyEmail from './Components/Auth/VerifyEmail';
+import ChangePassword from './Components/Auth/ChangePassword';
 import InvitationScreen from './Components/Auth/InvitationScreen';
 import { View, ActivityIndicator, Text, TouchableOpacity } from 'react-native';
 import ProductKeyManager from './Components/Admin/ProductKeyManager';
@@ -280,6 +281,24 @@ export default function App() {
               options={{ 
                 headerShown: true,
                 title: 'Team Invitation',
+                headerBackVisible: false,
+                gestureEnabled: false,
+              }}
+            />
+            <Stack.Screen 
+              name="VerifyEmail" 
+              component={VerifyEmail}
+              options={{ 
+                headerShown: false,
+                gestureEnabled: false,
+              }}
+            />
+            <Stack.Screen 
+              name="ChangePassword" 
+              component={ChangePassword}
+              options={{ 
+                headerShown: true,
+                title: 'Change Password',
                 headerBackVisible: false,
                 gestureEnabled: false,
               }}

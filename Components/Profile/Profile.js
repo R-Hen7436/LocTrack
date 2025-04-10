@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView, Image, Modal, TextInput, ActivityIndicator, SafeAreaView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView, Image, Modal, TextInput, ActivityIndicator, SafeAreaView, KeyboardAvoidingView, Platform, Keyboard, TouchableWithoutFeedback } from 'react-native';
 import { getAuth, signOut, updateProfile } from 'firebase/auth';
 import { ref, get, set, remove } from 'firebase/database';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,6 +14,7 @@ import { Clipboard } from 'react-native';
 import { logAudit } from '../../utils/auditUtils';
 import { AUDIT_ACTIONS } from '../../constants/auditActions';
 import ActivityLog from './ActivityLog';
+import { createUserWithTempPassword } from '../../utils/userUtils';
 
 // Add this helper function at the top level, before the component definition
 // Format name function to safely handle empty or null fields
@@ -45,9 +46,6 @@ export default function Profile({ navigation }) {
   const [userProfile, setUserProfile] = useState(null);
   const [teamMembers, setTeamMembers] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [isInviteModalVisible, setIsInviteModalVisible] = useState(false);
-  const [inviteEmail, setInviteEmail] = useState('');
-  const [isInviting, setIsInviting] = useState(false);
 
   useEffect(() => {
     console.log("Profile component mounted");
@@ -59,12 +57,25 @@ export default function Profile({ navigation }) {
       console.log("Focus effect triggered");
       if (auth?.currentUser?.uid) {
         console.log("Loading profile for user:", auth.currentUser.uid);
-        loadUserProfile();
+        const loadData = async () => {
+          await loadUserProfile();
+          // Load team members after profile is loaded if user is an owner
+          if (userProfile?.role === 'owner' && userProfile?.teamCode) {
+            console.log("User is an owner with team code, loading team members");
+            await loadTeamMembers();
+          }
+        };
+        loadData();
       } else {
         console.error("No current user in auth");
         setLoading(false);
       }
-    }, [])
+      
+      // Return cleanup function
+      return () => {
+        console.log("Focus effect cleanup");
+      };
+    }, [userProfile?.teamCode]) // Include userProfile.teamCode as a dependency
   );
 
   React.useLayoutEffect(() => {
@@ -107,37 +118,69 @@ export default function Profile({ navigation }) {
       }
       
       console.log("Loading profile for user ID:", auth.currentUser.uid);
+      console.log("Current display name from Auth:", auth.currentUser.displayName);
+      
       const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
       const snapshot = await get(userProfileRef);
       
       if (snapshot.exists()) {
         const profileData = snapshot.val();
-        console.log('User Profile Data loaded:', profileData);
+        console.log('User Profile Data loaded from database:', profileData);
+        
+        // Parse display name from Auth if needed
+        let authFirstName = '';
+        let authLastName = '';
+        if (auth.currentUser.displayName) {
+          const nameParts = auth.currentUser.displayName.split(' ');
+          authFirstName = nameParts[0] || '';
+          authLastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : '';
+        }
         
         // Ensure all required fields exist with fallbacks
         const cleanedProfile = {
-          firstName: profileData.firstName || '',
-          lastName: profileData.lastName || '',
+          firstName: profileData.firstName || authFirstName || '',
+          lastName: profileData.lastName || authLastName || '',
           middleName: profileData.middleName || '',
           email: profileData.email || auth.currentUser.email || '',
           photoURL: profileData.photoURL || auth.currentUser.photoURL || '',
           role: profileData.role || 'member',
           teamCode: profileData.teamCode || '',
+          isOwner: profileData.isOwner || profileData.role === 'owner', // Ensure role consistency
           ...profileData // keep any other fields
         };
         
+        console.log('Cleaned profile data:', cleanedProfile);
         setUserProfile(cleanedProfile);
+        
+        // Ensure role and isOwner are consistent
+        if (cleanedProfile.role === 'owner' && !cleanedProfile.isOwner) {
+          console.log('Fixing inconsistent owner role...');
+          await set(userProfileRef, {
+            ...cleanedProfile,
+            isOwner: true
+          });
+        }
         
         if (cleanedProfile.role === 'owner' && cleanedProfile.teamCode) {
           await loadTeamMembers();
         }
       } else {
         console.log("No profile data found, creating default profile");
+        console.log("Auth display name:", auth.currentUser.displayName);
+        
+        // Parse display name for better name extraction
+        let firstName = '';
+        let lastName = '';
+        if (auth.currentUser.displayName) {
+          const nameParts = auth.currentUser.displayName.split(' ');
+          firstName = nameParts[0] || '';
+          lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : '';
+        }
         
         // Create default profile from auth data
         const defaultProfile = {
-          firstName: auth.currentUser.displayName ? auth.currentUser.displayName.split(' ')[0] : '',
-          lastName: auth.currentUser.displayName ? auth.currentUser.displayName.split(' ').slice(1).join(' ') : '',
+          firstName: firstName,
+          lastName: lastName,
           middleName: '',
           email: auth.currentUser.email || '',
           photoURL: auth.currentUser.photoURL || '',
@@ -146,6 +189,7 @@ export default function Profile({ navigation }) {
           createdAt: new Date().toISOString()
         };
         
+        console.log('Created default profile:', defaultProfile);
         setUserProfile(defaultProfile);
         
         // Save the default profile
@@ -165,40 +209,79 @@ export default function Profile({ navigation }) {
   };
 
   const loadTeamMembers = async () => {
-    if (!auth.currentUser || userProfile?.role !== 'owner') return;
-    
     try {
+      console.log('Loading team members, team code:', userProfile?.teamCode);
+      
+      if (!userProfile || !userProfile.teamCode) {
+        console.log('No team code found in profile, cannot load members');
+        setTeamMembers([]);
+        return;
+      }
+      
       const teamCode = userProfile.teamCode;
-      if (!teamCode) return;
+      console.log('Loading team members for team code:', teamCode);
       
       const db = getDatabase();
-      const teamRef = ref(db, `teams/${teamCode}/members`);
-      const snapshot = await get(teamRef);
       
+      // Check if team exists first
+      const teamRef = ref(db, `teams/${teamCode}`);
+      const teamSnapshot = await get(teamRef);
+      
+      if (!teamSnapshot.exists()) {
+        console.log('Team does not exist for code:', teamCode);
+        setTeamMembers([]);
+        return;
+      }
+      
+      console.log('Team found, fetching members...');
+      const membersRef = ref(db, `teams/${teamCode}/members`);
+      const snapshot = await get(membersRef);
+      
+      if (!snapshot.exists()) {
+        console.log('No members found for team');
+        setTeamMembers([]);
+        return;
+      }
+      
+      console.log('Team members snapshot exists, processing data...');
       const members = [];
       
-      if (snapshot.exists()) {
-        snapshot.forEach((child) => {
-          members.push({
-            id: child.key,
-            ...child.val()
-          });
+      snapshot.forEach((child) => {
+        members.push({
+          id: child.key,
+          ...child.val()
         });
-      }
+      });
       
-      for (const member of members) {
-        const userRef = ref(db, `users/${member.id}/profile`);
-        const userSnapshot = await get(userRef);
-        
-        if (userSnapshot.exists()) {
-          const userData = userSnapshot.val();
-          member.name = formatName(userData.firstName, userData.middleName, userData.lastName);
-          member.email = userData.email || '';
-          member.isActive = userData.isActive !== false;
-        }
-      }
+      console.log(`Found ${members.length} members, fetching user profiles...`);
       
-      setTeamMembers(members);
+      // Fetch additional details for each member
+      const enhancedMembers = await Promise.all(
+        members.map(async (member) => {
+          try {
+            const userRef = ref(db, `users/${member.id}/profile`);
+            const userSnapshot = await get(userRef);
+            
+            if (userSnapshot.exists()) {
+              const userData = userSnapshot.val();
+              return {
+                ...member,
+                name: formatName(userData.firstName || '', userData.middleName || '', userData.lastName || ''),
+                email: userData.email || member.email || '',
+                isActive: userData.isActive !== false,
+                photoURL: userData.photoURL || ''
+              };
+            }
+            return member;
+          } catch (error) {
+            console.error(`Error fetching profile for member ${member.id}:`, error);
+            return member;
+          }
+        })
+      );
+      
+      console.log(`Enhanced data for ${enhancedMembers.length} members`);
+      setTeamMembers(enhancedMembers);
     } catch (error) {
       console.error('Error loading team members:', error);
       Alert.alert('Error', 'Failed to load team members');
@@ -270,52 +353,6 @@ export default function Profile({ navigation }) {
     } catch (error) {
       console.error('Error uploading image:', error);
       Alert.alert('Error', 'Failed to upload image. Please try again.');
-    }
-  };
-
-  const handleInvite = async () => {
-    if (!inviteEmail || !inviteEmail.trim()) {
-      Alert.alert('Error', 'Please enter an email address');
-      return;
-    }
-
-    setIsInviting(true);
-    try {
-      const invitationRef = ref(db, `invitations/${encodeURIComponent(inviteEmail.trim())}`);
-      
-      const existingInvitation = await get(invitationRef);
-      if (existingInvitation.exists()) {
-        Alert.alert('Error', 'An invitation has already been sent to this email');
-        setIsInviting(false);
-        return;
-      }
-      
-      await set(invitationRef, {
-        teamCode: userProfile.teamCode,
-        ownerId: auth.currentUser.uid,
-        ownerEmail: userProfile.email || '',
-        ownerName: formatName(userProfile.firstName, userProfile.middleName, userProfile.lastName),
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-      });
-
-      await logAudit(
-        AUDIT_ACTIONS.MEMBER_INVITED, 
-        { inviteeEmail: inviteEmail.trim() },
-        auth.currentUser.uid
-      );
-
-      Alert.alert(
-        'Success',
-        'Invitation sent successfully!',
-        [{ text: 'OK', onPress: () => setIsInviteModalVisible(false) }]
-      );
-      setInviteEmail('');
-    } catch (error) {
-      console.error('Error sending invitation:', error);
-      Alert.alert('Error', 'Failed to send invitation. Please try again.');
-    } finally {
-      setIsInviting(false);
     }
   };
 
@@ -419,57 +456,6 @@ export default function Profile({ navigation }) {
     );
   };
 
-  const InviteModal = () => {
-    return (
-      <Modal
-        animationType="fade"
-        transparent={true}
-        visible={isInviteModalVisible}
-        onRequestClose={() => setIsInviteModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Invite Team Member</Text>
-            
-            <TextInput
-              style={styles.emailInput}
-              placeholder="Enter email address"
-              keyboardType="email-address"
-              autoCapitalize="none"
-              value={inviteEmail}
-              onChangeText={setInviteEmail}
-              placeholderTextColor="#999"
-            />
-            
-            <View style={styles.modalButtons}>
-              <TouchableOpacity 
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => {
-                  setInviteEmail('');
-                  setIsInviteModalVisible(false);
-                }}
-              >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={[styles.modalButton, styles.inviteModalButton]}
-                onPress={handleInvite}
-                disabled={isInviting}
-              >
-                {isInviting ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <Text style={styles.inviteModalButtonText}>Invite</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-    );
-  };
-
   return (
     <View style={styles.container}>
       <SafeAreaView style={styles.safeArea}>
@@ -489,14 +475,18 @@ export default function Profile({ navigation }) {
                   ) : (
                     <View style={styles.profileImageFallback}>
                       <Text style={styles.profileImageFallbackText}>
-                        {getInitials(userProfile?.firstName, userProfile?.lastName)}
+                        {getInitials(userProfile?.firstName || '', userProfile?.lastName || '')}
                       </Text>
                     </View>
                   )}
                 </TouchableOpacity>
                 <View style={styles.profileInfo}>
                   <Text style={styles.userName}>
-                    {formatName(userProfile?.firstName, userProfile?.middleName, userProfile?.lastName)}
+                    {formatName(
+                      userProfile?.firstName || '', 
+                      userProfile?.middleName || '', 
+                      userProfile?.lastName || ''
+                    )}
                   </Text>
                   <Text style={styles.userRole}>
                     {userProfile?.role ? userProfile.role.charAt(0).toUpperCase() + userProfile.role.slice(1) : 'User'}
@@ -570,13 +560,10 @@ export default function Profile({ navigation }) {
                   
                   <View style={styles.divider} />
                   
-                  <TouchableOpacity
-                    style={styles.inviteButton}
-                    onPress={() => setIsInviteModalVisible(true)}
-                  >
-                    <Ionicons name="person-add" size={20} color="#FFFFFF" />
-                    <Text style={styles.inviteButtonText}>Invite Team Member</Text>
-                  </TouchableOpacity>
+                  <InviteTeamMemberButton 
+                    teamCode={userProfile.teamCode} 
+                    onInviteSent={loadTeamMembers}
+                  />
                 </View>
 
                 <View style={styles.card}>
@@ -646,13 +633,10 @@ export default function Profile({ navigation }) {
                   ) : (
                     <View style={styles.emptyTeamContainer}>
                       <Text style={styles.emptyTeamText}>No team members yet</Text>
-                      <TouchableOpacity
-                        style={styles.inviteButton}
-                        onPress={() => setIsInviteModalVisible(true)}
-                      >
-                        <Ionicons name="person-add" size={20} color="#FFFFFF" />
-                        <Text style={styles.inviteButtonText}>Invite Team Member</Text>
-                      </TouchableOpacity>
+                      <InviteTeamMemberButton 
+                        teamCode={userProfile.teamCode} 
+                        onInviteSent={loadTeamMembers}
+                      />
                     </View>
                   )}
                 </View>
@@ -661,7 +645,6 @@ export default function Profile({ navigation }) {
           </ScrollView>
         )}
       </SafeAreaView>
-      <InviteModal />
       <Navbar activePage="profile" />
     </View>
   );
@@ -673,6 +656,222 @@ const InfoRow = ({ label, value }) => (
     <Text style={styles.value}>{value || 'Not provided'}</Text>
   </View>
 );
+
+const InviteTeamMemberButton = ({ teamCode, onInviteSent }) => {
+  const [modalVisible, setModalVisible] = useState(false);
+  const [email, setEmail] = useState('');
+  const [isInviting, setIsInviting] = useState(false);
+  const inputRef = React.useRef(null);
+
+  useEffect(() => {
+    if (modalVisible && inputRef.current) {
+      setTimeout(() => {
+        inputRef.current.focus();
+      }, 300);
+    }
+  }, [modalVisible]);
+
+  const handleSendInvite = async () => {
+    if (!email || !email.trim()) {
+      Alert.alert('Error', 'Please enter an email address');
+      return;
+    }
+
+    Keyboard.dismiss();
+    setIsInviting(true);
+    
+    try {
+      if (!auth.currentUser) {
+        throw new Error("You must be logged in to send invitations");
+      }
+      
+      // Generate a safer invitation ID that doesn't use encodeURIComponent
+      // Replace @ and . with _ to avoid Firebase path issues
+      const safeEmail = email.trim().replace(/[@.]/g, '_');
+      const uniqueInviteId = `${safeEmail}_${Date.now()}`;
+      const invitationRef = ref(db, `invitations/${uniqueInviteId}`);
+      
+      // Get owner profile for name
+      const ownerProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+      const ownerSnapshot = await get(ownerProfileRef);
+      const ownerData = ownerSnapshot.exists() ? ownerSnapshot.val() : {};
+      
+      const ownerName = formatName(
+        ownerData.firstName || '', 
+        ownerData.middleName || '', 
+        ownerData.lastName || ''
+      );
+      
+      // Create user with temporary password
+      const result = await createUserWithTempPassword(
+        email.trim(),
+        teamCode,
+        ownerName,
+        auth.currentUser.uid,
+        uniqueInviteId // Pass the unique ID to avoid conflicts
+      );
+      
+      if (result.success) {
+        await logAudit(
+          AUDIT_ACTIONS.MEMBER_INVITED, 
+          { inviteeEmail: email.trim() },
+          auth.currentUser.uid
+        );
+
+        const successMessage = `Invitation created successfully for ${email.trim()}!\n\nTemporary password: ${result.password}\n\nPlease share these credentials with the user manually.`;
+
+        Alert.alert(
+          'Success',
+          successMessage,
+          [{ text: 'OK', onPress: () => {
+            setEmail('');
+            setModalVisible(false);
+            if (onInviteSent) onInviteSent();
+          }}]
+        );
+      } else {
+        throw new Error(result.error || 'Failed to create user and send invitation');
+      }
+    } catch (error) {
+      console.error('Error sending invitation:', error);
+      Alert.alert('Error', 'Failed to send invitation: ' + error.message);
+    } finally {
+      setIsInviting(false);
+    }
+  };
+  
+  return (
+    <>
+      <TouchableOpacity
+        style={styles.inviteButton}
+        onPress={() => setModalVisible(true)}
+      >
+        <Ionicons name="person-add" size={20} color="#FFFFFF" />
+        <Text style={styles.inviteButtonText}>Invite Team Member</Text>
+      </TouchableOpacity>
+      
+      <Modal
+        visible={modalVisible}
+        transparent={true}
+        animationType="none"
+      >
+        <View style={{
+          flex: 1,
+          backgroundColor: 'rgba(0,0,0,0.5)',
+        }}>
+          <View style={{
+            position: 'absolute',
+            top: 100,
+            left: 20,
+            right: 20,
+            backgroundColor: 'white',
+            borderRadius: 15,
+            padding: 20,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.3,
+            shadowRadius: 4,
+            elevation: 5,
+          }}>
+            <Text style={{
+              fontSize: 18,
+              fontWeight: 'bold',
+              marginBottom: 15,
+              textAlign: 'center',
+              color: '#000'
+            }}>Invite Team Member</Text>
+            
+            <TextInput
+              ref={inputRef}
+              style={{
+                borderWidth: 1,
+                borderColor: '#ccc',
+                borderRadius: 10,
+                padding: 15,
+                fontSize: 16,
+                color: '#000',
+                backgroundColor: '#fff',
+                marginBottom: 20
+              }}
+              placeholder="Enter email address"
+              placeholderTextColor="#888"
+              value={email}
+              onChangeText={setEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCompleteType="email"
+              textContentType="emailAddress"
+              clearButtonMode="while-editing"
+            />
+            
+            <View style={{
+              flexDirection: 'row',
+              justifyContent: 'space-between'
+            }}>
+              <TouchableOpacity
+                style={{
+                  flex: 1,
+                  marginRight: 10,
+                  backgroundColor: '#f2f2f2',
+                  padding: 15,
+                  borderRadius: 10,
+                  alignItems: 'center'
+                }}
+                onPress={() => {
+                  Keyboard.dismiss();
+                  setModalVisible(false);
+                }}
+              >
+                <Text style={{
+                  color: '#666',
+                  fontWeight: 'bold',
+                  fontSize: 16
+                }}>Cancel</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={{
+                  flex: 1,
+                  backgroundColor: '#007AFF',
+                  padding: 15,
+                  borderRadius: 10,
+                  alignItems: 'center'
+                }}
+                onPress={handleSendInvite}
+                disabled={isInviting}
+              >
+                {isInviting ? (
+                  <ActivityIndicator size="small" color="#FFF" />
+                ) : (
+                  <Text style={{
+                    color: '#FFF',
+                    fontWeight: 'bold',
+                    fontSize: 16
+                  }}>Invite</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+            
+            <TouchableOpacity
+              style={{
+                position: 'absolute',
+                top: 10,
+                right: 10,
+                padding: 5
+              }}
+              onPress={() => {
+                Keyboard.dismiss();
+                setModalVisible(false);
+              }}
+            >
+              <Ionicons name="close" size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </>
+  );
+};
 
 const styles = StyleSheet.create({
   container: {
@@ -953,16 +1152,15 @@ const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
+    justifyContent: 'flex-end',
   },
   modalContent: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 15,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
     padding: 20,
     width: '100%',
-    maxWidth: 400,
+    paddingBottom: Platform.OS === 'ios' ? 40 : 20
   },
   modalTitle: {
     fontSize: 20,
@@ -978,6 +1176,7 @@ const styles = StyleSheet.create({
     padding: 12,
     fontSize: 16,
     marginBottom: 20,
+    backgroundColor: '#F9F9F9'
   },
   modalButtons: {
     flexDirection: 'row',
@@ -1002,6 +1201,59 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   inviteModalButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  simpleModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  simpleModalContent: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    width: '100%',
+    paddingBottom: Platform.OS === 'ios' ? 40 : 20
+  },
+  simpleModalTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#000000',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  simpleModalInput: {
+    borderWidth: 1,
+    borderColor: '#ccc',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 15,
+  },
+  simpleModalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  simpleModalButton: {
+    flex: 1,
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  simpleModalCancelButton: {
+    backgroundColor: '#F2F2F2',
+  },
+  simpleModalCancelButtonText: {
+    color: '#666666',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  simpleModalInviteButton: {
+    backgroundColor: '#007AFF',
+  },
+  simpleModalInviteButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',

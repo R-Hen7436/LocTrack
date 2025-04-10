@@ -87,8 +87,8 @@ const formatUserName = (userData) => {
   if (!userData) return '';
   
   // Create a clean name from firstName and lastName
-  const firstName = userData.firstName && userData.firstName.trim() ? userData.firstName.trim() : '';
-  const lastName = userData.lastName && userData.lastName.trim() ? userData.lastName.trim() : '';
+  const firstName = userData.firstName && userData.firstName.trim ? userData.firstName.trim() : '';
+  const lastName = userData.lastName && userData.lastName.trim ? userData.lastName.trim() : '';
   
   // Build the full name
   if (firstName && lastName) {
@@ -315,19 +315,16 @@ const isSubZoneCrossingPolygonEdges = (subZone, polygon) => {
 
   for (let i = 0; i < polygon.length; i++) {
     let p1 = polygon[i];
-    let p2 = polygon[(i + 1) % polygon.length]; // Next point in the polygon
-
-    // Compute the closest distance from the subzone center to the edge
+    let p2 = polygon[(i + 1) % polygon.length];
     const distance = distanceFromPointToLine(subZone, p1, p2);
 
     if (distance < radius) {
-      return true; // Subzone crosses the edge
+      return true;
     }
   }
   return false;
 };
 
-// Function to compute the shortest distance from a point to a line segment
 const distanceFromPointToLine = (point, lineStart, lineEnd) => {
   const A = point.latitude - lineStart.latitude;
   const B = point.longitude - lineStart.longitude;
@@ -931,9 +928,29 @@ return (
           coordinate={currentLocation}
         />
       )}
-      {/* Don't render current user's marker from usersLocations if we're already showing CurrentUserMarker */}
-      {Object.entries(usersLocations)
-        .filter(([userId]) => userId !== auth.currentUser?.uid) // Filter out current user
+      {usersLocations
+        .filter(([userId, userData]) => {
+          if (userId === auth.currentUser?.uid) return false;
+          
+          if (userData.role === 'admin' || userData.isAdmin) {
+            const currentUserProfile = usersLocations[auth.currentUser?.uid];
+            if (!currentUserProfile?.isAdmin && currentUserProfile?.role !== 'admin') {
+              return false;
+            }
+          }
+          
+          if (userRole === 'member') {
+            const currentUserProfile = usersLocations[auth.currentUser?.uid];
+            return userData.teamCode === currentUserProfile?.teamCode;
+          }
+          
+          if (userRole === 'owner') {
+            const currentUserProfile = usersLocations[auth.currentUser?.uid];
+            return userData.teamCode === currentUserProfile?.teamCode;
+          }
+          
+          return true;
+        })
         .map(([userId, userData]) => (
           <CustomMarker
             key={userId}

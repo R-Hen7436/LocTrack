@@ -182,15 +182,106 @@ export default function UserDetail({ route, navigation }) {
             try {
               const db = getDatabase();
               
-              // Delete user from database
-              await remove(ref(db, `users/${userId}`));
+              // Check and delete from Firebase Auth
+              try {
+                // Note: Admin SDK is required to delete other users
+                // This code will only work if deleting the currently logged-in user
+                console.log('Attempting to delete auth account');
+                const auth = getAuth();
+                const currentUser = auth.currentUser;
+                
+                // For security, we'll only attempt this if it matches the current user
+                if (currentUser && currentUser.uid === userId) {
+                  await deleteUser(currentUser);
+                  console.log('Auth user deleted successfully');
+                } else {
+                  console.log('Cannot delete auth account - not current user');
+                  // In a real app with Admin SDK, you would use admin.auth().deleteUser(uid)
+                }
+              } catch (authError) {
+                console.error('Error deleting auth user:', authError);
+                // Continue with database deletion even if auth deletion fails
+              }
               
-              // Delete location data
-              await remove(ref(db, `UsersCurrentLocation/${userId}`));
+              // Delete user invitations if any
+              try {
+                console.log('Checking for user invitations');
+                const invitationsRef = ref(db, 'invitations');
+                const invitationsSnapshot = await get(invitationsRef);
+                
+                if (invitationsSnapshot.exists()) {
+                  let foundInvitations = false;
+                  invitationsSnapshot.forEach(async (inviteSnapshot) => {
+                    const inviteData = inviteSnapshot.val();
+                    if (inviteData.email === userData.email) {
+                      console.log('Deleting invitation for email:', userData.email);
+                      await remove(ref(db, `invitations/${inviteSnapshot.key}`));
+                      foundInvitations = true;
+                    }
+                  });
+                  if (!foundInvitations) {
+                    console.log('No invitations found for this user');
+                  }
+                }
+              } catch (inviteError) {
+                console.error('Error deleting invitations:', inviteError);
+              }
+              
+              // Delete from team members if part of a team
+              if (userData.teamCode) {
+                console.log('Removing from team members');
+                // Find all teams and remove user from members
+                const teamsRef = ref(db, 'teams');
+                const teamsSnapshot = await get(teamsRef);
+                
+                if (teamsSnapshot.exists()) {
+                  let teamOperations = [];
+                  teamsSnapshot.forEach((teamSnapshot) => {
+                    const teamData = teamSnapshot.val();
+                    if (teamData.members && teamData.members[userId]) {
+                      console.log('Removing from team:', teamSnapshot.key);
+                      teamOperations.push(remove(ref(db, `teams/${teamSnapshot.key}/members/${userId}`)));
+                    }
+                  });
+                  
+                  // Execute all team operations
+                  if (teamOperations.length > 0) {
+                    await Promise.all(teamOperations);
+                    console.log('All team member records deleted');
+                  }
+                }
+              }
               
               // If owner, delete team
               if (userData.role === 'owner' && userData.teamCode) {
+                console.log('Deleting team:', userData.teamCode);
                 await remove(ref(db, `teams/${userData.teamCode}`));
+                // Wait a moment to ensure operation completes
+                await new Promise(resolve => setTimeout(resolve, 500));
+              }
+              
+              // Delete user's location data
+              console.log('Deleting location data');
+              await remove(ref(db, `UsersCurrentLocation/${userId}`));
+              // Wait a moment to ensure operation completes
+              await new Promise(resolve => setTimeout(resolve, 500));
+              
+              // Delete user from database (all user data)
+              console.log('Deleting user from database:', userId);
+              await remove(ref(db, `users/${userId}`));
+              // Wait a moment to ensure operation completes
+              await new Promise(resolve => setTimeout(resolve, 500));
+              
+              // Double check if deletion was successful
+              const checkUserRef = ref(db, `users/${userId}`);
+              const checkSnapshot = await get(checkUserRef);
+              if (checkSnapshot.exists()) {
+                console.error('WARNING: User data still exists after deletion!');
+                // Try again
+                await remove(ref(db, `users/${userId}`));
+                console.log('Second deletion attempt completed');
+              } else {
+                console.log('User deletion confirmed successful');
               }
               
               // Navigate back with success parameter

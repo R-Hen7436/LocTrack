@@ -130,6 +130,18 @@ const validateProductKey = async (productKey, userEmail) => {
     throw new Error('This product key has already been used');
   }
   
+  // Ensure keyType is set to 'owner' if not already specified
+  if (!keyData.keyType) {
+    console.log('Key type not specified, setting to owner');
+    keyData.keyType = 'owner';
+  }
+  
+  // Verify this is an owner key
+  if (keyData.keyType !== 'owner') {
+    console.log('Key is not an owner key:', keyData.keyType);
+    throw new Error('This product key is not valid for owner registration');
+  }
+  
   // Mark the key as used
   const updatedData = {
     ...keyData,
@@ -143,6 +155,29 @@ const validateProductKey = async (productKey, userEmail) => {
   console.log('Successfully updated key as used:', updatedData);
   
   return true;
+};
+
+// Format user display name to include first, middle, and last name
+const formatUserDisplayName = (firstName, middleName, lastName) => {
+  const nameParts = [];
+  
+  if (firstName && firstName.trim()) {
+    nameParts.push(firstName.trim());
+  }
+  
+  if (middleName && middleName.trim()) {
+    nameParts.push(middleName.trim());
+  }
+  
+  if (lastName && lastName.trim()) {
+    nameParts.push(lastName.trim());
+  }
+  
+  // For debugging
+  console.log('Formatting name parts:', { firstName, middleName, lastName });
+  console.log('Formatted display name:', nameParts.join(' '));
+  
+  return nameParts.length > 0 ? nameParts.join(' ') : 'User';
 };
 
 const generateTeamCode = () => {
@@ -159,4 +194,4 @@ const generateTeamCode = () => {
   return result;
 };
 
-export { db, auth, storage, checkDatabaseConnection, generateProductKey, storeProductKey, validateProductKey, generateTeamCode };
+export { db, auth, storage, checkDatabaseConnection, generateProductKey, storeProductKey, validateProductKey, generateTeamCode, formatUserDisplayName };

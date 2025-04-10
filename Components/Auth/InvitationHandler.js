@@ -12,12 +12,37 @@ export const checkPendingInvitations = async (email) => {
     
     if (snapshot.exists()) {
       const invitations = snapshot.val();
-      // Check if there's an invitation for this email
-      if (invitations[encodeURIComponent(email)]) {
+      const encodedEmail = encodeURIComponent(email);
+      
+      // First try the direct key match (for backwards compatibility)
+      if (invitations[encodedEmail]) {
         return {
-          ...invitations[encodeURIComponent(email)],
-          id: encodeURIComponent(email)
+          ...invitations[encodedEmail],
+          id: encodedEmail
         };
+      }
+      
+      // If not found, look for invitation keys that start with the encoded email
+      // This handles our new format where invitations have timestamp suffixes
+      for (const key in invitations) {
+        if (key.startsWith(encodedEmail + '_') || key === encodedEmail) {
+          // This is an invitation for this email
+          return {
+            ...invitations[key],
+            id: key,
+            email: email // Ensure email is set
+          };
+        }
+      }
+      
+      // Also check if an invitation with this actual email exists in invitation data
+      for (const key in invitations) {
+        if (invitations[key].email === email) {
+          return {
+            ...invitations[key],
+            id: key
+          };
+        }
       }
     }
     return null;

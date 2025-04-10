@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, TextInput, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, TextInput, ActivityIndicator, Alert } from 'react-native';
 import { getDatabase, ref, get, query, orderByChild, set } from 'firebase/database';
 import { Ionicons } from '@expo/vector-icons';
 import { getAuth, signOut } from 'firebase/auth';
@@ -30,6 +30,23 @@ export default function AdminDashboard({ navigation, route }) {
   useEffect(() => {
     if (route.params?.deletedUserId) {
       console.log('User was deleted, removing from list:', route.params.deletedUserId);
+      
+      // Check if the user still exists in the database
+      const checkIfUserStillExists = async () => {
+        const db = getDatabase();
+        const userRef = ref(db, `users/${route.params.deletedUserId}`);
+        const snapshot = await get(userRef);
+        
+        if (snapshot.exists()) {
+          console.error('WARNING: User still exists in database after deletion attempt!', route.params.deletedUserId);
+          console.log('User data still in database:', JSON.stringify(snapshot.val()));
+        } else {
+          console.log('Confirmed: User successfully removed from database');
+        }
+      };
+      
+      checkIfUserStillExists();
+      
       // Update the users list by removing the deleted user
       setUsers(prevUsers => prevUsers.filter(user => user.id !== route.params.deletedUserId));
       setFilteredUsers(prevUsers => prevUsers.filter(user => user.id !== route.params.deletedUserId));
@@ -60,18 +77,26 @@ export default function AdminDashboard({ navigation, route }) {
   React.useLayoutEffect(() => {
     navigation.setOptions({
       headerRight: () => (
-        <TouchableOpacity
-          onPress={async () => {
-            try {
-              await signOut(getAuth());
-            } catch (error) {
-              console.error('Error logging out:', error);
-            }
-          }}
-          style={{ marginRight: 15 }}
-        >
-          <Ionicons name="log-out-outline" size={24} color="#FF3B30" />
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row' }}>
+          <TouchableOpacity
+            onPress={handleRefresh}
+            style={{ marginRight: 15 }}
+          >
+            <Ionicons name="refresh" size={24} color="#007AFF" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={async () => {
+              try {
+                await signOut(getAuth());
+              } catch (error) {
+                console.error('Error logging out:', error);
+              }
+            }}
+            style={{ marginRight: 15 }}
+          >
+            <Ionicons name="log-out-outline" size={24} color="#FF3B30" />
+          </TouchableOpacity>
+        </View>
       ),
     });
   }, [navigation]);
@@ -84,19 +109,35 @@ export default function AdminDashboard({ navigation, route }) {
 
   const loadUsers = async () => {
     setLoading(true);
-    const db = getDatabase();
-    const usersRef = ref(db, 'users');
-    const snapshot = await get(usersRef);
-    
-    if (snapshot.exists()) {
-      const usersData = [];
-      let activeCount = 0;
-      let ownerCount = 0;
-      let memberCount = 0;
+    try {
+      console.log('Loading users from database...');
+      const db = getDatabase();
+      const usersRef = ref(db, 'users');
+      
+      const snapshot = await get(usersRef);
+      console.log('Got snapshot, exists:', snapshot.exists());
+      
+      if (snapshot.exists()) {
+        const usersData = [];
+        let activeCount = 0;
+        let ownerCount = 0;
+        let memberCount = 0;
+        
+        let foundValues = 0;
+        let missingProfileCount = 0;
 
-      snapshot.forEach((child) => {
-        const userData = child.val().profile;
-        if (userData) {
+        snapshot.forEach((child) => {
+          foundValues++;
+          console.log(`Processing user ${child.key}`);
+          
+          // Check if profile data exists
+          const userData = child.val().profile;
+          if (!userData) {
+            console.warn(`User ${child.key} missing profile data!`);
+            missingProfileCount++;
+            return;
+          }
+          
           usersData.push({
             id: child.key,
             ...userData
@@ -105,25 +146,41 @@ export default function AdminDashboard({ navigation, route }) {
           if (userData.lastActive) activeCount++;
           if (userData.role === 'owner') ownerCount++;
           if (userData.role === 'member') memberCount++;
-        }
-      });
+        });
 
-      // Sort by registration date (newest first)
-      usersData.sort((a, b) => {
-        if (!a.createdAt || !b.createdAt) return 0;
-        return new Date(b.createdAt) - new Date(a.createdAt);
-      });
+        console.log(`Found ${foundValues} total users, ${missingProfileCount} missing profiles, ${usersData.length} valid users`);
 
-      setUsers(usersData);
-      setFilteredUsers(usersData);
-      setStats({
-        totalUsers: usersData.length,
-        activeUsers: activeCount,
-        totalOwners: ownerCount,
-        totalMembers: memberCount
-      });
+        // Sort by registration date (newest first)
+        usersData.sort((a, b) => {
+          if (!a.createdAt || !b.createdAt) return 0;
+          return new Date(b.createdAt) - new Date(a.createdAt);
+        });
+
+        setUsers(usersData);
+        setFilteredUsers(usersData);
+        setStats({
+          totalUsers: usersData.length,
+          activeUsers: activeCount,
+          totalOwners: ownerCount,
+          totalMembers: memberCount
+        });
+      } else {
+        console.warn('No users found in database!');
+        setUsers([]);
+        setFilteredUsers([]);
+        setStats({
+          totalUsers: 0,
+          activeUsers: 0,
+          totalOwners: 0,
+          totalMembers: 0
+        });
+      }
+    } catch (error) {
+      console.error('Error loading users:', error);
+      Alert.alert('Error', 'Failed to load users. Please try again.');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const filterUsers = () => {
@@ -168,6 +225,215 @@ export default function AdminDashboard({ navigation, route }) {
       setUsers(updatedUsers);
     } catch (error) {
       console.error('Error toggling user status:', error);
+    }
+  };
+
+  const handleRefresh = () => {
+    Alert.alert(
+      'Refresh Users',
+      'Do you want to refresh the user list?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Refresh',
+          onPress: () => {
+            console.log('Manually refreshing user list');
+            loadUsers();
+          }
+        },
+        {
+          text: 'Deep Check',
+          onPress: () => {
+            console.log('Performing deep check of user data');
+            checkDatabaseIntegrity();
+          }
+        },
+        {
+          text: 'Repair Data',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert(
+              'Repair Database',
+              'This will attempt to fix common issues with user data. Continue?',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                { 
+                  text: 'Repair',
+                  style: 'destructive',
+                  onPress: () => repairDatabaseIntegrity()
+                }
+              ]
+            );
+          }
+        }
+      ]
+    );
+  };
+  
+  const checkDatabaseIntegrity = async () => {
+    try {
+      setLoading(true);
+      console.log('Starting database integrity check...');
+      
+      const db = getDatabase();
+      
+      console.log('Checking users path...');
+      const checkPaths = ['users', 'UsersCurrentLocation', 'teams', 'invitations'];
+      
+      for (const path of checkPaths) {
+        try {
+          const pathRef = ref(db, path);
+          const snapshot = await get(pathRef);
+          console.log(`Path '${path}' exists:`, snapshot.exists());
+          if (snapshot.exists()) {
+            const childCount = Object.keys(snapshot.val() || {}).length;
+            console.log(`Path '${path}' has ${childCount} children`);
+          }
+        } catch (pathError) {
+          console.error(`Error checking path '${path}':`, pathError);
+        }
+      }
+      
+      console.log('Checking for users with missing profiles...');
+      const usersRef = ref(db, 'users');
+      const usersSnapshot = await get(usersRef);
+      
+      if (usersSnapshot.exists()) {
+        let missingProfileCount = 0;
+        let incompleteProfileCount = 0;
+        
+        usersSnapshot.forEach(child => {
+          const userData = child.val();
+          if (!userData.profile) {
+            console.warn(`User ${child.key} is missing profile data entirely`);
+            missingProfileCount++;
+          } else {
+            // Check for required fields
+            const profile = userData.profile;
+            if (!profile.email || !profile.role) {
+              console.warn(`User ${child.key} has incomplete profile data:`, profile);
+              incompleteProfileCount++;
+            }
+          }
+        });
+        
+        if (missingProfileCount > 0 || incompleteProfileCount > 0) {
+          console.error(`Found ${missingProfileCount} users with missing profiles and ${incompleteProfileCount} with incomplete profiles`);
+          Alert.alert(
+            'Database Issues Found',
+            `Found ${missingProfileCount} users with missing profiles and ${incompleteProfileCount} with incomplete profiles. Check console for details.`
+          );
+        } else {
+          console.log('All users have complete profiles');
+          Alert.alert('Check Complete', 'All users have valid profile data. Issue may be with permissions or how data is being queried.');
+        }
+      } else {
+        console.warn('No users found in database!');
+        Alert.alert('No Users Found', 'No users found in the database. This may indicate a permissions issue or data structure problem.');
+      }
+    } catch (error) {
+      console.error('Error during database integrity check:', error);
+      Alert.alert('Error', 'Failed to check database integrity. See console for details.');
+    } finally {
+      setLoading(false);
+      loadUsers(); // Refresh the user list after check
+    }
+  };
+
+  const repairDatabaseIntegrity = async () => {
+    try {
+      setLoading(true);
+      console.log('Starting database repair...');
+      
+      const db = getDatabase();
+      const usersRef = ref(db, 'users');
+      const usersSnapshot = await get(usersRef);
+      
+      if (!usersSnapshot.exists()) {
+        console.warn('No users found to repair!');
+        Alert.alert('Error', 'No users found in database to repair');
+        return;
+      }
+      
+      let repairCount = 0;
+      let errorCount = 0;
+      
+      // For each user in the database
+      const repairOperations = [];
+      
+      usersSnapshot.forEach(child => {
+        const userId = child.key;
+        const userData = child.val();
+        
+        // Check if profile exists
+        if (!userData.profile) {
+          console.log(`Repairing missing profile for user ${userId}`);
+          
+          // Create a default profile
+          const defaultProfile = {
+            email: userData.email || 'unknown@example.com',
+            firstName: '',
+            lastName: '',
+            role: 'member',
+            createdAt: new Date().toISOString(),
+          };
+          
+          // Add to repair operations
+          repairOperations.push(
+            set(ref(db, `users/${userId}/profile`), defaultProfile)
+              .then(() => {
+                console.log(`Fixed profile for user ${userId}`);
+                repairCount++;
+              })
+              .catch(error => {
+                console.error(`Failed to fix profile for user ${userId}:`, error);
+                errorCount++;
+              })
+          );
+        }
+        
+        // Check if UsersCurrentLocation exists for this user
+        repairOperations.push(
+          get(ref(db, `UsersCurrentLocation/${userId}`))
+            .then(locSnapshot => {
+              if (!locSnapshot.exists()) {
+                console.log(`Adding missing location data for user ${userId}`);
+                return set(ref(db, `UsersCurrentLocation/${userId}`), {
+                  Latitude: null,
+                  Longitude: null,
+                  Accuracy: null,
+                  Timestamp: new Date().toISOString(),
+                  userId: userId
+                })
+                .then(() => {
+                  console.log(`Fixed location data for user ${userId}`);
+                  repairCount++;
+                });
+              }
+              return Promise.resolve();
+            })
+            .catch(error => {
+              console.error(`Failed to fix location data for user ${userId}:`, error);
+              errorCount++;
+            })
+        );
+      });
+      
+      // Wait for all repair operations to complete
+      await Promise.all(repairOperations);
+      
+      Alert.alert(
+        'Repair Complete',
+        `Repaired ${repairCount} issues with ${errorCount} errors. Please check the console for details.`
+      );
+      
+      // Reload users after repair
+      loadUsers();
+    } catch (error) {
+      console.error('Error during database repair:', error);
+      Alert.alert('Error', 'Failed to repair database. See console for details.');
+    } finally {
+      setLoading(false);
     }
   };
 

@@ -54,13 +54,17 @@ export default function Register({ navigation }) {
     try {
       const auth = getAuth();
       const db = getDatabase();
+      
+      console.log('Starting registration process, selected role:', role);
 
       // Validate product key for owner registration
+      let isValidOwner = false;
       if (role === 'owner') {
         try {
           console.log('Attempting to validate product key during registration:', productKey.trim());
           await validateProductKey(productKey.trim(), email);
           console.log('Product key validation successful');
+          isValidOwner = true;
         } catch (error) {
           console.error('Product key validation failed:', error.message);
           setError(error.message);
@@ -89,43 +93,28 @@ export default function Register({ navigation }) {
         }
       }
 
+      console.log('Creating user account...');
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      console.log('User created with ID:', userCredential.user.uid);
       
       // Generate team code for owner
       const generatedTeamCode = role === 'owner' ? generateTeamCode() : null;
-      console.log('Generated Team Code:', generatedTeamCode); // Debug log
+      console.log('Generated Team Code:', generatedTeamCode);
       
-      // Save user profile data with role
-      const userProfile = {
-        firstName: firstName.trim(),
-        lastName: lastName.trim(),
-        middleName: middleName.trim() || null,
-        email: email.trim(),
-        createdAt: new Date().toISOString(),
-        role: role,
-        teamCode: role === 'owner' ? generatedTeamCode : teamCode.trim(),
-        isOwner: role === 'owner',
-        isAdmin: false
-      };
+      // First update the display name in Firebase Auth
+      await updateProfile(userCredential.user, {
+        displayName: formatUserDisplayName(firstName, middleName, lastName)
+      });
+      console.log('User display name updated to:', formatUserDisplayName(firstName, middleName, lastName));
       
-      console.log('Saving User Profile:', userProfile); // Debug log
+      // Then create the user profile with full data
+      await createUserProfile(
+        userCredential.user, 
+        generatedTeamCode, 
+        role === 'owner'
+      );
+      console.log('User profile created with role:', role === 'owner' ? 'owner' : 'member');
       
-      await set(ref(db, `users/${userCredential.user.uid}/profile`), userProfile);
-
-      // If owner, create team entry
-      if (role === 'owner') {
-        const teamData = {
-          ownerId: userCredential.user.uid,
-          createdAt: new Date().toISOString(),
-          name: `${firstName.trim()}'s Team`,
-          members: {},
-          teamCode: generatedTeamCode // Add team code to team data
-        };
-        
-        console.log('Creating Team:', teamData); // Debug log
-        await set(ref(db, `teams/${generatedTeamCode}`), teamData);
-      }
-
       // Initialize location data
       await set(ref(db, `UsersCurrentLocation/${userCredential.user.uid}`), {
         Latitude: null,
@@ -134,13 +123,14 @@ export default function Register({ navigation }) {
         Timestamp: new Date().toISOString(),
         userId: userCredential.user.uid
       });
+      console.log('User location data initialized');
       
       try {
         await sendEmailVerification(userCredential.user);
         console.log('Verification email sent successfully');
         setMessage('Registration successful! Please check your email for verification.');
         if (role === 'owner') {
-          setMessage(message + `\nYour team code is: ${generatedTeamCode}`);
+          setMessage(msg => msg + `\nYour team code is: ${generatedTeamCode}`);
         }
       } catch (error) {
         console.error('Error sending verification email:', error);
@@ -160,10 +150,6 @@ export default function Register({ navigation }) {
         );
       }, 3000);
 
-      // Update the display name in Firebase Auth
-      await updateProfile(userCredential.user, {
-        displayName: formatUserDisplayName(firstName, lastName)
-      });
     } catch (error) {
       console.error('Registration Error:', error);
       setError(error.message);
@@ -173,6 +159,8 @@ export default function Register({ navigation }) {
 
   const createUserProfile = async (user, newTeamCode, isOwner) => {
     try {
+      console.log(`Creating profile for user ${user.uid}, isOwner: ${isOwner}, teamCode: ${newTeamCode || teamCode}`);
+      
       const database = getDatabase();
       const userProfileRef = ref(database, `users/${user.uid}/profile`);
       
@@ -180,38 +168,53 @@ export default function Register({ navigation }) {
       const profileData = {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
+        middleName: middleName.trim() || '',
         email: email.trim().toLowerCase(),
         role: isOwner ? 'owner' : 'member',
-        teamCode: isOwner ? newTeamCode : teamCode,
+        teamCode: isOwner ? newTeamCode : teamCode.trim(),
         photoURL: '',
+        isOwner: isOwner, // Explicitly set the isOwner flag
         createdAt: new Date().toISOString(),
       };
       
+      console.log('Saving profile data:', profileData);
+      
       // Save user profile
       await set(userProfileRef, profileData);
+      console.log('Profile data saved successfully');
       
       // If owner, create team record
       if (isOwner) {
+        console.log(`Creating new team with code ${newTeamCode}`);
         const teamRef = ref(database, `teams/${newTeamCode}`);
-        await set(teamRef, {
+        const teamData = {
           name: `${firstName.trim()}'s Team`,
           createdBy: user.uid,
+          ownerId: user.uid,
           createdAt: new Date().toISOString(),
           members: {
             [user.uid]: {
               role: 'owner',
               joinedAt: new Date().toISOString(),
             }
-          }
-        });
+          },
+          teamCode: newTeamCode
+        };
+        
+        await set(teamRef, teamData);
+        console.log('Team created successfully');
       } 
       // If member, add to existing team
       else if (teamCode) {
+        console.log(`Adding user to existing team with code ${teamCode}`);
         const teamMemberRef = ref(database, `teams/${teamCode}/members/${user.uid}`);
         await set(teamMemberRef, {
           role: 'member',
           joinedAt: new Date().toISOString(),
+          email: email.trim().toLowerCase(),
+          name: `${firstName.trim()} ${lastName.trim()}`
         });
+        console.log('User added to team successfully');
       }
       
       return true;
@@ -377,7 +380,7 @@ const styles = StyleSheet.create({
     height: 48,
   },
   button: {
-    backgroundColor: 'black',
+    backgroundColor: '#007AFF',
     padding: 15,
     borderRadius: 5,
     marginBottom: 10,
@@ -388,7 +391,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   link: {
-    color: 'blue',
+    color: '#007AFF',
     textAlign: 'center',
     marginTop: 10,
   },

@@ -101,12 +101,10 @@ export const hasPermission = async (permission) => {
   const userProfile = await getCurrentUserProfile();
   if (!userProfile) return false;
   
-  // Admin always has all permissions
   if (userProfile.isAdmin || userProfile.role === ROLES.ADMIN) {
     return true;
   }
   
-  // Check role-based permissions
   const rolePermissions = permissionMatrix[userProfile.role] || [];
   return rolePermissions.includes(permission);
 };
@@ -120,7 +118,6 @@ export const hasRole = async (role) => {
   const userProfile = await getCurrentUserProfile();
   if (!userProfile) return false;
   
-  // Admin is considered to have all roles
   if (userProfile.isAdmin || userProfile.role === ROLES.ADMIN) {
     return true;
   }
@@ -139,19 +136,15 @@ export const canPerformAction = async (action, resourceType, resourceId) => {
   const userProfile = await getCurrentUserProfile();
   if (!userProfile) return false;
   
-  // Admin can perform any action
   if (userProfile.isAdmin || userProfile.role === ROLES.ADMIN) {
     return true;
   }
   
-  // Special case for team resources
   if (resourceType === 'team') {
-    // Team owners can manage their own team
     if (userProfile.role === ROLES.OWNER && userProfile.teamCode === resourceId) {
       return true;
     }
     
-    // Team members can view their team
     if (userProfile.role === ROLES.MEMBER && 
         userProfile.teamCode === resourceId && 
         action === 'view') {
@@ -159,14 +152,11 @@ export const canPerformAction = async (action, resourceType, resourceId) => {
     }
   }
   
-  // Special case for user resources
   if (resourceType === 'user') {
-    // Users can manage their own profile
     if (userProfile.id === resourceId) {
       return true;
     }
     
-    // Team owners can manage their team members
     if (userProfile.role === ROLES.OWNER && action === 'manage') {
       const db = getDatabase();
       const memberRef = ref(db, `users/${resourceId}/profile`);
