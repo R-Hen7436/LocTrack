@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView, Image, Modal, TextInput, ActivityIndicator, SafeAreaView, KeyboardAvoidingView, Platform, Keyboard, TouchableWithoutFeedback } from 'react-native';
 import { getAuth, signOut, updateProfile } from 'firebase/auth';
-import { ref, get, set, remove } from 'firebase/database';
+import { ref, get, set, remove, onValue } from 'firebase/database';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
@@ -61,10 +61,17 @@ const formatLastSeen = (timestamp) => {
   return lastSeen.toLocaleDateString();
 };
 
+// Add status formatting function before the component definition
+const formatStatus = (status) => {
+  if (!status) return 'Offline';
+  return status.charAt(0).toUpperCase() + status.slice(1);
+};
+
 export default function Profile({ navigation }) {
   const [userProfile, setUserProfile] = useState(null);
   const [teamMembers, setTeamMembers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [userStatus, setUserStatus] = useState('offline'); // Add state for user status
 
   useEffect(() => {
     console.log("Profile component mounted");
@@ -96,6 +103,86 @@ export default function Profile({ navigation }) {
       };
     }, [userProfile?.teamCode]) // Include userProfile.teamCode as a dependency
   );
+
+  // Add a new effect to monitor the user's presence status
+  useEffect(() => {
+    let presenceUnsubscribe = null;
+    
+    const monitorUserPresence = async () => {
+      if (!auth?.currentUser?.uid) return;
+      
+      try {
+        const presenceRef = ref(db, `users/${auth.currentUser.uid}/presence`);
+        presenceUnsubscribe = onValue(presenceRef, (snapshot) => {
+          if (snapshot.exists()) {
+            const presenceData = snapshot.val();
+            setUserStatus(presenceData.status || 'offline');
+          } else {
+            setUserStatus('offline');
+          }
+        });
+      } catch (error) {
+        console.error('Error monitoring presence:', error);
+        setUserStatus('offline');
+      }
+    };
+    
+    monitorUserPresence();
+    
+    return () => {
+      if (presenceUnsubscribe) {
+        presenceUnsubscribe();
+      }
+    };
+  }, []);
+
+  // Add this new effect to monitor team members' presence in real-time
+  useEffect(() => {
+    let presenceUnsubscribers = [];
+    
+    const monitorTeamMembersPresence = () => {
+      // Clear any existing listeners
+      presenceUnsubscribers.forEach(unsubscribe => unsubscribe());
+      presenceUnsubscribers = [];
+      
+      // If no team members or not team owner, do nothing
+      if (teamMembers.length === 0 || userProfile?.role !== 'owner') {
+        return;
+      }
+      
+      // Set up listeners for each team member
+      teamMembers.forEach(member => {
+        if (!member.id) return;
+        
+        const presenceRef = ref(db, `users/${member.id}/presence`);
+        const unsubscribe = onValue(presenceRef, (snapshot) => {
+          if (snapshot.exists()) {
+            const presenceData = snapshot.val();
+            const isOnline = presenceData.status === 'online';
+            const lastSeen = presenceData.lastSeen || '';
+            
+            // Update the team members state with the new status
+            setTeamMembers(prevMembers => 
+              prevMembers.map(m => 
+                m.id === member.id 
+                  ? { ...m, isActive: isOnline, lastSeen: lastSeen }
+                  : m
+              )
+            );
+          }
+        });
+        
+        presenceUnsubscribers.push(unsubscribe);
+      });
+    };
+    
+    monitorTeamMembersPresence();
+    
+    return () => {
+      // Clean up all listeners when component unmounts
+      presenceUnsubscribers.forEach(unsubscribe => unsubscribe());
+    };
+  }, [teamMembers.length, userProfile?.role]); // Only re-run when team members count changes or role changes
 
   React.useLayoutEffect(() => {
     navigation.setOptions({
@@ -281,15 +368,28 @@ export default function Profile({ navigation }) {
             const userRef = ref(db, `users/${member.id}/profile`);
             const userSnapshot = await get(userRef);
             
+            // Get presence data to check online status
+            const presenceRef = ref(db, `users/${member.id}/presence`);
+            const presenceSnapshot = await get(presenceRef);
+            
+            let isOnline = false;
+            let lastSeen = '';
+            
+            if (presenceSnapshot.exists()) {
+              const presenceData = presenceSnapshot.val();
+              isOnline = presenceData.status === 'online';
+              lastSeen = presenceData.lastSeen || '';
+            }
+            
             if (userSnapshot.exists()) {
               const userData = userSnapshot.val();
               return {
                 ...member,
                 name: formatName(userData.firstName || '', userData.middleName || '', userData.lastName || ''),
                 email: userData.email || member.email || '',
-                isActive: userData.isActive !== false,
+                isActive: isOnline, // Use the real-time presence status
                 photoURL: userData.photoURL || '',
-                lastSeen: userData.lastSeen || '',
+                lastSeen: lastSeen || userData.lastSeen || '',
               };
             }
             return member;
@@ -511,6 +611,17 @@ export default function Profile({ navigation }) {
                   <Text style={styles.userRole}>
                     {userProfile?.role ? userProfile.role.charAt(0).toUpperCase() + userProfile.role.slice(1) : 'User'}
                   </Text>
+                  
+                  <View style={styles.statusIndicator}>
+                    <View 
+                      style={[
+                        styles.statusDot, 
+                        { backgroundColor: userStatus === 'online' ? '#4CD964' : '#8E8E93' }
+                      ]} 
+                    />
+                    <Text style={styles.statusText}>{formatStatus(userStatus)}</Text>
+                  </View>
+                  
                   <TouchableOpacity 
                     style={styles.editButton} 
                     onPress={() => navigation.navigate('EditProfile', { userProfile })}
@@ -589,7 +700,7 @@ export default function Profile({ navigation }) {
                               <Text style={styles.memberName}>{item.name || 'Unknown User'}</Text>
                               <Text style={styles.memberEmail}>{item.email || 'No email'}</Text>
                               <Text style={styles.lastSeen}>
-                                {item.isActive ? 'Active now' : `Last seen ${formatLastSeen(item.lastSeen)}`}
+                                {item.isActive ? 'Online' : `Last seen ${formatLastSeen(item.lastSeen)}`}
                               </Text>
                             </View>
                             <View style={[
@@ -1077,10 +1188,19 @@ const styles = StyleSheet.create({
     marginLeft: 10,
   },
   statusIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  statusDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    marginRight: 5,
+    marginRight: 6,
+  },
+  statusText: {
+    fontSize: 14,
+    color: '#666',
   },
   memberStatus: {
     fontSize: 12,
@@ -1226,14 +1346,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
-  },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    position: 'absolute',
-    top: 8,
-    right: 8,
   },
   lastSeen: {
     fontSize: 12,

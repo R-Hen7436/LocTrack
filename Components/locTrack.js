@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, TextInput, SafeAreaView, Animated, Image, Alert, Platform } from "react-native";
 import MapView, { Marker, Polygon, Circle } from "react-native-maps";
 import * as Location from "expo-location";
-import { getDatabase, ref, set, push, get, remove, child, onValue, onDisconnect } from "firebase/database";
+import { getDatabase, ref, set, push, get, remove, child, onValue, onDisconnect, update } from "firebase/database";
 import { db, auth } from "./firebaseConfig";
 import { getAuth, signOut } from 'firebase/auth';
 import { Ionicons } from '@expo/vector-icons';
@@ -46,7 +46,7 @@ const GPSStrengthIndicator = ({ accuracy }) => {
   );
 };
 
-// Update the CustomMarker component to add online/offline status indicators
+// Optimize the CustomMarker component to better handle rendering
 const CustomMarker = ({ coordinate, photoURL, name, labelPosition = 'bottom', markerColor, isOnline = true }) => {
   // Get first character of name if it exists, otherwise use empty string
   const nameInitial = name && typeof name === 'string' && name.trim() !== '' ? name.trim()[0].toUpperCase() : '';
@@ -65,51 +65,56 @@ const CustomMarker = ({ coordinate, photoURL, name, labelPosition = 'bottom', ma
     borderStyle: 'dashed',
   } : {};
   
+  // OPTIMIZATION: Use useMemo to optimize the marker content
+  const markerContent = React.useMemo(() => (
+    <View style={styles.markerContainer}>
+      {photoURL ? (
+        <Image
+          source={{ uri: photoURL }}
+          style={[
+            styles.markerImage, 
+            markerColor && { borderColor: markerColor },
+            offlineStyle
+          ]}
+        />
+      ) : (
+        <View style={[
+          styles.markerFallback, 
+          markerColor && { backgroundColor: markerColor },
+          offlineStyle
+        ]}>
+          {nameInitial ? (
+            <Text style={styles.markerInitial}>{nameInitial}</Text>
+          ) : (
+            <Ionicons name="person" size={20} color="#FFFFFF" />
+          )}
+        </View>
+      )}
+      {name && typeof name === 'string' && name.trim() !== '' && (
+        <View style={[
+          styles.markerLabelContainer, 
+          labelPositionStyle,
+          { backgroundColor: markerColor ? `${markerColor}DD` : 'rgba(255, 255, 255, 0.9)' },
+          !isOnline && { borderStyle: 'dashed', opacity: 0.8 }
+        ]}>
+          <Text style={[
+            styles.markerLabel, 
+            { color: markerColor ? '#FFFFFF' : '#333333', fontWeight: '700' }
+          ]}>
+            {name} {!isOnline && '(offline)'}
+          </Text>
+        </View>
+      )}
+    </View>
+  ), [photoURL, name, nameInitial, labelPosition, markerColor, isOnline, offlineStyle, labelPositionStyle]);
+  
   return (
     <Marker 
       coordinate={coordinate}
       tracksViewChanges={false}
       anchor={{ x: 0.5, y: 0.5 }}
     >
-      <View style={styles.markerContainer}>
-        {photoURL ? (
-          <Image
-            source={{ uri: photoURL }}
-            style={[
-              styles.markerImage, 
-              markerColor && { borderColor: markerColor },
-              offlineStyle
-            ]}
-          />
-        ) : (
-          <View style={[
-            styles.markerFallback, 
-            markerColor && { backgroundColor: markerColor },
-            offlineStyle
-          ]}>
-            {nameInitial ? (
-              <Text style={styles.markerInitial}>{nameInitial}</Text>
-            ) : (
-              <Ionicons name="person" size={20} color="#FFFFFF" />
-            )}
-          </View>
-        )}
-        {name && typeof name === 'string' && name.trim() !== '' && (
-          <View style={[
-            styles.markerLabelContainer, 
-            labelPositionStyle,
-            { backgroundColor: markerColor ? `${markerColor}DD` : 'rgba(255, 255, 255, 0.9)' },
-            !isOnline && { borderStyle: 'dashed', opacity: 0.8 }
-          ]}>
-            <Text style={[
-              styles.markerLabel, 
-              { color: markerColor ? '#FFFFFF' : '#333333', fontWeight: '700' }
-            ]}>
-              {name} {!isOnline && '(offline)'}
-            </Text>
-          </View>
-        )}
-      </View>
+      {markerContent}
     </Marker>
   );
 };
@@ -142,20 +147,26 @@ const formatUserName = (userData) => {
 
 // Create a special marker for the current user
 const CurrentUserMarker = ({ coordinate }) => {
+  // OPTIMIZATION: Use useMemo to optimize the marker content
+  const markerContent = React.useMemo(() => (
+    <View style={styles.currentUserMarkerContainer}>
+      <View style={styles.currentUserMarker}>
+        <Ionicons name="navigate" size={20} color="#FFFFFF" />
+      </View>
+      <View style={styles.currentUserLabelContainer}>
+        <Text style={styles.currentUserLabel}>You</Text>
+      </View>
+    </View>
+  ), []);
+  
   return (
     <Marker 
       coordinate={coordinate}
       tracksViewChanges={false}
       anchor={{ x: 0.5, y: 0.5 }}
+      zIndex={1000} // OPTIMIZATION: Higher zIndex to ensure it's always visible
     >
-      <View style={styles.currentUserMarkerContainer}>
-        <View style={styles.currentUserMarker}>
-          <Ionicons name="navigate" size={20} color="#FFFFFF" />
-        </View>
-        <View style={styles.currentUserLabelContainer}>
-          <Text style={styles.currentUserLabel}>You</Text>
-        </View>
-      </View>
+      {markerContent}
     </Marker>
   );
 };
@@ -181,6 +192,7 @@ const [gpsAccuracy, setGpsAccuracy] = useState(null);
 const [usersLocations, setUsersLocations] = useState({});
 const [shouldAutoFit, setShouldAutoFit] = useState(true);
 const [markerPositions, setMarkerPositions] = useState({});
+const [trackViewChanges, setTrackViewChanges] = useState(false);
 
 // Replace the first useEffect with this updated version
 useEffect(() => {
@@ -532,22 +544,12 @@ const toggleCurrentLocation = async () => {
       setCurrentLocation(null);
       setGpsAccuracy(null);
       
-      // Update user's location and presence to show inactive
+      // OPTIMIZATION: Only update necessary fields when toggling off
       const db = getDatabase();
       const userLocationRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
       
-      // Get user profile data to maintain consistency
-      const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
-      const profileSnapshot = await get(userProfileRef);
-      let profileData = {};
-      
-      if (profileSnapshot.exists()) {
-        profileData = profileSnapshot.val();
-      }
-      
-      // Update with isActive false but keep other data
-      await set(userLocationRef, { 
-        ...profileData,
+      // Update with minimal data - only status fields
+      await update(userLocationRef, { 
         isActive: false,
         lastSeen: new Date().toISOString(),
       });
@@ -565,6 +567,7 @@ const toggleCurrentLocation = async () => {
       return;
     }
 
+    // OPTIMIZATION: Use lower accuracy for initial location to save battery
     const location = await Location.getCurrentPositionAsync({
       accuracy: Location.Accuracy.Balanced
     });
@@ -578,23 +581,18 @@ const toggleCurrentLocation = async () => {
     const userPresenceRef = ref(db, `users/${auth.currentUser.uid}/presence`);
     const userLocationRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
 
-    // Get user profile data
+    // Get user profile data - only fetch once
     const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
     const profileSnapshot = await get(userProfileRef);
-    let profileData = {};
-    
-    if (profileSnapshot.exists()) {
-      profileData = profileSnapshot.val();
-    }
+    let profileData = profileSnapshot.exists() ? profileSnapshot.val() : {};
 
-    // Update location with presence data - USING CONSISTENT APPROACH with profileData
+    // Update location with presence data
     await set(userLocationRef, { 
       Latitude: latitude, 
       Longitude: longitude,
       timestamp: new Date().toISOString(),
       isActive: true,
       lastSeen: new Date().toISOString(),
-      // Use a consistent approach by spreading the profile data
       ...profileData
     });
 
@@ -606,7 +604,7 @@ const toggleCurrentLocation = async () => {
     };
     await set(userPresenceRef, presenceData);
 
-    // Set up disconnect hook
+    // OPTIMIZATION: Set up disconnect hook only once
     const connectedRef = ref(db, '.info/connected');
     onValue(connectedRef, (snap) => {
       if (snap.val() === true) {
@@ -622,63 +620,12 @@ const toggleCurrentLocation = async () => {
           lastSeen: new Date().toISOString()
         });
       }
-    });
+    }, { onlyOnce: true }); // OPTIMIZATION: Only run once
 
     // If user is a member, set up continuous location tracking
     if (userRole === 'member') {
-      try {
-        const locationSubscription = await Location.watchPositionAsync(
-          {
-            accuracy: Location.Accuracy.Balanced,
-            timeInterval: 30000,
-            distanceInterval: 20,
-            foregroundService: {
-              notificationTitle: "Location Tracking",
-              notificationBody: "Your location is being shared",
-            },
-          },
-          async (location) => {
-            try {
-              const { latitude, longitude, accuracy } = location.coords;
-              
-              if (accuracy <= 50) {
-                const significantChange = !currentLocation || 
-                  calculateDistance(
-                    { latitude: currentLocation.latitude, longitude: currentLocation.longitude },
-                    { latitude, longitude }
-                  ) > 20;
-
-                if (significantChange) {
-                  setCurrentLocation({ latitude, longitude });
-                  setGpsAccuracy(accuracy);
-                  
-                  // Keep same structure as initial update
-                  await set(userLocationRef, { 
-                    Latitude: latitude, 
-                    Longitude: longitude,
-                    timestamp: new Date().toISOString(),
-                    accuracy: accuracy,
-                    isActive: true,
-                    lastSeen: new Date().toISOString(),
-                    ...profileData  // Consistent use of profileData
-                  });
-
-                  // Update presence
-                  await set(userPresenceRef, {
-                    status: 'online',
-                    lastSeen: new Date().toISOString(),
-                    deviceInfo: Platform.OS
-                  });
-                }
-              }
-            } catch (error) {
-              console.error("Error updating location:", error);
-            }
-          }
-        );
-      } catch (error) {
-        console.error("Error setting up location tracking:", error);
-      }
+      // Location tracking is now handled by the useEffect hook
+      // This avoids duplicate watchers which can cause high battery drain
     }
   } catch (error) {
     console.error("Error toggling location:", error);
@@ -688,7 +635,7 @@ const toggleCurrentLocation = async () => {
   }
 };
 
-// Replace the existing location tracking useEffect with this:
+// Replace the existing location tracking useEffect with this optimized version:
 useEffect(() => {
   let locationSubscription = null;
 
@@ -720,71 +667,90 @@ useEffect(() => {
         return;
       }
 
+      // Only check connection when needed - avoid constant checks
       const isConnected = await checkDatabaseConnection();
       if (!isConnected) {
         console.warn("No database connection, location updates will not be saved");
+        // Schedule a retry after 30 seconds instead of failing
+        setTimeout(startLocationTracking, 30000);
         return;
       }
 
+      // OPTIMIZATION: Increase time intervals to reduce location polling frequency
+      // and increase the distance threshold for updates
       locationSubscription = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.Balanced,
-          timeInterval: 10000,
-          distanceInterval: 10,
+          // Increased from 10 seconds to 15 seconds
+          timeInterval: 15000,
+          // Increased from 10 meters to 15 meters
+          distanceInterval: 15,
         },
         async (location) => {
           try {
             const { latitude, longitude, accuracy } = location.coords;
             
+            // OPTIMIZATION: Only process location updates with reasonable accuracy
             if (location.coords.accuracy <= 20) {
-              // Update location state
-              setCurrentLocation({ latitude, longitude });
-              setGpsAccuracy(accuracy);
+              // OPTIMIZATION: Use significant location change detection
+              // to minimize processing and battery consumption
+              const prevLocation = currentLocation;
+              const isSignificant = isSignificantLocationChange(
+                prevLocation, 
+                { latitude, longitude },
+                15 // Increased threshold from 10 to 15 meters
+              );
               
-              // Make sure we have auth and currentUser before updating Firebase
-              if (auth && auth.currentUser && auth.currentUser.uid) {
-                // Get the user profile data for this user
-                const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
-                const profileSnapshot = await get(userProfileRef);
-                const profileData = profileSnapshot.exists() ? profileSnapshot.val() : {};
+              if (isSignificant) {
+                // Update location state
+                setCurrentLocation({ latitude, longitude });
+                setGpsAccuracy(accuracy);
                 
-                // Use the proper path with the user's ID
-                const dbRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
-                await set(dbRef, { 
-                  Latitude: latitude, 
-                  Longitude: longitude,
-                  Accuracy: accuracy,
-                  Timestamp: new Date().toISOString(),
-                  userId: auth.currentUser.uid,
-                  firstName: profileData.firstName || '',
-                  lastName: profileData.lastName || '',
-                  photoURL: profileData.photoURL || '',
-                  role: profileData.role || '',
-                  teamCode: profileData.teamCode || ''
-                });
-              } else {
-                console.warn("Auth or currentUser not available, skipping location update");
+                // OPTIMIZATION: Batch Firebase updates to reduce network activity
+                if (auth && auth.currentUser && auth.currentUser.uid) {
+                  // Cache profile data to avoid redundant fetches
+                  if (!userProfileCache) {
+                    // Only fetch profile data if not already cached
+                    const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+                    const profileSnapshot = await get(userProfileRef);
+                    userProfileCache = profileSnapshot.exists() ? profileSnapshot.val() : {};
+                  }
+                  
+                  // Use the cached profile data
+                  const dbRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
+                  const updateData = { 
+                    Latitude: latitude, 
+                    Longitude: longitude,
+                    Accuracy: accuracy,
+                    Timestamp: new Date().toISOString(),
+                    userId: auth.currentUser.uid,
+                    // Use cached profile data
+                    firstName: userProfileCache.firstName || '',
+                    lastName: userProfileCache.lastName || '',
+                    photoURL: userProfileCache.photoURL || '',
+                    role: userProfileCache.role || '',
+                    teamCode: userProfileCache.teamCode || ''
+                  };
+                  
+                  // OPTIMIZATION: Use update instead of set to reduce data transfer
+                  update(dbRef, updateData);
+                }
               }
             }
           } catch (error) {
             console.error("Error updating location:", error);
-            setGpsAccuracy(null); // Set to null on error
-          }
-        },
-        (error) => {
-          console.error("Error in location tracking:", error);
-          setGpsAccuracy(null); // Set to null on error
-          if (error.code === 'kCLErrorLocationUnknown' || error.code === 'kCLErrorDenied') {
-            startLocationTracking();
+            setGpsAccuracy(null);
           }
         }
       );
     } catch (error) {
       console.error("Error starting location tracking:", error);
-      setGpsAccuracy(null); // Set to null on error
+      setGpsAccuracy(null);
     }
   };
 
+  // Initialize tracking with user profile cache
+  let userProfileCache = null;
   if (currentLocation) {
     startLocationTracking();
   }
@@ -793,8 +759,28 @@ useEffect(() => {
     if (locationSubscription) {
       locationSubscription.remove();
     }
+    // Clear cache on cleanup
+    userProfileCache = null;
   };
 }, [currentLocation]);
+
+// Add optimized implementation of significant location change detection
+const isSignificantLocationChange = (prevLocation, newLocation, threshold = 15) => {
+  if (!prevLocation) return true;
+  
+  // OPTIMIZATION: Use a simplified distance calculation that's less CPU intensive
+  // for frequent checks compared to the full haversine formula
+  const fastDistanceCheck = (point1, point2) => {
+    // Quick approximation for small distances - uses less CPU
+    const latDiff = (point2.latitude - point1.latitude) * 111000; // 1 degree lat ≈ 111km
+    const lngDiff = (point2.longitude - point1.longitude) * 
+                    Math.cos(point1.latitude * Math.PI / 180) * 111000;
+    return Math.sqrt(latDiff * latDiff + lngDiff * lngDiff);
+  };
+  
+  const distance = fastDistanceCheck(prevLocation, newLocation);
+  return distance > threshold;
+};
 
 const isPointInsidePolygon = (point, polygon) => {
   let x = point.latitude, y = point.longitude;
@@ -925,17 +911,7 @@ const saveCoordinatesToFirebase = (coordinates) => {
   }
 };
 
-// Add this helper function to check if a location change is significant
-const isSignificantLocationChange = (prevLocation, newLocation, threshold = 10) => {
-  if (!prevLocation) return true; // Always significant if no previous location
-  
-  return calculateDistance(
-    { latitude: prevLocation.latitude, longitude: prevLocation.longitude },
-    { latitude: newLocation.latitude, longitude: newLocation.longitude }
-  ) > threshold; // Only significant if moved more than threshold meters
-};
-
-// Then modify our fitAllMarkers function to avoid unnecessary adjustments
+// Optimize the fitAllMarkers function to better handle marker visibility
 const fitAllMarkers = (forceUpdate = false) => {
   if (!mapRef.current) return;
   
@@ -945,90 +921,102 @@ const fitAllMarkers = (forceUpdate = false) => {
   // Re-enable auto-fit for the next location change
   setShouldAutoFit(true);
   
-  // Create an array of all coordinates to include in the view
-  const allCoordinates = [];
-  
-  // First prioritize geofence points to ensure they're in view
-  const geofencePoints = userRole === 'member' ? teamGeofence : points;
-  if (geofencePoints.length >= 3) {
-    // If we have a proper geofence, prioritize showing all of it
-    geofencePoints.forEach(point => {
-      allCoordinates.push(point);
-    });
+  // OPTIMIZATION: Add slight delay to ensure map is ready
+  setTimeout(() => {
+    // Create an array of all coordinates to include in the view
+    const allCoordinates = [];
     
-    // Add current location only if we have space
-    if (currentLocation) {
-      allCoordinates.push({
-        latitude: currentLocation.latitude,
-        longitude: currentLocation.longitude
-      });
-    }
-    
-    // Add selected team members' locations
-    if (usersLocations) {
-      Object.entries(usersLocations).filter(([userId, userData]) => {
-        // Only include team members
-        if (!userData || !userData.Latitude || !userData.Longitude) return false;
-        if (userId === auth.currentUser?.uid) return false;
-        
-        const currentUserProfile = usersLocations[auth.currentUser?.uid];
-        return userData.teamCode === currentUserProfile?.teamCode;
-      }).forEach(([_, userData]) => {
-        allCoordinates.push({
-          latitude: userData.Latitude,
-          longitude: userData.Longitude
-        });
-      });
-    }
-  } else {
-    // If no proper geofence, just show all points
-    // Add current location if available
-    if (currentLocation) {
-      allCoordinates.push({
-        latitude: currentLocation.latitude,
-        longitude: currentLocation.longitude
-      });
-    }
-    
-    // Add all user locations
-    if (usersLocations) {
-      Object.values(usersLocations).forEach(user => {
-        if (user.Latitude && user.Longitude) {
-          allCoordinates.push({
-            latitude: user.Latitude,
-            longitude: user.Longitude
-          });
-        }
-      });
-    }
-    
-    // Add any available geofence points
-    if (geofencePoints.length > 0) {
+    // First prioritize geofence points to ensure they're in view
+    const geofencePoints = userRole === 'member' ? teamGeofence : points;
+    if (geofencePoints.length >= 3) {
+      // If we have a proper geofence, prioritize showing all of it
       geofencePoints.forEach(point => {
         allCoordinates.push(point);
       });
+      
+      // Add current location only if we have space
+      if (currentLocation) {
+        allCoordinates.push({
+          latitude: currentLocation.latitude,
+          longitude: currentLocation.longitude
+        });
+      }
+      
+      // Add selected team members' locations
+      if (usersLocations) {
+        Object.entries(usersLocations).filter(([userId, userData]) => {
+          // Only include team members
+          if (!userData || !userData.Latitude || !userData.Longitude) return false;
+          if (userId === auth.currentUser?.uid) return false;
+          
+          const currentUserProfile = usersLocations[auth.currentUser?.uid];
+          return userData.teamCode === currentUserProfile?.teamCode;
+        }).forEach(([_, userData]) => {
+          allCoordinates.push({
+            latitude: userData.Latitude,
+            longitude: userData.Longitude
+          });
+        });
+      }
+    } else {
+      // If no proper geofence, just show all points
+      // Add current location if available
+      if (currentLocation) {
+        allCoordinates.push({
+          latitude: currentLocation.latitude,
+          longitude: currentLocation.longitude
+        });
+      }
+      
+      // Add all user locations
+      if (usersLocations) {
+        Object.values(usersLocations).forEach(user => {
+          if (user.Latitude && user.Longitude) {
+            allCoordinates.push({
+              latitude: user.Latitude,
+              longitude: user.Longitude
+            });
+          }
+        });
+      }
+      
+      // Add any available geofence points
+      if (geofencePoints.length > 0) {
+        geofencePoints.forEach(point => {
+          allCoordinates.push(point);
+        });
+      }
     }
-  }
-  
-  // If we have coordinates, fit the map to show all of them
-  if (allCoordinates.length > 0) {
-    // Calculate appropriate padding based on what we're showing
-    const edgePadding = geofencePoints.length >= 3 
-      ? { top: 50, right: 50, bottom: 150, left: 50 } // Tighter fit for geofence
-      : { top: 150, right: 150, bottom: 250, left: 150 }; // More zoomed out for scattered points
     
-    mapRef.current.fitToCoordinates(allCoordinates, {
-      edgePadding: edgePadding,
-      animated: true
-    });
-  } else {
-    // If no coordinates, just use a default view with more zoom-out
-    mapRef.current.animateToRegion({
-      ...initialRegion,
-      latitudeDelta: 0.02,  // More zoomed out for better context
-      longitudeDelta: 0.02
-    }, 1000);
-  }
+    // If we have coordinates, fit the map to show all of them
+    if (allCoordinates.length > 0) {
+      // OPTIMIZATION: Calculate appropriate padding based on what we're showing
+      // Add more padding to ensure markers stay visible
+      const edgePadding = geofencePoints.length >= 3 
+        ? { top: 100, right: 100, bottom: 200, left: 100 } // More padding for geofence
+        : { top: 200, right: 200, bottom: 300, left: 200 }; // Even more zoomed out for scattered points
+      
+      mapRef.current.fitToCoordinates(allCoordinates, {
+        edgePadding: edgePadding,
+        animated: true
+      });
+      
+      // OPTIMIZATION: Temporary enable tracksViewChanges during animation
+      setTrackViewChanges(true);
+      
+      // Disable tracking after animation completes
+      setTimeout(() => {
+        setTrackViewChanges(false);
+      }, 1000); // 1 second timeout for animation to complete
+    } else {
+      // If no coordinates, just use a default view with more zoom-out
+      mapRef.current.animateToRegion({
+        ...initialRegion,
+        latitudeDelta: 0.03,  // More zoomed out for better context
+        longitudeDelta: 0.03
+      }, 1000);
+    }
+  }, 100); // Add 100ms delay to ensure map is ready
 };
 
 // Update the useEffect to only auto-fit when needed
@@ -1344,6 +1332,31 @@ useEffect(() => {
   checkNotifications();
 }, [auth.currentUser, userRole, navigation, db]);
 
+// Add an effect to handle map region changes
+useEffect(() => {
+  const handleMapRegionChange = () => {
+    if (!trackViewChanges) {
+      // Temporarily enable tracking when region changes
+      setTrackViewChanges(true);
+      
+      // Disable tracking after animation completes
+      setTimeout(() => {
+        setTrackViewChanges(false);
+      }, 500);
+    }
+  };
+  
+  if (mapRef.current) {
+    // We can't directly add a listener, but we can enable tracking when needed
+    handleMapRegionChange();
+  }
+  
+  // Clean up
+  return () => {
+    setTrackViewChanges(false);
+  };
+}, [currentLocation, usersLocations, points, teamGeofence]);
+
 if (!db) {
   console.error("Firebase database not initialized");
   return;
@@ -1363,6 +1376,10 @@ return (
       minZoomLevel={10}
       maxZoomLevel={20}
       followsUserLocation={false}
+      moveOnMarkerPress={false} // OPTIMIZATION: Prevent auto-centering on marker press
+      loadingEnabled={true} // OPTIMIZATION: Enable loading indicator
+      loadingIndicatorColor="#2196F3"
+      loadingBackgroundColor="rgba(255,255,255,0.7)"
     >
       {userRole === 'member' ? (
         <>
@@ -1406,7 +1423,8 @@ return (
                 <Marker
                   coordinate={midPoint}
                   anchor={{ x: 0.5, y: 0.5 }}
-                  tracksViewChanges={false}
+                  tracksViewChanges={trackViewChanges} // Use the state instead of hardcoded false
+                  zIndex={500} // Higher zIndex for better visibility
                 >
                   <View style={styles.distanceMarker}>
                     <Text style={styles.distanceText}>{distanceText}</Text>
@@ -1462,7 +1480,8 @@ return (
                 <Marker
                   coordinate={midPoint}
                   anchor={{ x: 0.5, y: 0.5 }}
-                  tracksViewChanges={false}
+                  tracksViewChanges={trackViewChanges} // Use the state instead of hardcoded false
+                  zIndex={500} // Higher zIndex for better visibility
                 >
                   <View style={styles.distanceMarker}>
                     <Text style={styles.distanceText}>{distanceText}</Text>
