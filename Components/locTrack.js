@@ -1557,76 +1557,101 @@ return (
           <TouchableOpacity 
             style={[styles.button, styles.resetButton]}
             onPress={() => {
-              Alert.alert(
-                'Request Geofence Reset',
-                'Are you sure you want to request a reset of the geofence area? This will require admin approval.',
-                [
-                  { text: 'Cancel', style: 'cancel' },
-                  { 
-                    text: 'Request Reset', 
-                    style: 'destructive',
-                    onPress: () => {
-                      const auth = getAuth();
-                      if (!auth.currentUser) return;
-                      
-                      get(ref(db, `users/${auth.currentUser.uid}/profile`))
-                        .then((snapshot) => {
-                          if (snapshot.exists()) {
-                            const userData = snapshot.val();
-                            
-                            if (userData.role === 'owner' && userData.teamCode) {
-                              // Create admin reset request - update path to ensure persistence
-                              const resetRequestRef = ref(db, `adminRequests/geofenceReset/${userData.teamCode}`);
-                              
-                              // Get existing team geofence points
-                              get(ref(db, `teams/${userData.teamCode}/geofence/coordinates`))
-                                .then((geofenceSnapshot) => {
-                                  const currentPoints = geofenceSnapshot.exists() ? geofenceSnapshot.val() : points;
-                                  
-                                  // Create the request with all required data
-                                  set(resetRequestRef, {
-                                    teamCode: userData.teamCode,
-                                    ownerId: auth.currentUser.uid,
-                                    ownerName: userData.firstName && userData.lastName ? 
-                                      `${userData.firstName} ${userData.lastName}` : auth.currentUser.email,
-                                    requestDate: new Date().toISOString(),
-                                    status: 'pending',
-                                    currentPoints: currentPoints,
-                                    teamName: userData.teamName || userData.teamCode
-                                  })
-                                    .then(() => {
-                                      console.log("Reset request created successfully");
-                                      Alert.alert(
-                                        'Reset Request Submitted',
-                                        'Your geofence reset request has been submitted for admin approval. You will be notified when it is processed.'
-                                      );
+              // First check if geofence exists by checking points length
+              const auth = getAuth();
+              if (!auth.currentUser) return;
+              
+              // Check user profile and team data
+              get(ref(db, `users/${auth.currentUser.uid}/profile`))
+                .then((snapshot) => {
+                  if (snapshot.exists()) {
+                    const userData = snapshot.val();
+                    
+                    if (userData.role === 'owner' && userData.teamCode) {
+                      // Check if geofence exists by looking at team geofence data
+                      get(ref(db, `teams/${userData.teamCode}/geofence/coordinates`))
+                        .then((geofenceSnapshot) => {
+                          const hasGeofence = geofenceSnapshot.exists() && 
+                                             Array.isArray(geofenceSnapshot.val()) && 
+                                             geofenceSnapshot.val().length >= 3;
+                          
+                          if (hasGeofence) {
+                            // Geofence exists - show reset confirmation
+                            Alert.alert(
+                              'Request Geofence Reset',
+                              'Are you sure you want to request a reset of the existing geofence area? This will require admin approval.',
+                              [
+                                { text: 'Cancel', style: 'cancel' },
+                                { 
+                                  text: 'Request Reset', 
+                                  style: 'destructive',
+                                  onPress: () => {
+                                    // Create admin reset request
+                                    const resetRequestRef = ref(db, `adminRequests/geofenceReset/${userData.teamCode}`);
+                                    const currentPoints = geofenceSnapshot.val();
+                                    
+                                    // Create the request with all required data
+                                    set(resetRequestRef, {
+                                      teamCode: userData.teamCode,
+                                      ownerId: auth.currentUser.uid,
+                                      ownerName: userData.firstName && userData.lastName ? 
+                                        `${userData.firstName} ${userData.lastName}` : auth.currentUser.email,
+                                      requestDate: new Date().toISOString(),
+                                      status: 'pending',
+                                      currentPoints: currentPoints,
+                                      teamName: userData.teamName || userData.teamCode
                                     })
-                                    .catch((error) => {
-                                      console.error("Error creating reset request:", error);
-                                      Alert.alert('Error', 'Failed to submit reset request.');
-                                    });
-                                })
-                                .catch(error => {
-                                  console.error("Error getting current geofence:", error);
-                                  Alert.alert('Error', 'Failed to retrieve current geofence data.');
-                                });
-                            } else {
-                              Alert.alert('Error', 'Only team owners can request geofence resets.');
-                            }
+                                      .then(() => {
+                                        console.log("Reset request created successfully");
+                                        Alert.alert(
+                                          'Reset Request Submitted',
+                                          'Your geofence reset request has been submitted for admin approval. You will be notified when it is processed.'
+                                        );
+                                      })
+                                      .catch((error) => {
+                                        console.error("Error creating reset request:", error);
+                                        Alert.alert('Error', 'Failed to submit reset request.');
+                                      });
+                                  }
+                                }
+                              ]
+                            );
+                          } else {
+                            // No geofence exists - directly navigate to initialization
+                            Alert.alert(
+                              'Set Geofence Area',
+                              'You need to set up location boundaries for your team. Would you like to do this now?',
+                              [
+                                { text: 'Cancel', style: 'cancel' },
+                                { 
+                                  text: 'Set Up Now', 
+                                  onPress: () => {
+                                    navigation.navigate('OwnerInitialization', { teamCode: userData.teamCode });
+                                  }
+                                }
+                              ]
+                            );
                           }
                         })
-                        .catch((error) => {
-                          console.error("Error getting user profile:", error);
-                          Alert.alert('Error', 'Failed to access user profile.');
+                        .catch(error => {
+                          console.error("Error checking geofence data:", error);
+                          Alert.alert('Error', 'Failed to check geofence status.');
                         });
+                    } else {
+                      Alert.alert('Error', 'Only team owners can manage geofence areas.');
                     }
                   }
-                ]
-              );
+                })
+                .catch((error) => {
+                  console.error("Error getting user profile:", error);
+                  Alert.alert('Error', 'Failed to access user profile.');
+                });
             }}
           >
-            <Ionicons name="refresh-circle" size={24} color="white" />
-            <Text style={styles.buttonText}>Request Geofence Reset</Text>
+            <Ionicons name={points.length >= 3 ? "refresh-circle" : "locate"} size={24} color="white" />
+            <Text style={styles.buttonText}>
+              {points.length >= 3 ? "Request Geofence Reset" : "Set Geofence Area"}
+            </Text>
           </TouchableOpacity>
         </>
       ) : (
