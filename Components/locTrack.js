@@ -46,10 +46,24 @@ const GPSStrengthIndicator = ({ accuracy }) => {
   );
 };
 
-// Update the CustomMarker component to remove the second dot
-const CustomMarker = ({ coordinate, photoURL, name }) => {
+// Update the CustomMarker component to add online/offline status indicators
+const CustomMarker = ({ coordinate, photoURL, name, labelPosition = 'bottom', markerColor, isOnline = true }) => {
   // Get first character of name if it exists, otherwise use empty string
   const nameInitial = name && typeof name === 'string' && name.trim() !== '' ? name.trim()[0].toUpperCase() : '';
+  
+  // Determine label position style based on the labelPosition prop
+  const labelPositionStyle = {
+    top: { marginTop: -46, marginBottom: 4 },
+    bottom: { marginTop: 4 },
+    left: { position: 'absolute', left: -80, top: -8 },
+    right: { position: 'absolute', right: -80, top: -8 },
+  }[labelPosition] || { marginTop: 4 };
+  
+  // Style modifications for offline users
+  const offlineStyle = !isOnline ? {
+    opacity: 0.7,
+    borderStyle: 'dashed',
+  } : {};
   
   return (
     <Marker 
@@ -61,10 +75,18 @@ const CustomMarker = ({ coordinate, photoURL, name }) => {
         {photoURL ? (
           <Image
             source={{ uri: photoURL }}
-            style={styles.markerImage}
+            style={[
+              styles.markerImage, 
+              markerColor && { borderColor: markerColor },
+              offlineStyle
+            ]}
           />
         ) : (
-          <View style={styles.markerFallback}>
+          <View style={[
+            styles.markerFallback, 
+            markerColor && { backgroundColor: markerColor },
+            offlineStyle
+          ]}>
             {nameInitial ? (
               <Text style={styles.markerInitial}>{nameInitial}</Text>
             ) : (
@@ -73,8 +95,18 @@ const CustomMarker = ({ coordinate, photoURL, name }) => {
           </View>
         )}
         {name && typeof name === 'string' && name.trim() !== '' && (
-          <View style={styles.markerLabelContainer}>
-            <Text style={styles.markerLabel}>{name}</Text>
+          <View style={[
+            styles.markerLabelContainer, 
+            labelPositionStyle,
+            { backgroundColor: markerColor ? `${markerColor}DD` : 'rgba(255, 255, 255, 0.9)' },
+            !isOnline && { borderStyle: 'dashed', opacity: 0.8 }
+          ]}>
+            <Text style={[
+              styles.markerLabel, 
+              { color: markerColor ? '#FFFFFF' : '#333333', fontWeight: '700' }
+            ]}>
+              {name} {!isOnline && '(offline)'}
+            </Text>
           </View>
         )}
       </View>
@@ -148,6 +180,7 @@ const [teamGeofence, setTeamGeofence] = useState([]);
 const [gpsAccuracy, setGpsAccuracy] = useState(null);
 const [usersLocations, setUsersLocations] = useState({});
 const [shouldAutoFit, setShouldAutoFit] = useState(true);
+const [markerPositions, setMarkerPositions] = useState({});
 
 // Replace the first useEffect with this updated version
 useEffect(() => {
@@ -442,9 +475,42 @@ const distanceFromPointToLine = (point, lineStart, lineEnd) => {
 
 const toggleCurrentLocation = async () => {
   try {
+    // If location is already set, remove it
+    if (currentLocation) {
+      console.log("Removing current location");
+      setCurrentLocation(null);
+      setGpsAccuracy(null);
+      
+      // Update user's location and presence to show inactive
+      const db = getDatabase();
+      const userLocationRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
+      
+      // Get user profile data to maintain consistency
+      const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+      const profileSnapshot = await get(userProfileRef);
+      let profileData = {};
+      
+      if (profileSnapshot.exists()) {
+        profileData = profileSnapshot.val();
+      }
+      
+      // Update with isActive false but keep other data
+      await set(userLocationRef, { 
+        ...profileData,
+        isActive: false,
+        lastSeen: new Date().toISOString(),
+      });
+      
+      return;
+    }
+    
+    // Otherwise, proceed with setting the location
+    setIsFetchingLocation(true);
+    
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') {
       Alert.alert('Permission Denied', 'Location permission is required to share your location.');
+      setIsFetchingLocation(false);
       return;
     }
 
@@ -454,6 +520,7 @@ const toggleCurrentLocation = async () => {
 
     const { latitude, longitude } = location.coords;
     setCurrentLocation({ latitude, longitude });
+    setGpsAccuracy(location.coords.accuracy);
 
     // Update user's location and presence
     const db = getDatabase();
@@ -469,18 +536,15 @@ const toggleCurrentLocation = async () => {
       profileData = profileSnapshot.val();
     }
 
-    // Update location with presence data
+    // Update location with presence data - USING CONSISTENT APPROACH with profileData
     await set(userLocationRef, { 
       Latitude: latitude, 
       Longitude: longitude,
       timestamp: new Date().toISOString(),
-      firstName: profileData.firstName || '',
-      lastName: profileData.lastName || '',
-      photoURL: profileData.photoURL || '',
-      role: profileData.role || '',
-      teamCode: profileData.teamCode || '',
       isActive: true,
-      lastSeen: new Date().toISOString()
+      lastSeen: new Date().toISOString(),
+      // Use a consistent approach by spreading the profile data
+      ...profileData
     });
 
     // Set up presence system
@@ -537,7 +601,7 @@ const toggleCurrentLocation = async () => {
                   setCurrentLocation({ latitude, longitude });
                   setGpsAccuracy(accuracy);
                   
-                  // Update location with presence
+                  // Keep same structure as initial update
                   await set(userLocationRef, { 
                     Latitude: latitude, 
                     Longitude: longitude,
@@ -545,7 +609,7 @@ const toggleCurrentLocation = async () => {
                     accuracy: accuracy,
                     isActive: true,
                     lastSeen: new Date().toISOString(),
-                    ...profileData
+                    ...profileData  // Consistent use of profileData
                   });
 
                   // Update presence
@@ -568,6 +632,8 @@ const toggleCurrentLocation = async () => {
   } catch (error) {
     console.error("Error toggling location:", error);
     Alert.alert('Error', 'Failed to update location');
+  } finally {
+    setIsFetchingLocation(false);
   }
 };
 
@@ -1027,6 +1093,103 @@ useEffect(() => {
   loadAllUserLocations();
 }, [db]); // Only run this once when the database is available
 
+// Add this function to get a unique color based on user ID or any string
+const getUniqueColor = (str) => {
+  // Generate a hash from the input string
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  
+  // List of nice, distinct colors
+  const colors = [
+    '#3498db', // Blue
+    '#e74c3c', // Red
+    '#2ecc71', // Green
+    '#f39c12', // Orange
+    '#9b59b6', // Purple
+    '#1abc9c', // Teal
+    '#d35400', // Dark Orange
+    '#2980b9', // Dark Blue
+    '#8e44ad', // Dark Purple
+    '#27ae60', // Dark Green
+    '#f1c40f', // Yellow
+    '#16a085', // Dark Teal
+    '#e67e22', // Light Orange
+    '#c0392b', // Dark Red
+    '#7f8c8d'  // Gray
+  ];
+  
+  // Use the hash to pick a color
+  const index = Math.abs(hash) % colors.length;
+  return colors[index];
+};
+
+// Add this function to calculate marker label positions
+const calculateMarkerLabelPositions = (locations) => {
+  const positionMap = {};
+  const locationGroups = {};
+  
+  // Group markers by proximity (within 50 meters)
+  Object.entries(locations).forEach(([userId, userData]) => {
+    if (!userData || !userData.Latitude || !userData.Longitude) return;
+    
+    const coord = { latitude: userData.Latitude, longitude: userData.Longitude };
+    let foundGroup = false;
+    
+    // Check if this location is close to an existing group
+    Object.keys(locationGroups).forEach(groupId => {
+      const groupCoord = locationGroups[groupId];
+      if (calculateDistance(coord, groupCoord) < 30) { // Reduced from 50 to 30 meters for tighter grouping
+        if (!locationGroups[groupId].members) {
+          locationGroups[groupId].members = [];
+        }
+        locationGroups[groupId].members.push(userId);
+        foundGroup = true;
+      }
+    });
+    
+    // If not close to any existing group, create a new one
+    if (!foundGroup) {
+      locationGroups[userId] = {
+        latitude: coord.latitude,
+        longitude: coord.longitude,
+        members: [userId]
+      };
+    }
+  });
+  
+  // Assign positions for markers in each group
+  Object.values(locationGroups).forEach(group => {
+    if (!group.members || group.members.length <= 1) {
+      // Single marker, use bottom position
+      if (group.members && group.members.length === 1) {
+        positionMap[group.members[0]] = 'bottom';
+      }
+    } else {
+      // Multiple markers close together
+      // Distribute around the point: top, right, bottom, left
+      const positionOptions = ['top', 'right', 'bottom', 'left'];
+      group.members.forEach((userId, index) => {
+        const position = positionOptions[index % positionOptions.length];
+        if (userId) {
+          positionMap[userId] = position;
+        }
+      });
+    }
+  });
+  
+  return positionMap;
+};
+
+// When user locations are updated, recalculate label positions
+useEffect(() => {
+  if (Object.keys(usersLocations).length > 0) {
+    const positions = calculateMarkerLabelPositions(usersLocations);
+    setMarkerPositions(positions);
+  }
+}, [usersLocations]);
+
 if (!db) {
   console.error("Firebase database not initialized");
   return;
@@ -1194,6 +1357,9 @@ return (
             }}
             photoURL={userData.photoURL}
             name={formatUserName(userData)}
+            labelPosition={markerPositions[userId] || 'bottom'}
+            markerColor={getUniqueColor(userId)}
+            isOnline={userData.isActive !== false}
           />
         ))
       }
@@ -1477,7 +1643,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    borderWidth: 2,
+    borderWidth: 3,
     borderColor: 'white',
   },
   markerFallback: {
@@ -1487,7 +1653,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#007AFF',
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
+    borderWidth: 3,
     borderColor: 'white',
   },
   markerInitial: {
@@ -1504,11 +1670,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E5E5E5',
     maxWidth: 150,
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
   },
   markerLabel: {
     color: '#333333',
     fontSize: 14,
-    fontWeight: '500',
+    fontWeight: '600',
+    textAlign: 'center',
   },
   memberMessage: {
     padding: 15,
@@ -1536,28 +1711,44 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   currentUserMarker: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 45,
+    height: 45,
+    borderRadius: 22.5,
     backgroundColor: '#007AFF',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 3,
     borderColor: 'white',
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
   },
   currentUserLabelContainer: {
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    backgroundColor: 'rgba(0, 122, 255, 0.9)',
+    paddingHorizontal: 12,
+    paddingVertical: 5,
     borderRadius: 12,
-    marginTop: 4,
+    marginTop: 6,
     borderWidth: 1,
-    borderColor: '#E5E5E5',
+    borderColor: '#FFFFFF',
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
   },
   currentUserLabel: {
-    color: '#333333',
+    color: '#FFFFFF',
     fontSize: 14,
-    fontWeight: '500',
+    fontWeight: '700',
   },
   distanceMarker: {
     backgroundColor: 'rgba(255, 255, 255, 0.85)',

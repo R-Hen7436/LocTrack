@@ -120,13 +120,15 @@ export default function AdminDashboard({ navigation, route }) {
       console.log('Got snapshot, exists:', snapshot.exists());
       
       if (snapshot.exists()) {
-        const usersData = [];
+        // Use a Map to deduplicate users by email
+        const uniqueUsers = new Map();
         let activeCount = 0;
         let ownerCount = 0;
         let memberCount = 0;
         
         let foundValues = 0;
         let missingProfileCount = 0;
+        let duplicateCount = 0;
 
         snapshot.forEach((child) => {
           foundValues++;
@@ -140,17 +142,51 @@ export default function AdminDashboard({ navigation, route }) {
             return;
           }
           
-          usersData.push({
+          const user = {
             id: child.key,
             ...userData
-          });
+          };
 
-          if (userData.lastActive) activeCount++;
-          if (userData.role === 'owner') ownerCount++;
-          if (userData.role === 'member') memberCount++;
+          // Use email as unique identifier
+          if (userData.email) {
+            // If this email already exists in our Map, we have a duplicate
+            if (uniqueUsers.has(userData.email)) {
+              duplicateCount++;
+              console.log(`Found duplicate user with email: ${userData.email}`);
+              
+              // Keep the entry with the highest role priority
+              const existingUser = uniqueUsers.get(userData.email);
+              const rolePriority = { 'owner': 1, 'admin': 2, 'member': 3 };
+              
+              // Lower number means higher priority
+              const existingPriority = rolePriority[existingUser.role] || 10;
+              const newPriority = rolePriority[userData.role] || 10;
+              
+              // Only replace if the new entry has a higher priority role
+              if (newPriority < existingPriority) {
+                uniqueUsers.set(userData.email, user);
+              }
+            } else {
+              // First time seeing this email, add to Map
+              uniqueUsers.set(userData.email, user);
+            }
+          } else {
+            // No email, use ID as key
+            uniqueUsers.set(child.key, user);
+          }
         });
 
-        console.log(`Found ${foundValues} total users, ${missingProfileCount} missing profiles, ${usersData.length} valid users`);
+        // Convert Map to array
+        const usersData = Array.from(uniqueUsers.values());
+        
+        // Count stats on the deduplicated list
+        usersData.forEach(user => {
+          if (user.lastActive) activeCount++;
+          if (user.role === 'owner') ownerCount++;
+          if (user.role === 'member') memberCount++;
+        });
+
+        console.log(`Found ${foundValues} total users, ${missingProfileCount} missing profiles, ${duplicateCount} duplicates, ${usersData.length} unique users`);
 
         // Sort by registration date (newest first)
         usersData.sort((a, b) => {
