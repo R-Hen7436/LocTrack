@@ -187,7 +187,7 @@ useEffect(() => {
   const initializeApp = async () => {
     try {
       const auth = getAuth();
-      if (!auth.currentUser) return;
+      if (!auth.currentUser || !navigation) return;
       
       const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
       const snapshot = await get(userProfileRef);
@@ -197,6 +197,46 @@ useEffect(() => {
         console.log('User Profile Data:', profileData);
         setUserRole(profileData.role);
         console.log('Setting user role to:', profileData.role);
+        
+        // Check if the user needs to set up a new geofence (after reset approval)
+        if (profileData.role === 'owner' && profileData.needsGeofenceSetup === true) {
+          console.log('User needs to set up a new geofence');
+          
+          // Reset the local points array
+          setPoints([]);
+          
+          // Clear the flag
+          await set(ref(db, `users/${auth.currentUser.uid}/profile/needsGeofenceSetup`), false);
+          
+          // Redirect to initialization if we have navigation and teamCode
+          if (profileData.teamCode && navigation) {
+            console.log('Navigating to OwnerInitialization with teamCode:', profileData.teamCode);
+            
+            // Clear the team's geofence first
+            const teamGeofenceRef = ref(db, `teams/${profileData.teamCode}/geofence/coordinates`);
+            try {
+              await set(teamGeofenceRef, []);
+              console.log('Successfully cleared geofence before initialization');
+            } catch (error) {
+              console.error('Error clearing geofence before initialization:', error);
+            }
+            
+            Alert.alert(
+              'Geofence Reset Approved',
+              'Your request to reset the geofence has been approved. You need to set up new boundaries.',
+              [
+                { 
+                  text: 'Set Up Now', 
+                  onPress: () => navigation.navigate('OwnerInitialization', { teamCode: profileData.teamCode })
+                }
+              ],
+              { cancelable: false } // Prevent dismissing the alert by tapping outside
+            );
+            return;
+          } else {
+            console.error('Cannot navigate: Missing teamCode or navigation object');
+          }
+        }
         
         // Check for geofence points in the user profile first (fastest)
         if (profileData.role === 'owner') {
@@ -1190,6 +1230,98 @@ useEffect(() => {
   }
 }, [usersLocations]);
 
+// Add notification checking effect
+useEffect(() => {
+  const checkNotifications = async () => {
+    if (!auth.currentUser || !navigation) return;
+    
+    try {
+      const db = getDatabase();
+      const notificationsRef = ref(db, `notifications/${auth.currentUser.uid}`);
+      
+      // Check for unread notifications
+      const snapshot = await get(notificationsRef);
+      if (snapshot.exists()) {
+        const notifications = Object.entries(snapshot.val());
+        const unreadNotifications = notifications.filter(([_, notification]) => 
+          notification.read === false
+        );
+        
+        console.log(`Found ${unreadNotifications.length} unread notifications`);
+        
+        // Process unread geofence notifications
+        for (const [notificationId, notification] of unreadNotifications) {
+          if (notification.type === 'geofence_approved' || notification.type === 'geofence_rejected') {
+            // Mark as read
+            await set(ref(db, `notifications/${auth.currentUser.uid}/${notificationId}/read`), true);
+            
+            // Show alert
+            Alert.alert(
+              notification.title,
+              notification.message,
+              [{ text: 'OK' }]
+            );
+            
+            // If geofence reset was approved, check if we need to reinitialize
+            if (notification.type === 'geofence_approved' && userRole === 'owner') {
+              const profileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+              const profileSnapshot = await get(profileRef);
+              
+              if (profileSnapshot.exists()) {
+                const profileData = profileSnapshot.val();
+                
+                if (profileData.needsGeofenceSetup) {
+                  // Set local state to trigger reinit
+                  setPoints([]);
+                  
+                  // Clear the flag
+                  await set(ref(db, `users/${auth.currentUser.uid}/profile/needsGeofenceSetup`), false);
+                  
+                  // Redirect to initialization
+                  Alert.alert(
+                    'Geofence Reset Approved',
+                    'You can now set up a new geofence for your team.',
+                    [
+                      { 
+                        text: 'Set Up Now', 
+                        onPress: () => {
+                          const teamCode = profileData.teamCode;
+                          if (teamCode && navigation) {
+                            // Force clear the team's existing geofence in database
+                            const teamGeofenceRef = ref(db, `teams/${teamCode}/geofence/coordinates`);
+                            set(teamGeofenceRef, [])
+                              .then(() => {
+                                console.log('Team geofence cleared successfully');
+                                navigation.navigate('OwnerInitialization', { teamCode });
+                              })
+                              .catch(err => {
+                                console.error('Error clearing team geofence:', err);
+                                // Try to navigate anyway if clearing fails
+                                navigation.navigate('OwnerInitialization', { teamCode });
+                              });
+                          } else {
+                            console.error('Cannot navigate: Missing teamCode or navigation object');
+                          }
+                        }
+                      }
+                    ],
+                    { cancelable: false }
+                  );
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error checking notifications:', error);
+    }
+  };
+  
+  // Check on component mount and when user role changes
+  checkNotifications();
+}, [auth.currentUser, userRole, navigation, db]);
+
 if (!db) {
   console.error("Firebase database not initialized");
   return;
@@ -1421,26 +1553,43 @@ return (
                             const userData = snapshot.val();
                             
                             if (userData.role === 'owner' && userData.teamCode) {
-                              // Create admin reset request
+                              // Create admin reset request - update path to ensure persistence
                               const resetRequestRef = ref(db, `adminRequests/geofenceReset/${userData.teamCode}`);
-                              set(resetRequestRef, {
-                                teamCode: userData.teamCode,
-                                ownerId: auth.currentUser.uid,
-                                ownerName: auth.currentUser.displayName || `${userData.firstName} ${userData.lastName}`,
-                                requestDate: new Date().toISOString(),
-                                status: 'pending',
-                                currentPoints: points
-                              })
-                                .then(() => {
-                                  Alert.alert(
-                                    'Reset Request Submitted',
-                                    'Your geofence reset request has been submitted for admin approval.'
-                                  );
+                              
+                              // Get existing team geofence points
+                              get(ref(db, `teams/${userData.teamCode}/geofence/coordinates`))
+                                .then((geofenceSnapshot) => {
+                                  const currentPoints = geofenceSnapshot.exists() ? geofenceSnapshot.val() : points;
+                                  
+                                  // Create the request with all required data
+                                  set(resetRequestRef, {
+                                    teamCode: userData.teamCode,
+                                    ownerId: auth.currentUser.uid,
+                                    ownerName: userData.firstName && userData.lastName ? 
+                                      `${userData.firstName} ${userData.lastName}` : auth.currentUser.email,
+                                    requestDate: new Date().toISOString(),
+                                    status: 'pending',
+                                    currentPoints: currentPoints,
+                                    teamName: userData.teamName || userData.teamCode
+                                  })
+                                    .then(() => {
+                                      console.log("Reset request created successfully");
+                                      Alert.alert(
+                                        'Reset Request Submitted',
+                                        'Your geofence reset request has been submitted for admin approval. You will be notified when it is processed.'
+                                      );
+                                    })
+                                    .catch((error) => {
+                                      console.error("Error creating reset request:", error);
+                                      Alert.alert('Error', 'Failed to submit reset request.');
+                                    });
                                 })
-                                .catch((error) => {
-                                  console.error("Error creating reset request:", error);
-                                  Alert.alert('Error', 'Failed to submit reset request.');
+                                .catch(error => {
+                                  console.error("Error getting current geofence:", error);
+                                  Alert.alert('Error', 'Failed to retrieve current geofence data.');
                                 });
+                            } else {
+                              Alert.alert('Error', 'Only team owners can request geofence resets.');
                             }
                           }
                         })

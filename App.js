@@ -19,6 +19,8 @@ import Profile from './Components/Profile/Profile';
 import EditProfile from './Components/Profile/EditProfile';
 import Dashboard from './Components/IoT/Dashboard';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import GeofenceRequests from './Components/Admin/GeofenceRequests';
+import OwnerInitialization from './Components/Auth/OwnerInitialization';
 
 const Stack = createNativeStackNavigator();
 
@@ -179,6 +181,14 @@ export default function App() {
                 }}
               />
               <Stack.Screen 
+                name="GeofenceRequests" 
+                component={GeofenceRequests}
+                options={{ 
+                  headerShown: false,
+                  animation: 'slide_from_right'
+                }}
+              />
+              <Stack.Screen 
                 name="UserDetail" 
                 component={UserDetail}
                 options={{ 
@@ -209,6 +219,15 @@ export default function App() {
                 component={EditProfile}
                 options={{ 
                   headerShown: false,
+                  animation: 'slide_from_right'
+                }}
+              />
+              <Stack.Screen 
+                name="OwnerInitialization" 
+                component={OwnerInitialization}
+                options={{ 
+                  headerShown: true,
+                  title: 'Geofence Setup',
                   animation: 'slide_from_right'
                 }}
               />
@@ -246,6 +265,15 @@ export default function App() {
                 component={EditProfile}
                 options={{ 
                   headerShown: false,
+                  animation: 'slide_from_right'
+                }}
+              />
+              <Stack.Screen 
+                name="OwnerInitialization" 
+                component={OwnerInitialization}
+                options={{ 
+                  headerShown: true,
+                  title: 'Geofence Setup',
                   animation: 'slide_from_right'
                 }}
               />

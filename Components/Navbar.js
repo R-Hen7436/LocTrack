@@ -52,6 +52,14 @@ export default function Navbar({ activePage }) {
         </TouchableOpacity>
         
         <TouchableOpacity 
+          style={[styles.navItem, activePage === 'requests' && styles.activeNavItem]}
+          onPress={() => navigation.navigate('GeofenceRequests')}
+        >
+          <Ionicons name="notifications-outline" size={24} color="white" />
+          <Text style={styles.navText}>Requests</Text>
+        </TouchableOpacity>
+        
+        <TouchableOpacity 
           style={[styles.navItem, activePage === 'profile' && styles.activeNavItem]}
           onPress={() => navigation.navigate('Profile')}
         >
