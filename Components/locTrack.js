@@ -227,10 +227,21 @@ useEffect(() => {
               [
                 { 
                   text: 'Set Up Now', 
-                  onPress: () => navigation.navigate('OwnerInitialization', { teamCode: profileData.teamCode })
+                  onPress: () => {
+                    // Double-check that the flag is set to false to prevent redirect loops
+                    set(ref(db, `users/${auth.currentUser.uid}/profile/needsGeofenceSetup`), false)
+                      .then(() => {
+                        console.log('needsGeofenceSetup flag explicitly cleared');
+                        navigation.navigate('OwnerInitialization', { teamCode: profileData.teamCode })
+                      })
+                      .catch(err => {
+                        console.error('Error clearing needsGeofenceSetup flag:', err);
+                        navigation.navigate('OwnerInitialization', { teamCode: profileData.teamCode })
+                      });
+                  }
                 }
               ],
-              { cancelable: false } // Prevent dismissing the alert by tapping outside
+              { cancelable: false }
             );
             return;
           } else {
@@ -1292,7 +1303,18 @@ useEffect(() => {
                             set(teamGeofenceRef, [])
                               .then(() => {
                                 console.log('Team geofence cleared successfully');
-                                navigation.navigate('OwnerInitialization', { teamCode });
+                                
+                                // Make sure to set needsGeofenceSetup flag to false to prevent redirection loops
+                                const userNeedsGeofenceSetupRef = ref(db, `users/${auth.currentUser.uid}/profile/needsGeofenceSetup`);
+                                set(userNeedsGeofenceSetupRef, false)
+                                  .then(() => {
+                                    console.log('needsGeofenceSetup flag explicitly cleared');
+                                    navigation.navigate('OwnerInitialization', { teamCode });
+                                  })
+                                  .catch(err => {
+                                    console.error('Error clearing needsGeofenceSetup flag:', err);
+                                    navigation.navigate('OwnerInitialization', { teamCode });
+                                  });
                               })
                               .catch(err => {
                                 console.error('Error clearing team geofence:', err);

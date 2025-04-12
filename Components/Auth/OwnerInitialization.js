@@ -9,13 +9,15 @@ import {
   ScrollView,
   Animated,
   TextInput,
-  Modal
+  Modal,
+  BackHandler
 } from 'react-native';
 import { getAuth } from 'firebase/auth';
 import { getDatabase, ref, get, set } from 'firebase/database';
 import MapView, { Marker, Polygon, Polyline } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Add a debounceForceUpdate function that will batch updates
 const useDebounce = (value, delay) => {
@@ -57,9 +59,93 @@ export default function OwnerInitialization({ navigation, route }) {
   const [teamCodeInput, setTeamCodeInput] = useState('');
   
   // Add debounce for smoother updates when dragging
-  const debouncedForceUpdate = useDebounce(forceUpdate, 100);
+  const debouncedForceUpdate = useDebounce(forceUpdate, 300);
+
+  // Memoize points to prevent unnecessary re-renders
+  const memoizedPoints = useMemo(() => points, [points.length]);
+
+  // Add handler for back button/navigation to ensure cleanup
+  const handleBackPress = useCallback(async () => {
+    try {
+      // Check if we're in a reset scenario
+      const inResetMode = await AsyncStorage.getItem('inGeofenceResetMode');
+      if (inResetMode === 'true') {
+        // Ask user to confirm they want to exit without saving
+        Alert.alert(
+          'Exit Without Saving?',
+          'You have not saved your geofence boundaries. If you exit now, you will need to set them up again later.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { 
+              text: 'Exit', 
+              style: 'destructive',
+              onPress: async () => {
+                try {
+                  // Clear cache to prevent old data from reappearing
+                  const auth = getAuth();
+                  if (!auth.currentUser) {
+                    navigation.goBack();
+                    return;
+                  }
+                  
+                  const db = getDatabase();
+                  
+                  // Clear the user's geofenceData cache to prevent old data from loading
+                  await set(ref(db, `users/${auth.currentUser.uid}/profile/geofenceData`), null);
+                  
+                  // Update the geofence status
+                  await set(ref(db, `users/${auth.currentUser.uid}/profile/needsGeofenceSetup`), true);
+                  
+                  // Reset flags
+                  await AsyncStorage.removeItem('inGeofenceResetMode');
+                  
+                  console.log('Successfully cleaned up before navigation');
+                  navigation.goBack();
+                } catch (error) {
+                  console.error('Error cleaning up before exit:', error);
+                  navigation.goBack();
+                }
+              }
+            }
+          ]
+        );
+        return true; // Prevents default back behavior
+      } else {
+        // Normal back behavior for non-reset scenarios
+        navigation.goBack();
+        return true;
+      }
+    } catch (error) {
+      console.error('Error in back handler:', error);
+      navigation.goBack();
+      return true;
+    }
+  }, [navigation]);
+
+  // Set up back handler when the component mounts
+  useEffect(() => {
+    // Add back button handler
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', handleBackPress);
+    
+    // Also handle the navigation header back button
+    navigation.setOptions({
+      headerLeft: () => (
+        <TouchableOpacity onPress={handleBackPress} style={{ marginLeft: 15 }}>
+          <Ionicons name="arrow-back" size={24} color="#000" />
+        </TouchableOpacity>
+      )
+    });
+    
+    return () => {
+      // Remove handler when component unmounts
+      backHandler.remove();
+    };
+  }, [handleBackPress, navigation]);
 
   useEffect(() => {
+    // Store existing points to ensure they're not lost during re-render
+    const existingPoints = [...points];
+    
     const checkTeamCode = async () => {
       console.log("Route params:", route.params);
       if (route.params?.teamCode) {
@@ -75,17 +161,122 @@ export default function OwnerInitialization({ navigation, route }) {
           }, 1000);
         }
       }
+      
+      // Restore points if they were somehow cleared
+      if (existingPoints.length > 0 && points.length === 0) {
+        console.log("Restoring points during team code check:", existingPoints.length);
+        setPoints(existingPoints);
+      }
     };
     
     checkTeamCode();
     
     // Initialize map with current location
-    getCurrentLocation();
+    // Use a small delay to ensure any state updates complete first
+    setTimeout(() => {
+      getCurrentLocation();
+      
+      // Double-check that points are preserved after location fetch
+      if (existingPoints.length > 0 && points.length === 0) {
+        console.log("Re-restoring points after location init:", existingPoints.length);
+        setPoints(existingPoints);
+      }
+    }, 300);
   }, [route.params]);
 
+  // Add a separate effect to monitor points for debugging purposes
+  useEffect(() => {
+    console.log("Points state changed:", points.length, "points");
+  }, [points]);
+
+  // Remove or modify the monitoring effect to reduce excessive updates and prevent screen twitching
+  useEffect(() => {
+    // This effect monitors for potential point loss but runs much less frequently
+    if (points.length === 0 && forceUpdate > 1) {
+      console.warn('Points array unexpectedly empty, attempting to restore from last update');
+      // Use a longer timeout to reduce screen updates
+      setTimeout(() => {
+        setForceUpdate(prev => prev + 1);
+      }, 500); // Increased from immediate to 500ms
+    }
+  }, [points.length, forceUpdate]); // Only depend on points.length instead of entire points array
+
+  // Add useEffect to get location on mount
+  useEffect(() => {
+    // Get location as soon as component mounts
+    getCurrentLocation();
+    
+    // Clean up any location subscriptions on unmount
+    return () => {
+      // Any cleanup needed
+    };
+  }, []);
+
+  // Add a cleanup effect to handle quitting without saving
+  useEffect(() => {
+    // This effect will run on component mount
+    const handleSetupStateAsync = async () => {
+      try {
+        // Check if we're in a reset scenario by looking at needsGeofenceSetup flag
+        const auth = getAuth();
+        if (!auth.currentUser) return;
+        
+        const db = getDatabase();
+        const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+        const snapshot = await get(userProfileRef);
+        
+        if (snapshot.exists()) {
+          const userData = snapshot.val();
+          if (userData.needsGeofenceSetup) {
+            console.log('In geofence reset mode - will clear caches on exit if not saved');
+            
+            // Store this state to handle cleanup properly on exit
+            await AsyncStorage.setItem('inGeofenceResetMode', 'true');
+          }
+        }
+      } catch (error) {
+        console.error('Error checking geofence setup state:', error);
+      }
+    };
+    
+    handleSetupStateAsync();
+    
+    // Cleanup function that runs when component unmounts
+    return async () => {
+      try {
+        // Check if we're in reset mode and haven't saved
+        const inResetMode = await AsyncStorage.getItem('inGeofenceResetMode');
+        const setupComplete = await AsyncStorage.getItem('needsGeofenceSetup');
+        
+        // If we're exiting while in reset mode and setup is still needed, 
+        // clear any potential cache to prevent old data reappearing
+        if (inResetMode === 'true' && setupComplete !== 'false') {
+          console.log('Quitting initialization without saving - clearing caches');
+          
+          const auth = getAuth();
+          if (!auth.currentUser) return;
+          
+          const db = getDatabase();
+          
+          // Clear user profile cached geofence data to prevent old data from reappearing
+          await set(ref(db, `users/${auth.currentUser.uid}/profile/geofenceData`), null);
+          
+          // Reset the reset mode flag
+          await AsyncStorage.removeItem('inGeofenceResetMode');
+        }
+      } catch (error) {
+        console.error('Error in cleanup when exiting initialization:', error);
+      }
+    };
+  }, []);
+
   const getCurrentLocation = async () => {
+    // Store existing points first to avoid losing them
+    const existingPoints = [...points];
     setLoadingLocation(true);
+    
     try {
+      console.log('Getting location permissions...');
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('Permission Denied', 'Location permission is required for this feature.');
@@ -93,74 +284,101 @@ export default function OwnerInitialization({ navigation, route }) {
         return;
       }
 
-      console.log('Getting current position...');
-      
-      // Use a single toast instead of a blocking alert
-      Alert.alert('Locating', 'Getting your location...', [], { cancelable: true });
-      
-      // Use balanced accuracy from the start with a shorter timeout
-      const location = await Promise.race([
-        Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-          maximumAge: 1000, // Allow slightly cached location (1 second)
-          timeout: 5000
-        }),
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Location timeout')), 5000)
-        )
-      ]).catch(async err => {
-        console.log('Balanced accuracy location failed, trying low accuracy', err);
-        // Fall back to low accuracy location as last resort
-        return await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Low,
-          maximumAge: 3000,
-          timeout: 3000
-        });
+      // Use a faster approach with lower accuracy requirements to speed up location acquisition
+      // Try to get cached location first (very fast)
+      const lastKnownLocation = await Location.getLastKnownPositionAsync({
+        maxAge: 60000 // Accept locations up to 1 minute old
       });
       
-      if (location) {
-        const { latitude, longitude } = location.coords;
-        console.log('Successfully got location:', latitude, longitude);
+      if (lastKnownLocation) {
+        const { latitude, longitude } = lastKnownLocation.coords;
         setCurrentLocation({ latitude, longitude });
         
-        // Update region to center on user's location
-        const newRegion = {
+        // Update region immediately
+        const initialRegion = {
           latitude,
           longitude,
           latitudeDelta: 0.005,
           longitudeDelta: 0.005
         };
+        setInitialRegion(initialRegion);
         
-        setInitialRegion(newRegion);
-        
-        // Animate map to user's location
-        if (mapRef.current) {
-          mapRef.current.animateToRegion(newRegion, 1000);
+        // Restore points if needed
+        if (existingPoints.length > 0 && points.length === 0) {
+          setPoints(existingPoints);
         }
-      } else {
-        throw new Error('Failed to get location data');
+        
+        // Move map to location
+        if (mapRef.current) {
+          mapRef.current.animateToRegion(initialRegion, 300);
+        }
       }
+      
+      // Then try to get a fresh location with lowered accuracy requirements
+      Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Low, // Lower accuracy for faster response
+        maxAge: 10000,
+        timeout: 5000
+      }).then(location => {
+        const { latitude, longitude } = location.coords;
+        
+        // Only update if we have a better position than before
+        setCurrentLocation({ latitude, longitude });
+        
+        // Animate map if needed
+        if (mapRef.current) {
+          mapRef.current.animateToRegion({
+            latitude,
+            longitude,
+            latitudeDelta: 0.005,
+            longitudeDelta: 0.005
+          }, 300);
+        }
+        
+        // Make sure points are preserved
+        if (existingPoints.length > 0 && points.length === 0) {
+          setPoints(existingPoints);
+        }
+      }).catch(error => {
+        console.log('Could not get high accuracy location:', error);
+        // We already have a low accuracy location, so this is fine
+      });
+      
     } catch (error) {
-      console.error('Error getting location:', error);
-      Alert.alert(
-        'Location Error', 
-        'Could not determine your location. Please try again or set points manually.',
-        [{ text: 'OK' }]
-      );
+      console.error('Error in location process:', error);
+      // Restore points even in error case
+      if (existingPoints.length > 0 && points.length === 0) {
+        setPoints(existingPoints);
+      }
     } finally {
       setLoadingLocation(false);
     }
   };
 
   const centerOnUserLocation = () => {
-    if (currentLocation && mapRef.current) {
-      mapRef.current.animateToRegion({
-        ...currentLocation,
+    // Don't do anything if location is loading or not available
+    if (loadingLocation || !currentLocation) return;
+    
+    // Store existing points to ensure they're not lost
+    const existingPoints = [...points];
+    
+    // Animate to user location
+    if (mapRef.current && currentLocation) {
+      const region = {
+        latitude: currentLocation.latitude,
+        longitude: currentLocation.longitude,
         latitudeDelta: 0.005,
-        longitudeDelta: 0.005,
-      }, 1000);
-    } else {
-      getCurrentLocation();
+        longitudeDelta: 0.005
+      };
+      
+      mapRef.current.animateToRegion(region, 300);
+      
+      // Safety check to restore points after animation if they got cleared
+      setTimeout(() => {
+        if (existingPoints.length > 0 && points.length === 0) {
+          setPoints(existingPoints);
+        }
+      }, 400);
     }
   };
 
@@ -184,6 +402,9 @@ export default function OwnerInitialization({ navigation, route }) {
     if (!mapRef.current) return;
     
     try {
+      // Store existing points as backup
+      const existingPoints = [...points];
+      
       // Get the center of the map (where the + marker is positioned)
       const camera = await mapRef.current.getCamera();
       if (!camera || !camera.center) {
@@ -198,41 +419,50 @@ export default function OwnerInitialization({ navigation, route }) {
       
       console.log('Adding point:', newPoint);
       
-      // Update points state with functional update to ensure we get the latest state
+      // Update points state with functional update - all at once to reduce flickering
       setPoints(prevPoints => {
-        console.log('Adding point:', newPoint, 'to existing', prevPoints.length, 'points');
-        const updatedPoints = [...prevPoints, newPoint];
-        
-        // Calculate distances between consecutive points
-        const newDistances = [];
-        for (let i = 0; i < updatedPoints.length; i++) {
-          const currentPoint = updatedPoints[i];
-          const nextPoint = updatedPoints[(i + 1) % updatedPoints.length]; // Loop back to first point
-          
-          const distance = calculateDistance(
-            currentPoint.latitude,
-            currentPoint.longitude,
-            nextPoint.latitude,
-            nextPoint.longitude
-          );
-          
-          newDistances.push({
-            distance,
-            midpoint: {
-              latitude: (currentPoint.latitude + nextPoint.latitude) / 2,
-              longitude: (currentPoint.longitude + nextPoint.longitude) / 2
-            }
-          });
+        // Safety check
+        if (prevPoints.length === 0 && existingPoints.length > 0) {
+          console.warn('Points lost during add, restoring from backup and adding new point');
+          return [...existingPoints, newPoint];
         }
         
-        // Update distances state
-        setDistances(newDistances);
-        
-        // Force a re-render to show points immediately
-        setForceUpdate(prev => prev + 1);
-        
-        return updatedPoints;
+        console.log('Adding point:', newPoint, 'to existing', prevPoints.length, 'points');
+        return [...prevPoints, newPoint];
       });
+      
+      // Calculate distances in a separate update with delay to prevent jitter
+      setTimeout(() => {
+        setPoints(currentPoints => {
+          const newDistances = [];
+          for (let i = 0; i < currentPoints.length; i++) {
+            const currentPoint = currentPoints[i];
+            const nextPoint = currentPoints[(i + 1) % currentPoints.length];
+            
+            const distance = calculateDistance(
+              currentPoint.latitude,
+              currentPoint.longitude,
+              nextPoint.latitude,
+              nextPoint.longitude
+            );
+            
+            newDistances.push({
+              distance,
+              midpoint: {
+                latitude: (currentPoint.latitude + nextPoint.latitude) / 2,
+                longitude: (currentPoint.longitude + nextPoint.longitude) / 2
+              }
+            });
+          }
+          
+          // Update distances state and force update only once
+          setDistances(newDistances);
+          setTimeout(() => setForceUpdate(prev => prev + 1), 200);
+          
+          return currentPoints;
+        });
+      }, 300);
+      
     } catch (error) {
       console.error('Error adding point:', error);
       Alert.alert('Error', 'Failed to add point. Please try again.');
@@ -298,96 +528,150 @@ export default function OwnerInitialization({ navigation, route }) {
     }
   };
 
-  const saveGeofence = async () => {
-    console.log("saveGeofence called with points:", points.length, "and teamCode:", teamCode);
-    
-    if (points.length < 3) {
-      Alert.alert('Error', 'Please set at least 3 points to create a valid geofence.');
-      return;
-    }
-    
-    if (!teamCode) {
-      console.error("No teamCode available");
-      Alert.alert('Error', 'Team code is missing. Please restart the setup process.');
-      return;
-    }
-
-    setLoading(true);
+  // Function to save owner geofence data with proper cleanup of old data
+  const saveOwnerGeofence = async (coordinates) => {
     try {
-      console.log("Getting Firebase database and auth");
-      const db = getDatabase();
+      if (!coordinates || coordinates.length < 3) {
+        return { success: false, error: 'Not enough points to create a valid geofence' };
+      }
+
       const auth = getAuth();
-      
       if (!auth.currentUser) {
-        throw new Error("User not authenticated");
+        return { success: false, error: 'No authenticated user found' };
+      }
+
+      const db = getDatabase();
+      
+      // Get user profile to retrieve team code
+      const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+      const userSnapshot = await get(userProfileRef);
+      
+      if (!userSnapshot.exists()) {
+        return { success: false, error: 'User profile not found' };
       }
       
-      console.log("Getting user profile data for:", auth.currentUser.uid);
-      // Get user profile data
-      const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
-      const profileSnapshot = await get(userProfileRef);
-      console.log("Profile data exists:", profileSnapshot.exists());
-      const userData = profileSnapshot.exists() ? profileSnapshot.val() : {};
+      const userData = userSnapshot.val();
       
-      console.log("Creating geofence data with owner:", auth.currentUser.uid);
-      // Create geofence data with ownership information
+      // Ensure we have a team code to work with
+      const userTeamCode = userData.teamCode || teamCode;
+      if (!userTeamCode) {
+        return { success: false, error: 'No team code available' };
+      }
+
+      console.log(`Saving geofence for team: ${userTeamCode} with ${coordinates.length} points`);
+      
+      // IMPORTANT: Clear any cached geofence data in all possible locations
+      
+      // 1. First, clear the global geofence (for backward compatibility)
+      await set(ref(db, 'geofence/coordinates'), []);
+      
+      // 2. Clear team-specific geofence coordinates
+      await set(ref(db, `teams/${userTeamCode}/geofence/coordinates`), []);
+      
+      // 3. Clear user profile cached geofence data
+      await set(ref(db, `users/${auth.currentUser.uid}/profile/geofenceData`), null);
+      
+      // Short delay to ensure clearing operations complete before saving new data
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      // Now save the new geofence data
+      
+      // 4. Save to team-specific geofence
+      const teamGeofenceRef = ref(db, `teams/${userTeamCode}/geofence`);
       const geofenceData = {
-        coordinates: points,
+        coordinates: coordinates,
         owner: {
           uid: auth.currentUser.uid,
-          name: auth.currentUser.displayName || `${userData.firstName} ${userData.lastName}`,
+          name: auth.currentUser.displayName || `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || auth.currentUser.email,
           email: userData.email || auth.currentUser.email
         },
-        createdAt: new Date().toISOString(),
+        createdAt: userData.geofenceData?.createdAt || new Date().toISOString(),
         lastModified: new Date().toISOString()
       };
       
-      console.log("Saving to team geofence:", teamCode);
-      // Save to team geofence
-      const teamGeofenceRef = ref(db, `teams/${teamCode}/geofence`);
       await set(teamGeofenceRef, geofenceData);
-      console.log("Team geofence saved successfully");
       
-      console.log("Saving to global geofence for compatibility");
-      // Also save to global geofence for compatibility
-      const geofenceRef = ref(db, `geofence/coordinates`);
-      await set(geofenceRef, points);
-      console.log("Global geofence saved successfully");
-      
-      console.log("Saving to user profile");
-      // Save to user profile for quick access on login
+      // 5. Save to user profile for quick access (but with an explicit flag indicating this is post-reset)
       const userProfileGeofenceRef = ref(db, `users/${auth.currentUser.uid}/profile/geofenceData`);
       await set(userProfileGeofenceRef, {
-        coordinates: points,
-        teamCode: teamCode,
-        lastModified: new Date().toISOString()
+        coordinates: coordinates,
+        teamCode: userTeamCode,
+        lastModified: new Date().toISOString(),
+        isReset: true,
+        resetComplete: true
       });
-      console.log("User profile geofence saved successfully");
       
-      console.log("Marking as modified");
-      // Mark as modified to track future changes
-      await set(ref(db, `teams/${teamCode}/geofenceModified`), true);
-      console.log("All geofence data saved successfully");
+      // 6. Clear the needsGeofenceSetup flag in the user's profile
+      await set(ref(db, `users/${auth.currentUser.uid}/profile/needsGeofenceSetup`), false);
       
-      Alert.alert(
-        'Success', 
-        'Geofence boundary set successfully. You can modify these points later from the Maps screen, but it will require admin approval.',
-        [
-          { text: 'OK', onPress: () => {
-            console.log("Navigating to LocTrack");
-            navigation.replace('LocTrack');
-          }}
-        ]
-      );
+      // 7. Mark geofence as modified for the first time or update existing
+      await set(ref(db, `teams/${userTeamCode}/geofenceModified`), true);
+      
+      console.log("Geofence saved successfully with all caches properly cleared");
+      return { success: true };
     } catch (error) {
-      console.error('Error saving geofence:', error);
-      Alert.alert('Error', `Failed to save geofence: ${error.message}. Please try again.`);
-    } finally {
-      setLoading(false);
+      console.error("Error in saveOwnerGeofence:", error);
+      return { 
+        success: false, 
+        error: error.message || 'An unexpected error occurred while saving the geofence'
+      };
     }
   };
 
-  // Fix the handleDragStart function
+  const saveGeofence = async () => {
+    if (points.length < 3) {
+      Alert.alert('Not enough points', 'Please add at least 3 points to create a valid geofence.');
+      return;
+    }
+
+    // Confirm with user before saving
+    Alert.alert(
+      'Save Geofence',
+      'Are you sure you want to save this geofence? Once saved, it will be used to monitor your team members.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Save', 
+          onPress: async () => {
+            try {
+              setLoading(true);
+              
+              // Process the points for saving
+              const processedPoints = points.map(point => ({
+                latitude: point.latitude,
+                longitude: point.longitude
+              }));
+
+              // Save the geofence with app-specific team code
+              const result = await saveOwnerGeofence(processedPoints);
+              
+              if (result && result.success) {
+                // Mark geofence setup as complete
+                await AsyncStorage.setItem('needsGeofenceSetup', 'false');
+                
+                // Success notification
+                Alert.alert(
+                  'Geofence Saved',
+                  'Your geofence has been successfully saved and will be used to monitor activity.',
+                  [{ text: 'OK', onPress: () => navigation.navigate('LocTrack') }]
+                );
+              } else {
+                const errorMsg = result?.error || 'Unknown error occurred';
+                throw new Error(errorMsg);
+              }
+            } catch (error) {
+              console.error('Error saving geofence:', error);
+              Alert.alert('Error', `Failed to save geofence: ${error.message}`);
+            } finally {
+              setLoading(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  // Restore the handleDragStart function with optimizations
   const handleDragStart = (index) => {
     console.log(`Started dragging point ${index + 1}`);
     setIsDragging(true);
@@ -408,27 +692,50 @@ export default function OwnerInitialization({ navigation, route }) {
     ]).start();
   };
 
-  // Fix the handleDragEnd function
   const handleDragEnd = (index, e) => {
     const { latitude, longitude } = e.nativeEvent.coordinate;
     console.log(`Finished dragging point ${index + 1} to`, latitude, longitude);
     
-    // Update the point in our state array
+    // Store existing points just in case
+    const existingPoints = [...points];
+    
+    // Reset dragging state first
+    setIsDragging(false);
+    setActiveIndex(null);
+    
+    // Update the point in our state array - but do it all at once
     setPoints(currentPoints => {
+      // Safety check - make sure we still have the points
+      if (currentPoints.length === 0 && existingPoints.length > 0) {
+        console.warn('Points lost during drag, restoring from backup');
+        const newPoints = [...existingPoints];
+        if (index < newPoints.length) {
+          newPoints[index] = { latitude, longitude };
+        }
+        
+        // Calculate new distances after a short delay to avoid twitching
+        setTimeout(() => {
+          const newDistances = calculateDistancesForPoints(newPoints);
+          setDistances(newDistances);
+        }, 300);
+        
+        return newPoints;
+      }
+      
+      // Normal flow
       const newPoints = [...currentPoints];
       newPoints[index] = { latitude, longitude };
       
-      // Recalculate distances but don't immediately update UI
-      const newDistances = calculateDistancesForPoints(newPoints);
-      setDistances(newDistances);
+      // Calculate distances on next frame to avoid visual stuttering
+      setTimeout(() => {
+        const newDistances = calculateDistancesForPoints(newPoints);
+        setDistances(newDistances);
+      }, 300);
       
       return newPoints;
     });
     
-    // Reset dragging state and animate opacity back
-    setIsDragging(false);
-    setActiveIndex(null);
-    
+    // Animate opacity back
     Animated.parallel([
       Animated.timing(markerOpacity, {
         toValue: 1,
@@ -442,8 +749,10 @@ export default function OwnerInitialization({ navigation, route }) {
       })
     ]).start();
     
-    // Force update but use the debounced version
-    setForceUpdate(prev => prev + 1);
+    // Only force update once all animations are complete
+    setTimeout(() => {
+      setForceUpdate(prev => prev + 1);
+    }, 400);
   };
   
   // Add helper function to calculate distances
@@ -482,6 +791,66 @@ export default function OwnerInitialization({ navigation, route }) {
     Alert.alert('Team Code Set', `Using team code: ${teamCodeInput.trim()}`);
   };
 
+  // Add a function to start continuous location tracking
+  const startLocationTracking = async () => {
+    if (!currentLocation) return;
+    
+    try {
+      console.log('Starting continuous location tracking');
+      
+      // Request permissions if not already granted
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') return;
+      
+      // Start watching position with a balanced accuracy for good performance
+      const locationSubscription = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.Balanced,
+          distanceInterval: 10, // Update if moved at least 10 meters
+          timeInterval: 5000,   // Or at least every 5 seconds
+        },
+        (location) => {
+          const { latitude, longitude, accuracy } = location.coords;
+          
+          // Only update if the accuracy is reasonable
+          if (accuracy <= 50) {
+            console.log('Location update:', latitude, longitude, 'accuracy:', accuracy);
+            
+            // Update current location without affecting geofence points
+            setCurrentLocation({ latitude, longitude });
+          }
+        }
+      );
+      
+      // Return the subscription for cleanup
+      return locationSubscription;
+    } catch (error) {
+      console.error('Error setting up location tracking:', error);
+    }
+  };
+
+  // Add a useEffect hook to handle continuous location tracking
+  useEffect(() => {
+    let locationSubscription = null;
+    
+    const setupLocationTracking = async () => {
+      try {
+        locationSubscription = await startLocationTracking();
+      } catch (error) {
+        console.error('Failed to set up location tracking:', error);
+      }
+    };
+    
+    setupLocationTracking();
+    
+    // Cleanup function
+    return () => {
+      if (locationSubscription) {
+        locationSubscription.remove();
+      }
+    };
+  }, []); // Empty dependency array to run only once on mount
+
   return (
     <View style={styles.container}>
       <View style={styles.mapContainer}>
@@ -489,14 +858,40 @@ export default function OwnerInitialization({ navigation, route }) {
           ref={mapRef}
           style={styles.map}
           initialRegion={initialRegion}
-          showsUserLocation={true}
-          showsMyLocationButton={false}
-          followsUserLocation={false}
+          onRegionChangeComplete={(region) => {
+            if (!isDragging) {
+              setInitialRegion(region);
+            }
+          }}
+          moveOnMarkerPress={false}
           maxZoomLevel={20}
-          rotateEnabled={true}
-          pitchEnabled={true}
+          minZoomLevel={12}
+          rotateEnabled={false}
+          pitchEnabled={false}
+          scrollEnabled={true}
           zoomEnabled={true}
+          zoomTapEnabled={true}
+          toolbarEnabled={false}
+          loadingEnabled={true}
+          loadingIndicatorColor="#2196F3"
+          loadingBackgroundColor="#FFFFFF"
+          key="mainMap"
         >
+          {/* Add current location marker */}
+          {currentLocation && (
+            <Marker
+              coordinate={currentLocation}
+              anchor={{ x: 0.5, y: 0.5 }}
+              zIndex={1000}
+              tracksViewChanges={false}
+            >
+              <View style={styles.currentLocationMarker}>
+                <View style={styles.currentLocationDot} />
+                <View style={styles.currentLocationRing} />
+              </View>
+            </Marker>
+          )}
+          
           {/* Draw polygon fill first (lowest z-index) */}
           {points.length >= 3 && (
             <Polygon
@@ -505,6 +900,7 @@ export default function OwnerInitialization({ navigation, route }) {
               strokeColor="rgba(33, 150, 243, 0.8)"
               strokeWidth={2}
               strokeOpacity={polygonOpacity}
+              key="polygon"
             />
           )}
           
@@ -513,10 +909,13 @@ export default function OwnerInitialization({ navigation, route }) {
             const nextIndex = (index + 1) % points.length;
             if (nextIndex === 0 && points.length < 3) return null;
             
+            const nextPoint = points[nextIndex];
+            const lineKey = `line-${index}`;
+            
             return (
               <Polyline
-                key={`line-${index}-${debouncedForceUpdate}`}
-                coordinates={[point, points[nextIndex]]}
+                key={lineKey}
+                coordinates={[point, nextPoint]}
                 strokeColor="rgba(255, 0, 0, 0.7)"
                 strokeWidth={2}
               />
@@ -527,12 +926,15 @@ export default function OwnerInitialization({ navigation, route }) {
           {distances.map((dist, index) => {
             if (index === points.length - 1 && points.length < 3) return null;
             
+            const distKey = `distance-${index}`;
+            
             return (
               <Marker
-                key={`distance-${index}-${debouncedForceUpdate}`}
+                key={distKey}
                 coordinate={dist.midpoint}
                 anchor={{ x: 0.5, y: 0.5 }}
                 tracksViewChanges={false}
+                zIndex={300}
               >
                 <View style={styles.distanceMarker}>
                   <Text style={styles.distanceText}>{formatDistance(dist.distance)}</Text>
@@ -542,65 +944,42 @@ export default function OwnerInitialization({ navigation, route }) {
           })}
           
           {/* Point markers as simple fixed circles */}
-          {points.map((point, index) => (
-            <Marker 
-              key={`point-${index}-${debouncedForceUpdate}`}
-              coordinate={point} 
-              title={`Point ${index + 1}`}
-              tracksViewChanges={false}
-              flat={true}
-              draggable={true}
-              stopPropagation={true}
-              pinColor="blue"
-              calloutVisible={false}
-              tracksInfoWindowChanges={false}
-              onSelect={() => null}
-              onDragStart={() => handleDragStart(index)}
-              onDragEnd={(e) => handleDragEnd(index, e)}
-            >
-              <View style={[
-                styles.simpleMarker,
-                isDragging && index === activeIndex ? { opacity: 0.7 } : null
-              ]}>
-                <Text style={styles.simpleMarkerText}>{index + 1}</Text>
-              </View>
-            </Marker>
-          ))}
+          {points.map((point, index) => {
+            // Use a more stable key structure that won't change as often
+            const pointKey = `point-${index}`;
+            
+            return (
+              <Marker 
+                key={pointKey}
+                coordinate={point} 
+                title={`Point ${index + 1}`}
+                tracksViewChanges={false}
+                flat={true}
+                draggable={true}
+                stopPropagation={true}
+                pinColor="blue"
+                anchor={{ x: 0.5, y: 0.5 }}
+                zIndex={500}
+                onDragStart={() => handleDragStart(index)}
+                onDragEnd={(e) => handleDragEnd(index, e)}
+              >
+                <View style={[
+                  styles.simpleMarker,
+                  isDragging && index === activeIndex ? { opacity: 0.7 } : null
+                ]}>
+                  <Text style={styles.simpleMarkerText}>{index + 1}</Text>
+                </View>
+              </Marker>
+            );
+          })}
         </MapView>
         
         <View style={styles.centerMarker}>
           <Ionicons name="add" size={30} color="red" />
         </View>
-
-        <TouchableOpacity 
-          style={styles.locationButton}
-          onPress={getCurrentLocation}
-          disabled={loadingLocation}
-        >
-          {loadingLocation ? (
-            <ActivityIndicator color="#FFFFFF" size="small" />
-          ) : (
-            <Ionicons name="compass" size={24} color="#FFFFFF" />
-          )}
-        </TouchableOpacity>
       </View>
       
       <View style={styles.controlPanel}>
-        <TouchableOpacity 
-          style={styles.getLocationButton}
-          onPress={getCurrentLocation}
-          disabled={loadingLocation}
-        >
-          {loadingLocation ? (
-            <ActivityIndicator color="#FFFFFF" size="small" style={{marginRight: 8}} />
-          ) : (
-            <Ionicons name="locate" size={24} color="#FFFFFF" style={{marginRight: 8}} />
-          )}
-          <Text style={styles.getLocationButtonText}>
-            {loadingLocation ? 'Finding Location...' : 'Get My Location'}
-          </Text>
-        </TouchableOpacity>
-
         <Text style={styles.instructions}>
           Position the map and tap "Add Point" to place boundary markers. Add at least 3 points to create a valid geofence area. The distance between points will be shown.
         </Text>
@@ -658,42 +1037,13 @@ export default function OwnerInitialization({ navigation, route }) {
         </TouchableOpacity>
       </View>
 
-      <Modal
-        visible={showTeamCodeModal}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => setShowTeamCodeModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Enter Team Code</Text>
-            <Text style={styles.modalText}>
-              Team code is required to save the geofence. Please enter your team code:
-            </Text>
-            <TextInput
-              style={styles.input}
-              value={teamCodeInput}
-              onChangeText={setTeamCodeInput}
-              placeholder="Team Code"
-              autoCapitalize="none"
-            />
-            <View style={styles.modalButtons}>
-              <TouchableOpacity 
-                style={[styles.button, styles.cancelButton]}
-                onPress={() => setShowTeamCodeModal(false)}
-              >
-                <Text style={styles.buttonText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={[styles.button, styles.addButton]}
-                onPress={handleTeamCodeSubmit}
-              >
-                <Text style={styles.buttonText}>Confirm</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
+      {/* Move location status indicator below for better visibility */}
+      {loadingLocation && (
+        <View style={styles.locationStatus}>
+          <ActivityIndicator size="small" color="#FFFFFF" />
+          <Text style={styles.locationStatusText}>Getting your location...</Text>
         </View>
-      </Modal>
+      )}
     </View>
   );
 }
@@ -790,37 +1140,6 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     fontSize: 16,
   },
-  getLocationButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#2196F3',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    marginBottom: 16,
-  },
-  getLocationButtonText: {
-    color: 'white',
-    fontWeight: 'bold',
-    fontSize: 16,
-  },
-  locationButton: {
-    position: 'absolute',
-    top: 16,
-    right: 16,
-    backgroundColor: '#2196F3',
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 3,
-    elevation: 5,
-  },
   distanceMarker: {
     backgroundColor: 'rgba(255, 255, 255, 0.8)',
     paddingHorizontal: 6,
@@ -855,45 +1174,42 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     fontSize: 14,
   },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
+  locationStatus: {
+    position: 'absolute',
+    top: 50,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 20,
+    flexDirection: 'row',
     alignItems: 'center',
   },
-  modalContent: {
-    backgroundColor: 'white',
-    borderRadius: 10,
-    padding: 20,
-    width: '80%',
-    elevation: 5,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 10,
-    textAlign: 'center',
-  },
-  modalText: {
+  locationStatusText: {
+    color: '#FFFFFF',
+    marginLeft: 8,
     fontSize: 14,
-    marginBottom: 15,
-    textAlign: 'center',
-    color: '#666',
+    fontWeight: '500',
   },
-  input: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 5,
-    padding: 10,
-    marginBottom: 15,
+  currentLocationMarker: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  modalButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  currentLocationDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#2196F3',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
   },
-  cancelButton: {
-    backgroundColor: '#9E9E9E',
-    flex: 1,
-    marginRight: 5,
+  currentLocationRing: {
+    position: 'absolute',
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: 2,
+    borderColor: 'rgba(33, 150, 243, 0.5)',
+    backgroundColor: 'rgba(33, 150, 243, 0.1)',
   },
 }); 
