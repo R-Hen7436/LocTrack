@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, FlatList, TextInput, ActivityIndicator, Alert } from 'react-native';
-import { getDatabase, ref, get, query, orderByChild, set } from 'firebase/database';
+import { getDatabase, ref, get, query, orderByChild, set, update } from 'firebase/database';
 import { Ionicons } from '@expo/vector-icons';
 import { getAuth, signOut } from 'firebase/auth';
 import Navbar from '../Navbar';
@@ -16,8 +16,10 @@ export default function AdminDashboard({ navigation, route }) {
     totalUsers: 0,
     activeUsers: 0,
     totalOwners: 0,
-    totalMembers: 0
+    totalMembers: 0,
+    pendingRequests: 0
   });
+  const [changeRequests, setChangeRequests] = useState([]);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -162,7 +164,8 @@ export default function AdminDashboard({ navigation, route }) {
           totalUsers: usersData.length,
           activeUsers: activeCount,
           totalOwners: ownerCount,
-          totalMembers: memberCount
+          totalMembers: memberCount,
+          pendingRequests: 0
         });
       } else {
         console.warn('No users found in database!');
@@ -172,7 +175,8 @@ export default function AdminDashboard({ navigation, route }) {
           totalUsers: 0,
           activeUsers: 0,
           totalOwners: 0,
-          totalMembers: 0
+          totalMembers: 0,
+          pendingRequests: 0
         });
       }
     } catch (error) {
@@ -437,6 +441,148 @@ export default function AdminDashboard({ navigation, route }) {
     }
   };
 
+  const loadResetRequests = async () => {
+    try {
+      const db = getDatabase();
+      const requestsRef = ref(db, 'adminRequests/geofenceReset');
+      const snapshot = await get(requestsRef);
+      
+      if (snapshot.exists()) {
+        const requestsData = [];
+        snapshot.forEach((child) => {
+          const requestData = child.val();
+          requestsData.push({
+            id: child.key,
+            type: 'reset',
+            ...requestData
+          });
+        });
+        
+        // Add reset requests to change requests
+        setChangeRequests(prevRequests => {
+          // First get all non-reset requests
+          const nonResetRequests = prevRequests.filter(req => req.type !== 'reset');
+          return [...nonResetRequests, ...requestsData].sort((a, b) => {
+            if (!a.requestDate || !b.requestDate) return 0;
+            return new Date(b.requestDate) - new Date(a.requestDate);
+          });
+        });
+        
+        // Update pending count
+        setStats(prevStats => ({
+          ...prevStats,
+          pendingRequests: prevStats.pendingRequests + requestsData.filter(req => req.status === 'pending').length
+        }));
+      }
+    } catch (error) {
+      console.error('Error loading reset requests:', error);
+    }
+  };
+
+  const loadChangeRequests = async () => {
+    try {
+      const db = getDatabase();
+      const requestsRef = ref(db, 'adminRequests/geofenceChanges');
+      const snapshot = await get(requestsRef);
+      
+      if (snapshot.exists()) {
+        const requestsData = [];
+        snapshot.forEach((child) => {
+          const requestData = child.val();
+          requestsData.push({
+            id: child.key,
+            type: 'change',
+            ...requestData
+          });
+        });
+        
+        // Sort by date (newest first)
+        requestsData.sort((a, b) => {
+          if (!a.requestDate || !b.requestDate) return 0;
+          return new Date(b.requestDate) - new Date(a.requestDate);
+        });
+        
+        setChangeRequests(requestsData);
+        setStats(prevStats => ({
+          ...prevStats,
+          pendingRequests: requestsData.filter(req => req.status === 'pending').length
+        }));
+      } else {
+        setChangeRequests([]);
+        setStats(prevStats => ({
+          ...prevStats,
+          pendingRequests: 0
+        }));
+      }
+    } catch (error) {
+      console.error('Error loading change requests:', error);
+    }
+  };
+
+  useEffect(() => {
+    loadChangeRequests();
+    loadResetRequests();
+  }, []);
+
+  const handleResetRequestAction = async (teamCode, action) => {
+    try {
+      const db = getDatabase();
+      
+      if (action === 'approve') {
+        // Delete current geofence data
+        await set(ref(db, `teams/${teamCode}/geofence`), null);
+        
+        // Also clear global geofence for compatibility
+        await set(ref(db, `geofence/coordinates`), null);
+        
+        // Find all users with this team code and clear their profile cache
+        const usersRef = ref(db, 'users');
+        const snapshot = await get(usersRef);
+        
+        if (snapshot.exists()) {
+          const userUpdates = {};
+          
+          snapshot.forEach((childSnapshot) => {
+            const userId = childSnapshot.key;
+            const userData = childSnapshot.val();
+            
+            if (userData?.profile?.teamCode === teamCode) {
+              // Clear geofence data from profile
+              userUpdates[`${userId}/profile/geofenceData`] = null;
+              
+              // For members, clear the cache
+              if (userData?.profile?.role === 'member') {
+                userUpdates[`${userId}/profile/teamGeofenceCache`] = null;
+              }
+            }
+          });
+          
+          // Apply all updates at once
+          if (Object.keys(userUpdates).length > 0) {
+            await update(ref(db, 'users'), userUpdates);
+          }
+        }
+        
+        // Update request status
+        await set(ref(db, `adminRequests/geofenceReset/${teamCode}/status`), 'approved');
+        
+        Alert.alert('Success', 'Geofence reset request approved');
+      } else {
+        // Update request status to rejected
+        await set(ref(db, `adminRequests/geofenceReset/${teamCode}/status`), 'rejected');
+        
+        Alert.alert('Success', 'Geofence reset request rejected');
+      }
+      
+      // Reload requests
+      loadChangeRequests();
+      loadResetRequests();
+    } catch (error) {
+      console.error('Error handling reset request:', error);
+      Alert.alert('Error', 'Failed to process reset request');
+    }
+  };
+
   const renderUser = ({ item }) => (
     <TouchableOpacity 
       style={styles.userCard}
@@ -479,6 +625,80 @@ export default function AdminDashboard({ navigation, route }) {
         />
       </TouchableOpacity>
     </TouchableOpacity>
+  );
+
+  const renderChangeRequest = ({ item }) => (
+    <View style={styles.requestCard}>
+      <View style={styles.requestHeader}>
+        <Text style={styles.requestTeam}>Team: {item.teamCode}</Text>
+        <Text style={[
+          styles.requestStatus,
+          item.status === 'pending' ? styles.statusPending :
+          item.status === 'approved' ? styles.statusApproved :
+          styles.statusRejected
+        ]}>
+          {item.status.toUpperCase()}
+        </Text>
+      </View>
+      
+      <View style={styles.requestInfo}>
+        <Text style={styles.requestOwner}>
+          Requested by: {item.ownerName}
+        </Text>
+        <Text style={styles.requestDate}>
+          {new Date(item.requestDate).toLocaleDateString()} 
+          {' '}
+          {new Date(item.requestDate).toLocaleTimeString()}
+        </Text>
+        <Text style={styles.requestDetail}>
+          {item.type === 'reset' 
+            ? 'Request Type: RESET GEOFENCE' 
+            : `Points: ${item.newCoordinates?.length || 0}`}
+        </Text>
+      </View>
+      
+      {item.status === 'pending' && (
+        <View style={styles.requestActions}>
+          <TouchableOpacity
+            style={[styles.actionButton, styles.approveButton]}
+            onPress={() => {
+              if (item.type === 'reset') {
+                handleResetRequestAction(item.teamCode, 'approve');
+              } else {
+                handleRequestAction(
+                  item.id,
+                  item.teamCode,
+                  item.newCoordinates,
+                  'approve'
+                );
+              }
+            }}
+          >
+            <Ionicons name="checkmark" size={18} color="#fff" />
+            <Text style={styles.actionButtonText}>Approve</Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity
+            style={[styles.actionButton, styles.rejectButton]}
+            onPress={() => {
+              if (item.type === 'reset') {
+                handleResetRequestAction(item.teamCode, 'reject');
+              } else {
+                handleRequestAction(
+                  item.id,
+                  item.teamCode,
+                  item.newCoordinates,
+                  'reject'
+                );
+              }
+            }}
+          >
+            <Ionicons name="close" size={18} color="#fff" />
+            <Text style={styles.actionButtonText}>Reject</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+    </View>
   );
 
   return (
@@ -717,5 +937,70 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontSize: 16,
     color: '#999',
+  },
+  requestCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    padding: 16,
+    marginBottom: 12,
+  },
+  requestHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  requestTeam: {
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  requestStatus: {
+    fontSize: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  statusPending: {
+    backgroundColor: '#FF3B30',
+    color: '#FFFFFF',
+  },
+  statusApproved: {
+    backgroundColor: '#34C759',
+    color: '#FFFFFF',
+  },
+  statusRejected: {
+    backgroundColor: '#8E8E93',
+    color: '#FFFFFF',
+  },
+  requestInfo: {
+    marginBottom: 8,
+  },
+  requestOwner: {
+    fontSize: 14,
+    color: '#666',
+  },
+  requestDate: {
+    fontSize: 12,
+    color: '#999',
+  },
+  requestDetail: {
+    fontSize: 12,
+    color: '#666',
+  },
+  requestActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  approveButton: {
+    backgroundColor: '#34C759',
+  },
+  rejectButton: {
+    backgroundColor: '#FF3B30',
+  },
+  actionButtonText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
   },
 }); 

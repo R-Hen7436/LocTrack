@@ -182,25 +182,36 @@ export default function UserDetail({ route, navigation }) {
             try {
               const db = getDatabase();
               
-              // Check and delete from Firebase Auth
+              // Delete from Firebase Auth through backend endpoint
               try {
-                // Note: Admin SDK is required to delete other users
-                // This code will only work if deleting the currently logged-in user
-                console.log('Attempting to delete auth account');
-                const auth = getAuth();
-                const currentUser = auth.currentUser;
+                console.log('Attempting to delete auth account through admin API');
+                const response = await fetch('/api/admin/deleteUser', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({ userId: userId })
+                });
                 
-                // For security, we'll only attempt this if it matches the current user
-                if (currentUser && currentUser.uid === userId) {
-                  await deleteUser(currentUser);
-                  console.log('Auth user deleted successfully');
+                const data = await response.json();
+                
+                if (!response.ok) {
+                  if (response.status === 404) {
+                    console.warn('Auth account not found, continuing with database cleanup');
+                  } else {
+                    throw new Error(data.error || 'Failed to delete auth user');
+                  }
                 } else {
-                  console.log('Cannot delete auth account - not current user');
-                  // In a real app with Admin SDK, you would use admin.auth().deleteUser(uid)
+                  console.log('Auth user deleted successfully through admin API');
                 }
               } catch (authError) {
                 console.error('Error deleting auth user:', authError);
-                // Continue with database deletion even if auth deletion fails
+                // Show error but continue with database cleanup
+                Alert.alert(
+                  'Warning',
+                  'Failed to delete authentication account. The user data will still be removed from the database. Please contact system administrator.',
+                  [{ text: 'Continue', style: 'default' }]
+                );
               }
               
               // Delete user invitations if any

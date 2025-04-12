@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, Image, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, Image, ScrollView, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { getDatabase, ref, get, onValue } from 'firebase/database';
 import Navbar from '../Navbar';
@@ -108,6 +108,31 @@ export default function Dashboard({ navigation }) {
         if (snapshot.exists()) {
           const profileData = snapshot.val();
           setUserProfile(profileData);
+          
+          // Check if user is an owner and needs to set up geofence
+          if (profileData.role === 'owner') {
+            // First check user profile for geofence data (fastest)
+            if (profileData.geofenceData && profileData.geofenceData.coordinates && 
+                profileData.geofenceData.coordinates.length >= 3) {
+              console.log('Owner has geofence in profile data');
+              return; // Already has geofence
+            }
+            
+            // If not in profile, check team geofence
+            const teamGeofenceRef = ref(db, `teams/${profileData.teamCode}/geofence`);
+            const geofenceSnapshot = await get(teamGeofenceRef);
+            
+            if (!geofenceSnapshot.exists()) {
+              // Owner needs to set up geofence points - redirect to initialization
+              Alert.alert(
+                'Geofence Setup Required',
+                'You need to set up location boundaries for your team.',
+                [
+                  { text: 'Set Up Now', onPress: () => navigation.navigate('OwnerInitialization', { teamCode: profileData.teamCode }) }
+                ]
+              );
+            }
+          }
         }
         setLoading(false);
       } catch (error) {

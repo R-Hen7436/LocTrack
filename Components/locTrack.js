@@ -165,6 +165,89 @@ useEffect(() => {
         setUserRole(profileData.role);
         console.log('Setting user role to:', profileData.role);
         
+        // Check for geofence points in the user profile first (fastest)
+        if (profileData.role === 'owner') {
+          // Try to load from user profile first for immediate display
+          if (profileData.geofenceData && profileData.geofenceData.coordinates) {
+            console.log('Loading geofence from user profile data');
+            setPoints(profileData.geofenceData.coordinates);
+          } else {
+            // If not in profile, check team geofence
+            console.log('No geofence in profile, checking team geofence');
+            const teamGeofenceRef = ref(db, `teams/${profileData.teamCode}/geofence`);
+            const geofenceSnapshot = await get(teamGeofenceRef);
+            
+            if (geofenceSnapshot.exists()) {
+              const geofenceData = geofenceSnapshot.val();
+              
+              // Handle both data structures
+              const coordinates = Array.isArray(geofenceData) 
+                ? geofenceData 
+                : (geofenceData.coordinates || []);
+              
+              console.log('Found team geofence with', coordinates.length, 'points');
+              setPoints(coordinates);
+              
+              // Also update the profile for next time
+              if (coordinates.length > 0) {
+                const userProfileGeofenceRef = ref(db, `users/${auth.currentUser.uid}/profile/geofenceData`);
+                await set(userProfileGeofenceRef, {
+                  coordinates: coordinates,
+                  teamCode: profileData.teamCode,
+                  lastModified: new Date().toISOString()
+                });
+                console.log('Updated user profile with geofence data for faster loading');
+              }
+            } else {
+              // Owner needs to set up geofence points - redirect to initialization
+              Alert.alert(
+                'Geofence Setup Required',
+                'You need to set up location boundaries for your team.',
+                [
+                  { text: 'Set Up Now', onPress: () => navigation.navigate('OwnerInitialization', { teamCode: profileData.teamCode }) }
+                ]
+              );
+              return;
+            }
+          }
+        } else if (profileData.role === 'member') {
+          // For members, get team code and load team geofence
+          if (profileData.teamCode) {
+            // Try to load from local cache first
+            if (profileData.teamGeofenceCache && profileData.teamGeofenceCache.coordinates) {
+              console.log('Loading team geofence from local cache');
+              setTeamGeofence(profileData.teamGeofenceCache.coordinates);
+            }
+            
+            // Always check for updated team geofence
+            const teamGeofenceRef = ref(db, `teams/${profileData.teamCode}/geofence`);
+            const geofenceSnapshot = await get(teamGeofenceRef);
+            
+            if (geofenceSnapshot.exists()) {
+              const geofenceData = geofenceSnapshot.val();
+              
+              // Handle both data structures
+              const coordinates = Array.isArray(geofenceData) 
+                ? geofenceData 
+                : (geofenceData.coordinates || []);
+              
+              console.log('Found team geofence with', coordinates.length, 'points');
+              setTeamGeofence(coordinates);
+              
+              // Cache team geofence in user profile
+              if (coordinates.length > 0) {
+                const cacheRef = ref(db, `users/${auth.currentUser.uid}/profile/teamGeofenceCache`);
+                await set(cacheRef, {
+                  coordinates: coordinates,
+                  teamCode: profileData.teamCode,
+                  lastUpdated: new Date().toISOString()
+                });
+                console.log('Cached team geofence for faster loading');
+              }
+            }
+          }
+        }
+        
         // Auto-trigger location tracking for all users
         await toggleCurrentLocation();
       }
@@ -292,6 +375,12 @@ const initializeMap = async () => {
 };
 
 const getLocation = async () => {
+  // This function is no longer used as we've removed the Set Point button
+  console.log("Set Point functionality has been disabled");
+  return;
+  
+  /* 
+  // Original code commented out
   if (mapRef.current) {
     const region = await mapRef.current.getMapBoundaries();
     const centerLatitude = (region.northEast.latitude + region.southWest.latitude) / 2;
@@ -308,6 +397,7 @@ const getLocation = async () => {
       return updatedPoints;
     });
   }
+  */
 };
 
 const isSubZoneCrossingPolygonEdges = (subZone, polygon) => {
@@ -633,10 +723,89 @@ const checkDatabaseConnection = async () => {
 };
 
 const saveCoordinatesToFirebase = (coordinates) => {
-  const dbRef = ref(db, "geofence/coordinates");
-  set(dbRef, coordinates)
-    .then(() => console.log("Coordinates saved successfully"))
-    .catch((error) => console.error("Error saving coordinates:", error));
+  const auth = getAuth();
+  if (!auth.currentUser) return;
+  
+  try {
+    const db = getDatabase();
+    
+    // 1. Save to global geofence for compatibility
+    const globalRef = ref(db, "geofence/coordinates");
+    set(globalRef, coordinates)
+      .then(() => console.log("Global coordinates saved successfully"))
+      .catch((error) => console.error("Error saving global coordinates:", error));
+    
+    // 2. Get user profile data
+    get(ref(db, `users/${auth.currentUser.uid}/profile`))
+      .then((snapshot) => {
+        if (snapshot.exists()) {
+          const userData = snapshot.val();
+          
+          if (userData.role === 'owner' && userData.teamCode) {
+            // 3. Save to team-specific geofence
+            const teamGeofenceRef = ref(db, `teams/${userData.teamCode}/geofence`);
+            const geofenceData = {
+              coordinates: coordinates,
+              owner: {
+                uid: auth.currentUser.uid,
+                name: auth.currentUser.displayName || `${userData.firstName} ${userData.lastName}`,
+                email: userData.email
+              },
+              createdAt: userData.geofenceData?.createdAt || new Date().toISOString(),
+              lastModified: new Date().toISOString()
+            };
+            
+            set(teamGeofenceRef, geofenceData)
+              .then(() => console.log("Team geofence saved successfully"))
+              .catch((error) => console.error("Error saving team geofence:", error));
+            
+            // 4. Save to user profile for quick access
+            const userProfileGeofenceRef = ref(db, `users/${auth.currentUser.uid}/profile/geofenceData`);
+            set(userProfileGeofenceRef, {
+              coordinates: coordinates,
+              teamCode: userData.teamCode,
+              lastModified: new Date().toISOString()
+            })
+              .then(() => console.log("User profile geofence saved successfully"))
+              .catch((error) => console.error("Error saving to user profile:", error));
+            
+            // 5. Check if this is an update after initialization
+            get(ref(db, `teams/${userData.teamCode}/geofenceModified`))
+              .then((modifiedSnapshot) => {
+                // If already exists in database, this is an update
+                if (modifiedSnapshot.exists()) {
+                  // Create admin change request
+                  const changeRequestRef = ref(db, `adminRequests/geofenceChanges/${userData.teamCode}`);
+                  set(changeRequestRef, {
+                    teamCode: userData.teamCode,
+                    ownerId: auth.currentUser.uid,
+                    ownerName: auth.currentUser.displayName || userData.firstName + ' ' + userData.lastName,
+                    requestDate: new Date().toISOString(),
+                    newCoordinates: coordinates,
+                    status: 'pending'
+                  })
+                    .then(() => {
+                      Alert.alert(
+                        'Change Request Submitted',
+                        'Your geofence boundary changes require admin approval. You will be notified when approved.'
+                      );
+                    })
+                    .catch((error) => console.error("Error creating change request:", error));
+                } else {
+                  // First time setup, mark as modified
+                  set(ref(db, `teams/${userData.teamCode}/geofenceModified`), true)
+                    .then(() => console.log("Geofence marked as modified"))
+                    .catch((error) => console.error("Error marking geofence:", error));
+                }
+              })
+              .catch((error) => console.error("Error checking geofence modified status:", error));
+          }
+        }
+      })
+      .catch((error) => console.error("Error getting user profile:", error));
+  } catch (error) {
+    console.error("Error in saveCoordinatesToFirebase:", error);
+  }
 };
 
 // Add this helper function to check if a location change is significant
@@ -662,45 +831,77 @@ const fitAllMarkers = (forceUpdate = false) => {
   // Create an array of all coordinates to include in the view
   const allCoordinates = [];
   
-  // Add current location if available
-  if (currentLocation) {
-    allCoordinates.push({
-      latitude: currentLocation.latitude,
-      longitude: currentLocation.longitude
+  // First prioritize geofence points to ensure they're in view
+  const geofencePoints = userRole === 'member' ? teamGeofence : points;
+  if (geofencePoints.length >= 3) {
+    // If we have a proper geofence, prioritize showing all of it
+    geofencePoints.forEach(point => {
+      allCoordinates.push(point);
     });
-  }
-  
-  // Add all user locations
-  if (usersLocations) {
-    Object.values(usersLocations).forEach(user => {
-      if (user.Latitude && user.Longitude) {
+    
+    // Add current location only if we have space
+    if (currentLocation) {
+      allCoordinates.push({
+        latitude: currentLocation.latitude,
+        longitude: currentLocation.longitude
+      });
+    }
+    
+    // Add selected team members' locations
+    if (usersLocations) {
+      Object.entries(usersLocations).filter(([userId, userData]) => {
+        // Only include team members
+        if (!userData || !userData.Latitude || !userData.Longitude) return false;
+        if (userId === auth.currentUser?.uid) return false;
+        
+        const currentUserProfile = usersLocations[auth.currentUser?.uid];
+        return userData.teamCode === currentUserProfile?.teamCode;
+      }).forEach(([_, userData]) => {
         allCoordinates.push({
-          latitude: user.Latitude,
-          longitude: user.Longitude
+          latitude: userData.Latitude,
+          longitude: userData.Longitude
         });
-      }
-    });
-  }
-  
-  // For owners, add geofence points if available
-  if (userRole !== 'member' && points.length > 0) {
-    points.forEach(point => {
-      allCoordinates.push(point);
-    });
-  }
-  
-  // For members, add team geofence points if available
-  if (userRole === 'member' && teamGeofence.length > 0) {
-    teamGeofence.forEach(point => {
-      allCoordinates.push(point);
-    });
+      });
+    }
+  } else {
+    // If no proper geofence, just show all points
+    // Add current location if available
+    if (currentLocation) {
+      allCoordinates.push({
+        latitude: currentLocation.latitude,
+        longitude: currentLocation.longitude
+      });
+    }
+    
+    // Add all user locations
+    if (usersLocations) {
+      Object.values(usersLocations).forEach(user => {
+        if (user.Latitude && user.Longitude) {
+          allCoordinates.push({
+            latitude: user.Latitude,
+            longitude: user.Longitude
+          });
+        }
+      });
+    }
+    
+    // Add any available geofence points
+    if (geofencePoints.length > 0) {
+      geofencePoints.forEach(point => {
+        allCoordinates.push(point);
+      });
+    }
   }
   
   // If we have coordinates, fit the map to show all of them
   if (allCoordinates.length > 0) {
-    // Use much larger edge padding for a more zoomed-out view
+    // Calculate appropriate padding based on what we're showing
+    const edgePadding = geofencePoints.length >= 3 
+      ? { top: 50, right: 50, bottom: 150, left: 50 } // Tighter fit for geofence
+      : { top: 150, right: 150, bottom: 250, left: 150 }; // More zoomed out for scattered points
+    
     mapRef.current.fitToCoordinates(allCoordinates, {
-      edgePadding: { top: 200, right: 200, bottom: 300, left: 200 },
+      edgePadding: edgePadding,
       animated: true
     });
   } else {
@@ -856,6 +1057,47 @@ return (
               strokeWidth={2} 
             />
           )}
+          {teamGeofence.length >= 2 && teamGeofence.map((point, index) => {
+            const nextIndex = (index + 1) % teamGeofence.length;
+            const nextPoint = teamGeofence[nextIndex];
+            
+            // Skip if we're drawing a line back to the first point but haven't completed a polygon
+            if (nextIndex === 0 && teamGeofence.length < 3) return null;
+            
+            // Calculate the midpoint for the label
+            const midPoint = {
+              latitude: (point.latitude + nextPoint.latitude) / 2,
+              longitude: (point.longitude + nextPoint.longitude) / 2
+            };
+            
+            // Calculate the distance
+            const distance = calculateDistance(point, nextPoint);
+            const distanceText = distance < 1000 
+              ? `${Math.round(distance)}m` 
+              : `${(distance / 1000).toFixed(2)}km`;
+            
+            return (
+              <React.Fragment key={`distance-${index}`}>
+                {/* Polyline between points */}
+                <Polygon
+                  coordinates={[point, nextPoint]}
+                  strokeColor="rgba(255, 0, 0, 0.7)"
+                  strokeWidth={2}
+                  fillColor="transparent"
+                />
+                {/* Distance marker */}
+                <Marker
+                  coordinate={midPoint}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                  tracksViewChanges={false}
+                >
+                  <View style={styles.distanceMarker}>
+                    <Text style={styles.distanceText}>{distanceText}</Text>
+                  </View>
+                </Marker>
+              </React.Fragment>
+            );
+          })}
         </>
       ) : (
         <>
@@ -870,6 +1112,48 @@ return (
               strokeWidth={2} 
             />
           )}
+          {points.length >= 2 && points.map((point, index) => {
+            // Calculate distance to the next point (or back to the first point if this is the last one)
+            const nextIndex = (index + 1) % points.length;
+            const nextPoint = points[nextIndex];
+            
+            // Skip if we're drawing a line back to the first point but haven't completed a polygon
+            if (nextIndex === 0 && points.length < 3) return null;
+            
+            // Calculate the midpoint for the label
+            const midPoint = {
+              latitude: (point.latitude + nextPoint.latitude) / 2,
+              longitude: (point.longitude + nextPoint.longitude) / 2
+            };
+            
+            // Calculate the distance
+            const distance = calculateDistance(point, nextPoint);
+            const distanceText = distance < 1000 
+              ? `${Math.round(distance)}m` 
+              : `${(distance / 1000).toFixed(2)}km`;
+            
+            return (
+              <React.Fragment key={`distance-${index}`}>
+                {/* Polyline between points */}
+                <Polygon
+                  coordinates={[point, nextPoint]}
+                  strokeColor="rgba(255, 0, 0, 0.7)"
+                  strokeWidth={2}
+                  fillColor="transparent"
+                />
+                {/* Distance marker */}
+                <Marker
+                  coordinate={midPoint}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                  tracksViewChanges={false}
+                >
+                  <View style={styles.distanceMarker}>
+                    <Text style={styles.distanceText}>{distanceText}</Text>
+                  </View>
+                </Marker>
+              </React.Fragment>
+            );
+          })}
         </>
       )}
       {currentLocation && (
@@ -915,12 +1199,6 @@ return (
       }
     </MapView>
 
-    {userRole !== 'member' && (
-      <View style={styles.crosshair} pointerEvents="none">
-        <Text style={styles.crosshairText}>+</Text>
-      </View>
-    )}
-
     <View style={styles.toolbarContainer}>
       {userRole !== 'member' ? (
         <>
@@ -929,11 +1207,6 @@ return (
           </View>
 
           <View style={styles.buttonContainer}>
-            <TouchableOpacity style={styles.button} onPress={getLocation}>
-              <Ionicons name="location" size={20} color="white" />
-              <Text style={styles.buttonText}>Set Point</Text>
-            </TouchableOpacity>
-
             <TouchableOpacity style={[styles.button, styles.buttonSecondary]} onPress={toggleCurrentLocation}>
               <Ionicons name="navigate" size={20} color="white" />
               <Text style={styles.buttonText}>
@@ -942,26 +1215,82 @@ return (
             </TouchableOpacity>
 
             <TouchableOpacity 
-              style={[styles.button, styles.buttonReset]} 
-              onPress={() => {
-                setPoints([]);
-              }}
-            >
-              <Ionicons name="refresh" size={20} color="white" />
-              <Text style={styles.buttonText}>Reset All</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
               style={[styles.button, styles.buttonCenter]} 
               onPress={() => {
-                // Manual centering should force the map update
-                fitAllMarkers(true);
+                // Focus specifically on the geofence
+                if (points.length >= 3 && mapRef.current) {
+                  mapRef.current.fitToCoordinates(points, {
+                    edgePadding: { top: 50, right: 50, bottom: 150, left: 50 },
+                    animated: true
+                  });
+                } else {
+                  // If no complete geofence, use regular centering
+                  fitAllMarkers(true);
+                }
               }}
             >
               <Ionicons name="expand" size={20} color="white" />
               <Text style={styles.buttonText}>Center Map</Text>
             </TouchableOpacity>
           </View>
+
+          <TouchableOpacity 
+            style={[styles.button, styles.resetButton]}
+            onPress={() => {
+              Alert.alert(
+                'Request Geofence Reset',
+                'Are you sure you want to request a reset of the geofence area? This will require admin approval.',
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  { 
+                    text: 'Request Reset', 
+                    style: 'destructive',
+                    onPress: () => {
+                      const auth = getAuth();
+                      if (!auth.currentUser) return;
+                      
+                      get(ref(db, `users/${auth.currentUser.uid}/profile`))
+                        .then((snapshot) => {
+                          if (snapshot.exists()) {
+                            const userData = snapshot.val();
+                            
+                            if (userData.role === 'owner' && userData.teamCode) {
+                              // Create admin reset request
+                              const resetRequestRef = ref(db, `adminRequests/geofenceReset/${userData.teamCode}`);
+                              set(resetRequestRef, {
+                                teamCode: userData.teamCode,
+                                ownerId: auth.currentUser.uid,
+                                ownerName: auth.currentUser.displayName || `${userData.firstName} ${userData.lastName}`,
+                                requestDate: new Date().toISOString(),
+                                status: 'pending',
+                                currentPoints: points
+                              })
+                                .then(() => {
+                                  Alert.alert(
+                                    'Reset Request Submitted',
+                                    'Your geofence reset request has been submitted for admin approval.'
+                                  );
+                                })
+                                .catch((error) => {
+                                  console.error("Error creating reset request:", error);
+                                  Alert.alert('Error', 'Failed to submit reset request.');
+                                });
+                            }
+                          }
+                        })
+                        .catch((error) => {
+                          console.error("Error getting user profile:", error);
+                          Alert.alert('Error', 'Failed to access user profile.');
+                        });
+                    }
+                  }
+                ]
+              );
+            }}
+          >
+            <Ionicons name="refresh-circle" size={24} color="white" />
+            <Text style={styles.buttonText}>Request Geofence Reset</Text>
+          </TouchableOpacity>
         </>
       ) : (
         <>
@@ -971,8 +1300,16 @@ return (
           <TouchableOpacity 
             style={[styles.button, styles.buttonCenter, styles.memberCenterButton]} 
             onPress={() => {
-              // Manual centering should force the map update
-              fitAllMarkers(true);
+              // Focus specifically on the team geofence for members
+              if (teamGeofence.length >= 3 && mapRef.current) {
+                mapRef.current.fitToCoordinates(teamGeofence, {
+                  edgePadding: { top: 50, right: 50, bottom: 150, left: 50 },
+                  animated: true
+                });
+              } else {
+                // If no complete geofence, use regular centering
+                fitAllMarkers(true);
+              }
             }}
           >
             <Ionicons name="expand" size={20} color="white" />
@@ -1027,13 +1364,11 @@ const styles = StyleSheet.create({
   },
   buttonContainer: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     justifyContent: 'space-between',
     gap: 10,
   },
   button: {
     flex: 1,
-    minWidth: '45%',
     backgroundColor: "#2196F3",
     paddingVertical: 12,
     paddingHorizontal: 20,
@@ -1044,7 +1379,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   buttonSecondary: {
-    backgroundColor: "#2196F3",
+    backgroundColor: "#4CAF50",
   },
   buttonReset: {
     backgroundColor: "#2196F3",
@@ -1191,6 +1526,11 @@ const styles = StyleSheet.create({
     marginTop: 10,
     width: '100%',
   },
+  resetButton: {
+    backgroundColor: "#FF5722",
+    marginTop: 10,
+    width: '100%',
+  },
   currentUserMarkerContainer: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -1218,5 +1558,18 @@ const styles = StyleSheet.create({
     color: '#333333',
     fontSize: 14,
     fontWeight: '500',
+  },
+  distanceMarker: {
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 0, 0, 0.7)',
+  },
+  distanceText: {
+    color: '#333',
+    fontSize: 11,
+    fontWeight: 'bold',
   },
 });
