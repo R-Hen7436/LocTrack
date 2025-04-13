@@ -544,11 +544,11 @@ const toggleCurrentLocation = async () => {
       setCurrentLocation(null);
       setGpsAccuracy(null);
       
-      // OPTIMIZATION: Only update necessary fields when toggling off
+      // Update Firebase to show inactive status
       const db = getDatabase();
       const userLocationRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
       
-      // Update with minimal data - only status fields
+      // Keep all the data but set isActive to false
       await update(userLocationRef, { 
         isActive: false,
         lastSeen: new Date().toISOString(),
@@ -567,30 +567,31 @@ const toggleCurrentLocation = async () => {
       return;
     }
 
-    // OPTIMIZATION: Use lower accuracy for initial location to save battery
+    // Get initial location with high accuracy
     const location = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.Balanced
+      accuracy: Location.Accuracy.High
     });
 
     const { latitude, longitude } = location.coords;
     setCurrentLocation({ latitude, longitude });
     setGpsAccuracy(location.coords.accuracy);
 
-    // Update user's location and presence
+    // Update user's location in Firebase
     const db = getDatabase();
     const userPresenceRef = ref(db, `users/${auth.currentUser.uid}/presence`);
     const userLocationRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
 
-    // Get user profile data - only fetch once
+    // Get user profile data
     const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
     const profileSnapshot = await get(userProfileRef);
-    let profileData = profileSnapshot.exists() ? profileSnapshot.val() : {};
+    const profileData = profileSnapshot.exists() ? profileSnapshot.val() : {};
 
-    // Update location with presence data
+    // Update location with all data
     await set(userLocationRef, { 
       Latitude: latitude, 
       Longitude: longitude,
-      timestamp: new Date().toISOString(),
+      Accuracy: location.coords.accuracy,
+      Timestamp: new Date().toISOString(),
       isActive: true,
       lastSeen: new Date().toISOString(),
       ...profileData
@@ -604,7 +605,7 @@ const toggleCurrentLocation = async () => {
     };
     await set(userPresenceRef, presenceData);
 
-    // OPTIMIZATION: Set up disconnect hook only once
+    // Set up disconnect hook for proper offline status
     const connectedRef = ref(db, '.info/connected');
     onValue(connectedRef, (snap) => {
       if (snap.val() === true) {
@@ -620,13 +621,7 @@ const toggleCurrentLocation = async () => {
           lastSeen: new Date().toISOString()
         });
       }
-    }, { onlyOnce: true }); // OPTIMIZATION: Only run once
-
-    // If user is a member, set up continuous location tracking
-    if (userRole === 'member') {
-      // Location tracking is now handled by the useEffect hook
-      // This avoids duplicate watchers which can cause high battery drain
-    }
+    }, { onlyOnce: true });
   } catch (error) {
     console.error("Error toggling location:", error);
     Alert.alert('Error', 'Failed to update location');
@@ -641,7 +636,7 @@ useEffect(() => {
 
   const startLocationTracking = async () => {
     if (!currentLocation) {
-      setGpsAccuracy(null); // Set to null when location is removed
+      setGpsAccuracy(null);
       return;
     }
 
@@ -667,79 +662,50 @@ useEffect(() => {
         return;
       }
 
-      // Only check connection when needed - avoid constant checks
-      const isConnected = await checkDatabaseConnection();
-      if (!isConnected) {
-        console.warn("No database connection, location updates will not be saved");
-        // Schedule a retry after 30 seconds instead of failing
-        setTimeout(startLocationTracking, 30000);
-        return;
-      }
-
-      // OPTIMIZATION: Increase time intervals to reduce location polling frequency
-      // and increase the distance threshold for updates
       locationSubscription = await Location.watchPositionAsync(
         {
-          accuracy: Location.Accuracy.Balanced,
-          // Increased from 10 seconds to 15 seconds
-          timeInterval: 15000,
-          // Increased from 10 meters to 15 meters
-          distanceInterval: 15,
+          accuracy: Location.Accuracy.High, // Use high accuracy
+          timeInterval: 1000, // Update every 1 second (changed from 3000)
+          distanceInterval: 0, // No distance filter - update on any movement
         },
         async (location) => {
           try {
             const { latitude, longitude, accuracy } = location.coords;
             
-            // OPTIMIZATION: Only process location updates with reasonable accuracy
-            if (location.coords.accuracy <= 20) {
-              // OPTIMIZATION: Use significant location change detection
-              // to minimize processing and battery consumption
-              const prevLocation = currentLocation;
-              const isSignificant = isSignificantLocationChange(
-                prevLocation, 
-                { latitude, longitude },
-                15 // Increased threshold from 10 to 15 meters
-              );
+            // Always update local state for display
+            setCurrentLocation({ latitude, longitude });
+            setGpsAccuracy(accuracy);
+            
+            // Always update Firebase with every location change
+            if (auth && auth.currentUser && auth.currentUser.uid) {
+              // Get latest profile data each time for consistency
+              const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+              const profileSnapshot = await get(userProfileRef);
+              const profileData = profileSnapshot.exists() ? profileSnapshot.val() : {};
               
-              if (isSignificant) {
-                // Update location state
-                setCurrentLocation({ latitude, longitude });
-                setGpsAccuracy(accuracy);
-                
-                // OPTIMIZATION: Batch Firebase updates to reduce network activity
-                if (auth && auth.currentUser && auth.currentUser.uid) {
-                  // Cache profile data to avoid redundant fetches
-                  if (!userProfileCache) {
-                    // Only fetch profile data if not already cached
-                    const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
-                    const profileSnapshot = await get(userProfileRef);
-                    userProfileCache = profileSnapshot.exists() ? profileSnapshot.val() : {};
-                  }
-                  
-                  // Use the cached profile data
-                  const dbRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
-                  const updateData = { 
-                    Latitude: latitude, 
-                    Longitude: longitude,
-                    Accuracy: accuracy,
-                    Timestamp: new Date().toISOString(),
-                    userId: auth.currentUser.uid,
-                    // Use cached profile data
-                    firstName: userProfileCache.firstName || '',
-                    lastName: userProfileCache.lastName || '',
-                    photoURL: userProfileCache.photoURL || '',
-                    role: userProfileCache.role || '',
-                    teamCode: userProfileCache.teamCode || ''
-                  };
-                  
-                  // OPTIMIZATION: Use update instead of set to reduce data transfer
-                  update(dbRef, updateData);
-                }
-              }
+              // Update location in Firebase
+              const dbRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
+              const updateData = { 
+                Latitude: latitude, 
+                Longitude: longitude,
+                Accuracy: accuracy,
+                Timestamp: new Date().toISOString(),
+                isActive: true,
+                lastSeen: new Date().toISOString(),
+                userId: auth.currentUser.uid,
+                // Include profile data
+                firstName: profileData.firstName || '',
+                lastName: profileData.lastName || '',
+                photoURL: profileData.photoURL || '',
+                role: profileData.role || '',
+                teamCode: profileData.teamCode || ''
+              };
+              
+              // Use set instead of update to ensure all fields are updated
+              set(dbRef, updateData);
             }
           } catch (error) {
             console.error("Error updating location:", error);
-            setGpsAccuracy(null);
           }
         }
       );
@@ -749,8 +715,7 @@ useEffect(() => {
     }
   };
 
-  // Initialize tracking with user profile cache
-  let userProfileCache = null;
+  // Initialize tracking
   if (currentLocation) {
     startLocationTracking();
   }
@@ -759,28 +724,8 @@ useEffect(() => {
     if (locationSubscription) {
       locationSubscription.remove();
     }
-    // Clear cache on cleanup
-    userProfileCache = null;
   };
 }, [currentLocation]);
-
-// Add optimized implementation of significant location change detection
-const isSignificantLocationChange = (prevLocation, newLocation, threshold = 15) => {
-  if (!prevLocation) return true;
-  
-  // OPTIMIZATION: Use a simplified distance calculation that's less CPU intensive
-  // for frequent checks compared to the full haversine formula
-  const fastDistanceCheck = (point1, point2) => {
-    // Quick approximation for small distances - uses less CPU
-    const latDiff = (point2.latitude - point1.latitude) * 111000; // 1 degree lat ≈ 111km
-    const lngDiff = (point2.longitude - point1.longitude) * 
-                    Math.cos(point1.latitude * Math.PI / 180) * 111000;
-    return Math.sqrt(latDiff * latDiff + lngDiff * lngDiff);
-  };
-  
-  const distance = fastDistanceCheck(prevLocation, newLocation);
-  return distance > threshold;
-};
 
 const isPointInsidePolygon = (point, polygon) => {
   let x = point.latitude, y = point.longitude;
