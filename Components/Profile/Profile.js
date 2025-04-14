@@ -67,11 +67,25 @@ const formatStatus = (status) => {
   return status.charAt(0).toUpperCase() + status.slice(1);
 };
 
+// Add MAC address formatter
+const formatMacAddress = (parts) => {
+  return parts.map(part => part.toUpperCase()).join(':');
+};
+
+// Add MAC address validator
+const isValidMacAddress = (parts) => {
+  const regex = /^[0-9A-Fa-f]{2}$/;
+  return parts.every(part => regex.test(part)) && parts.length === 6;
+};
+
 export default function Profile({ navigation }) {
   const [userProfile, setUserProfile] = useState(null);
   const [teamMembers, setTeamMembers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [userStatus, setUserStatus] = useState('offline'); // Add state for user status
+  const [isEditingMac, setIsEditingMac] = useState(false);
+  const [macParts, setMacParts] = useState(['', '', '', '', '', '']);
+  const macInputRefs = Array(6).fill(0).map(() => React.createRef());
 
   useEffect(() => {
     console.log("Profile component mounted");
@@ -576,6 +590,55 @@ export default function Profile({ navigation }) {
     );
   };
 
+  const handleMacPartChange = (text, index) => {
+    // Remove non-hex characters
+    const cleaned = text.replace(/[^0-9A-Fa-f]/g, '');
+    
+    if (cleaned.length <= 2) {
+      const newParts = [...macParts];
+      newParts[index] = cleaned;
+      setMacParts(newParts);
+      
+      // Auto-advance to next input if 2 characters entered
+      if (cleaned.length === 2 && index < 5) {
+        macInputRefs[index + 1].current.focus();
+      }
+    }
+  };
+
+  const handleMacKeyPress = (e, index) => {
+    if (e.nativeEvent.key === 'Backspace' && macParts[index] === '' && index > 0) {
+      // Move to previous input on backspace if current input is empty
+      macInputRefs[index - 1].current.focus();
+    }
+  };
+
+  const handleSaveMacAddress = async () => {
+    if (!isValidMacAddress(macParts)) {
+      Alert.alert('Invalid MAC Address', 'Please enter a valid MAC address in all fields');
+      return;
+    }
+
+    try {
+      const formattedMac = formatMacAddress(macParts);
+      const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+      await set(userProfileRef, {
+        ...userProfile,
+        MacAddress: formattedMac
+      });
+
+      setUserProfile(prev => ({
+        ...prev,
+        MacAddress: formattedMac
+      }));
+      setIsEditingMac(false);
+      Alert.alert('Success', 'MAC address updated successfully');
+    } catch (error) {
+      console.error('Error updating MAC address:', error);
+      Alert.alert('Error', 'Failed to update MAC address');
+    }
+  };
+
   return (
     <View style={styles.container}>
       <SafeAreaView style={styles.safeArea}>
@@ -647,6 +710,81 @@ export default function Profile({ navigation }) {
                     : 'Not specified'}
                 </Text>
               </View>
+              <View style={styles.infoItem}>
+                <Text style={styles.infoLabel}>MAC Address</Text>
+                {isEditingMac ? (
+                  <View style={styles.macAddressEditContainer}>
+                    <View style={styles.macInputWrapper}>
+                      {macParts.map((part, index) => (
+                        <React.Fragment key={index}>
+                          <TextInput
+                            ref={macInputRefs[index]}
+                            style={styles.macAddressPartInput}
+                            value={part}
+                            onChangeText={(text) => handleMacPartChange(text, index)}
+                            onKeyPress={(e) => handleMacKeyPress(e, index)}
+                            placeholder="XX"
+                            placeholderTextColor="#999"
+                            autoCapitalize="characters"
+                            maxLength={2}
+                            selectTextOnFocus={true}
+                          />
+                          {index < 5 && <Text style={styles.macAddressColon}>:</Text>}
+                        </React.Fragment>
+                      ))}
+                    </View>
+                    <View style={styles.macAddressActions}>
+                      <TouchableOpacity
+                        style={[styles.macAddressButton, styles.macAddressCancelButton]}
+                        onPress={() => {
+                          setIsEditingMac(false);
+                          if (userProfile?.MacAddress) {
+                            const parts = userProfile.MacAddress.split(':');
+                            setMacParts(parts);
+                          } else {
+                            setMacParts(['', '', '', '', '', '']);
+                          }
+                        }}
+                      >
+                        <Ionicons name="close" size={20} color="#FF3B30" />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.macAddressButton, styles.macAddressSaveButton]}
+                        onPress={handleSaveMacAddress}
+                      >
+                        <Ionicons name="checkmark" size={20} color="#34C759" />
+                      </TouchableOpacity>
+                    </View>
+                    <Text style={styles.macAddressHint}>Enter MAC address in hexadecimal format</Text>
+                  </View>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.macAddressDisplay}
+                    onPress={() => {
+                      if (userProfile?.MacAddress) {
+                        const parts = userProfile.MacAddress.split(':');
+                        setMacParts(parts);
+                      }
+                      setIsEditingMac(true);
+                    }}
+                  >
+                    <Text style={[
+                      styles.infoValue,
+                      !userProfile?.MacAddress && styles.macAddressPlaceholder
+                    ]}>
+                      {userProfile?.MacAddress || 'Set MAC Address'}
+                    </Text>
+                    <Ionicons name="pencil" size={16} color="#007AFF" style={styles.editIcon} />
+                  </TouchableOpacity>
+                )}
+              </View>
+              <TouchableOpacity 
+                style={styles.locationHistoryButton}
+                onPress={() => navigation.navigate('locationLogs')}
+              >
+                <Ionicons name="location-outline" size={20} color="#007AFF" />
+                <Text style={styles.locationHistoryButtonText}>View Location History</Text>
+              </TouchableOpacity>
             </View>
 
             {/* Activity Log */}
@@ -1051,9 +1189,8 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   infoItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
     paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#E5E5E5',
@@ -1061,13 +1198,12 @@ const styles = StyleSheet.create({
   infoLabel: {
     fontSize: 16,
     color: '#666',
+    marginBottom: 4,
   },
   infoValue: {
     fontSize: 16,
     color: '#000',
     fontWeight: '500',
-    maxWidth: '60%',
-    textAlign: 'right',
   },
   cardHeader: {
     flexDirection: 'row',
@@ -1351,5 +1487,93 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#8E8E93',
     marginTop: 2,
+  },
+  locationHistoryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+    padding: 12,
+    borderRadius: 10,
+    marginTop: 12,
+  },
+  locationHistoryButtonText: {
+    fontSize: 16,
+    color: '#007AFF',
+    marginLeft: 8,
+    fontWeight: '500',
+  },
+  macAddressEditContainer: {
+    width: '100%',
+    marginTop: 8,
+  },
+  macInputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+  },
+  macAddressPartInput: {
+    width: 40,
+    height: 44,
+    borderWidth: 1,
+    borderColor: '#E5E5EA',
+    borderRadius: 8,
+    textAlign: 'center',
+    fontSize: 16,
+    color: '#000',
+    backgroundColor: '#F9F9F9',
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    padding: 0,
+  },
+  macAddressColon: {
+    fontSize: 18,
+    color: '#8E8E93',
+    marginHorizontal: 4,
+    fontWeight: '600',
+  },
+  macAddressActions: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 16,
+    marginTop: 16,
+  },
+  macAddressButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 1,
+    },
+    shadowOpacity: 0.2,
+    shadowRadius: 1.41,
+    elevation: 2,
+  },
+  macAddressCancelButton: {
+    backgroundColor: '#FFE5E5',
+  },
+  macAddressSaveButton: {
+    backgroundColor: '#E5FFE9',
+  },
+  macAddressDisplay: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  macAddressPlaceholder: {
+    color: '#007AFF',
+    fontStyle: 'italic',
+  },
+  editIcon: {
+    marginLeft: 8,
+  },
+  macAddressHint: {
+    fontSize: 12,
+    color: '#8E8E93',
+    marginTop: 12,
+    textAlign: 'center',
   },
 }); 

@@ -4,7 +4,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { getAuth, onAuthStateChanged, signOut } from 'firebase/auth';
 import Login from './Components/Auth/Login';
 import Register from './Components/Auth/Register';
-import LocTrack from './Components/locTrack';
+import LocTrack from './Components/LocTrack';
 import ForgotPassword from './Components/Auth/ForgotPassword';
 import VerifyEmail from './Components/Auth/VerifyEmail';
 import ChangePassword from './Components/Auth/ChangePassword';
@@ -21,6 +21,7 @@ import Dashboard from './Components/IoT/Dashboard';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import GeofenceRequests from './Components/Admin/GeofenceRequests';
 import OwnerInitialization from './Components/Auth/OwnerInitialization';
+import LocationLog from './Components/History/locationLogs';
 
 const Stack = createNativeStackNavigator();
 
@@ -223,6 +224,15 @@ export default function App() {
                 }}
               />
               <Stack.Screen 
+                name="locationLogs" 
+                component={LocationLog}
+                options={{ 
+                  headerShown: true,
+                  title: 'Location History',
+                  animation: 'slide_from_right'
+                }}
+              />
+              <Stack.Screen 
                 name="OwnerInitialization" 
                 component={OwnerInitialization}
                 options={{ 
@@ -265,6 +275,15 @@ export default function App() {
                 component={EditProfile}
                 options={{ 
                   headerShown: false,
+                  animation: 'slide_from_right'
+                }}
+              />
+              <Stack.Screen 
+                name="locationLogs" 
+                component={LocationLog}
+                options={{ 
+                  headerShown: true,
+                  title: 'Location History',
                   animation: 'slide_from_right'
                 }}
               />
