@@ -112,6 +112,15 @@ export default function Dashboard({ navigation }) {
     }
   });
 
+  const [editingThreshold, setEditingThreshold] = useState(null);
+  const [thresholdValue, setThresholdValue] = useState('');
+  const [thresholdOperator, setThresholdOperator] = useState('>');
+  const [thresholdAction, setThresholdAction] = useState('alert');
+  const [isThresholdModalVisible, setIsThresholdModalVisible] = useState(false);
+  const [isDeleteModalVisible, setIsDeleteModalVisible] = useState(false);
+  const [deviceToDelete, setDeviceToDelete] = useState(null);
+  const longPressTimer = useRef(null);
+
   useEffect(() => {
     const loadUserProfile = async () => {
       try {
@@ -383,6 +392,8 @@ export default function Dashboard({ navigation }) {
           handleToggleChange(item);
         }
       }}
+      onLongPress={() => handleDeviceLongPress(item)}
+      delayLongPress={3000}
     >
       <View style={styles.deviceHeader}>
         <View style={styles.deviceIconContainer}>
@@ -426,6 +437,12 @@ export default function Dashboard({ navigation }) {
           <Text style={styles.dataValue}>{item.data?.lastStatusUpdate || new Date().toISOString()}</Text>
         </View>
 
+        {/* Smoke Level */}
+        <View style={styles.deviceDataRow}>
+          <Text style={styles.dataLabel}>Smoke Level</Text>
+          <Text style={styles.dataValue}>{item.data?.smokeLevel || '0'}</Text>
+        </View>
+
         {/* Toggle if device is dynamic */}
         {item.isDynamic && item.conditions?.type === 'toggle' && (
           <View style={styles.toggleContainer}>
@@ -435,6 +452,32 @@ export default function Dashboard({ navigation }) {
               onText={item.conditions.toggleStates.onText || 'ON'}
               offText={item.conditions.toggleStates.offText || 'OFF'}
             />
+          </View>
+        )}
+
+        {/* Threshold configuration display with direct editing */}
+        {item.isDynamic && item.conditions?.type === 'threshold' && (
+          <View style={styles.thresholdDisplayContainer}>
+            <Text style={styles.thresholdTitle}>Threshold Configuration</Text>
+            <View style={styles.deviceDataRow}>
+              <Text style={styles.dataLabel}>Operator</Text>
+              <Text style={styles.dataValue}>{item.conditions.threshold.operator}</Text>
+            </View>
+            <View style={styles.deviceDataRow}>
+              <Text style={styles.dataLabel}>Value</Text>
+              <Text style={styles.dataValue}>{item.conditions.threshold.value}</Text>
+            </View>
+            <View style={styles.deviceDataRow}>
+              <Text style={styles.dataLabel}>Action</Text>
+              <Text style={styles.dataValue}>{item.conditions.threshold.action}</Text>
+            </View>
+            <TouchableOpacity 
+              style={styles.editButton}
+              onPress={() => handleThresholdEdit(item)}
+            >
+              <Ionicons name="create-outline" size={18} color="#FFFFFF" />
+              <Text style={styles.editButtonText}>Edit Threshold</Text>
+            </TouchableOpacity>
           </View>
         )}
 
@@ -1027,13 +1070,16 @@ export default function Dashboard({ navigation }) {
     }
   };
 
-  // Modify saveDeviceWithConditions to remove lastStatusUpdate
-  const saveDeviceWithConditions = async () => {
-    if (!deviceFound || !deviceName) {
-      Alert.alert('Error', 'Device information is incomplete');
-      return;
-    }
+  // Add a function to handle long press for device deletion
+  const handleDeviceLongPress = (device) => {
+    setDeviceToDelete(device);
+    setIsDeleteModalVisible(true);
+  };
 
+  // Add a function to handle device deletion
+  const deleteDevice = async () => {
+    if (!deviceToDelete) return;
+    
     try {
       const auth = getAuth();
       if (!auth.currentUser) {
@@ -1042,94 +1088,85 @@ export default function Dashboard({ navigation }) {
       }
 
       const db = getDatabase();
-      const deviceRef = ref(db, `iotDevices/${auth.currentUser.uid}/${deviceSearchId}`);
-
-      // Create the base device object
-      const newDevice = {
-        name: deviceName,
-        type: 'smartlock',
-        status: deviceFound.isOnline ? 'online' : 'offline',
-        location: deviceLocation || 'Not specified',
-        lastUpdated: new Date().toISOString(),
-        deviceId: deviceSearchId,
-        isDynamic,
-        conditions: isDynamic && conditions.type !== 'static' ? conditions : null,
-        data: {
-          ...deviceFound,
-          isOnline: deviceFound.isOnline || false
-        }
-      };
-
-      await set(deviceRef, newDevice);
       
-      // Update threshold configuration in Firebase if it's a threshold type
-      if (isDynamic && conditions.type === 'threshold') {
-        const deviceConfigRef = ref(db, `IOTs/${deviceSearchId}`);
-        await set(deviceConfigRef, {
-          ...deviceFound,
-          Operator: conditions.threshold.operator,
-          Threshold: Number(conditions.threshold.value) || 0
-        });
-      }
-
-      // Reset form
-      setDeviceSearchId('');
-      setDeviceFound(null);
-      setIsSearchStep(true);
-      setIsDynamic(false);
-      setDeviceName('');
-      setDeviceLocation('');
-      setConditions({
-        type: 'static',
-        minValue: '',
-        maxValue: '',
-        buttonActions: [],
-        toggleStates: { 
-          on: '', 
-          off: '',
-          onText: '',
-          offText: ''
-        },
-        truefalseValue: { true: '', false: '' },
-        threshold: {
-          value: '',
-          operator: '>',
-          action: 'alert'
-        }
-      });
-
-      setIsAddModalVisible(false);
-      Alert.alert('Success', 'Device added successfully');
+      // Delete from user's devices
+      const deviceRef = ref(db, `iotDevices/${auth.currentUser.uid}/${deviceToDelete.deviceId}`);
+      await set(deviceRef, null);
+      
+      // If it's a threshold device, we don't delete from IOTs collection
+      // as other users might be using the same device
+      
+      setIsDeleteModalVisible(false);
+      setDeviceToDelete(null);
+      Alert.alert('Success', 'Device deleted successfully');
     } catch (error) {
-      console.error('Error adding device:', error);
-      Alert.alert('Error', 'Failed to add device: ' + error.message);
+      console.error('Error deleting device:', error);
+      Alert.alert('Error', 'Failed to delete device: ' + error.message);
     }
   };
 
-  // Add a new function to handle loading existing threshold configuration
-  const loadDeviceConfiguration = async (deviceId) => {
-    try {
-      const db = getDatabase();
-      const deviceConfigRef = ref(db, `IOTs/${deviceId}`);
-      const snapshot = await get(deviceConfigRef);
+  // Add a function to handle threshold editing
+  const handleThresholdEdit = (device) => {
+    setEditingThreshold(device);
+    setThresholdValue(device.conditions.threshold.value);
+    setThresholdOperator(device.conditions.threshold.operator);
+    setThresholdAction(device.conditions.threshold.action);
+    setIsThresholdModalVisible(true);
+  };
 
-      if (snapshot.exists()) {
-        const deviceData = snapshot.val();
-        if (deviceData.Operator && deviceData.Threshold !== undefined) {
-          setConditions(prev => ({
-            ...prev,
-            type: 'threshold',
-            threshold: {
-              ...prev.threshold,
-              operator: deviceData.Operator,
-              value: deviceData.Threshold.toString()
-            }
-          }));
-          setIsDynamic(true);
-        }
+  // Add a function to save threshold changes
+  const saveThresholdChanges = async () => {
+    if (!editingThreshold) return;
+    
+    try {
+      const auth = getAuth();
+      if (!auth.currentUser) {
+        Alert.alert('Error', 'User not authenticated');
+        return;
       }
+
+      const db = getDatabase();
+      
+      // Update the device in user's devices
+      const deviceRef = ref(db, `iotDevices/${auth.currentUser.uid}/${editingThreshold.deviceId}`);
+      const deviceSnapshot = await get(deviceRef);
+      
+      if (deviceSnapshot.exists()) {
+        const deviceData = deviceSnapshot.val();
+        const updatedDevice = {
+          ...deviceData,
+          conditions: {
+            ...deviceData.conditions,
+            threshold: {
+              operator: thresholdOperator,
+              value: thresholdValue,
+              action: thresholdAction
+            }
+          }
+        };
+        
+        await set(deviceRef, updatedDevice);
+      }
+      
+      // Update the threshold in IOTs collection
+      const iotRef = ref(db, `IOTs/${editingThreshold.deviceId}`);
+      const iotSnapshot = await get(iotRef);
+      
+      if (iotSnapshot.exists()) {
+        const iotData = iotSnapshot.val();
+        await set(iotRef, {
+          ...iotData,
+          Operator: thresholdOperator,
+          Threshold: Number(thresholdValue) || 0
+        });
+      }
+      
+      setIsThresholdModalVisible(false);
+      setEditingThreshold(null);
+      Alert.alert('Success', 'Threshold updated successfully');
     } catch (error) {
-      console.error('Error loading device configuration:', error);
+      console.error('Error updating threshold:', error);
+      Alert.alert('Error', 'Failed to update threshold: ' + error.message);
     }
   };
 
@@ -1175,6 +1212,153 @@ export default function Dashboard({ navigation }) {
       </View>
     );
   };
+
+  // Add a render function for the threshold edit modal
+  const renderThresholdEditModal = () => (
+    <Modal
+      animationType="slide"
+      transparent={true}
+      visible={isThresholdModalVisible}
+      onRequestClose={() => setIsThresholdModalVisible(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Edit Threshold</Text>
+            <TouchableOpacity 
+              onPress={() => setIsThresholdModalVisible(false)}
+            >
+              <Ionicons name="close" size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.modalBody}>
+            <Text style={styles.inputLabel}>Operator</Text>
+            <View style={styles.operatorButtons}>
+              <TouchableOpacity
+                style={[
+                  styles.operatorButton,
+                  thresholdOperator === '>' && styles.operatorButtonSelected
+                ]}
+                onPress={() => setThresholdOperator('>')}
+              >
+                <Text style={[
+                  styles.operatorButtonText,
+                  thresholdOperator === '>' && styles.operatorButtonTextSelected
+                ]}>Greater Than</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.operatorButton,
+                  thresholdOperator === '<' && styles.operatorButtonSelected
+                ]}
+                onPress={() => setThresholdOperator('<')}
+              >
+                <Text style={[
+                  styles.operatorButtonText,
+                  thresholdOperator === '<' && styles.operatorButtonTextSelected
+                ]}>Less Than</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.inputLabel}>Threshold Value</Text>
+            <TextInput
+              style={styles.input}
+              value={thresholdValue}
+              onChangeText={setThresholdValue}
+              placeholder="Enter threshold value"
+              keyboardType="numeric"
+            />
+
+            <Text style={styles.inputLabel}>Action</Text>
+            <View style={styles.actionButtons}>
+              <TouchableOpacity
+                style={[
+                  styles.actionButton,
+                  thresholdAction === 'alert' && styles.actionButtonSelected
+                ]}
+                onPress={() => setThresholdAction('alert')}
+              >
+                <Text style={[
+                  styles.actionButtonText,
+                  thresholdAction === 'alert' && styles.actionButtonTextSelected
+                ]}>Alert</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.actionButton,
+                  thresholdAction === 'notify' && styles.actionButtonSelected
+                ]}
+                onPress={() => setThresholdAction('notify')}
+              >
+                <Text style={[
+                  styles.actionButtonText,
+                  thresholdAction === 'notify' && styles.actionButtonTextSelected
+                ]}>Notify</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity 
+              style={styles.modalButton}
+              onPress={saveThresholdChanges}
+            >
+              <Text style={styles.modalButtonText}>Save Changes</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+
+  // Add a render function for the delete confirmation modal
+  const renderDeleteConfirmationModal = () => (
+    <Modal
+      animationType="slide"
+      transparent={true}
+      visible={isDeleteModalVisible}
+      onRequestClose={() => setIsDeleteModalVisible(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Delete Device</Text>
+            <TouchableOpacity 
+              onPress={() => setIsDeleteModalVisible(false)}
+            >
+              <Ionicons name="close" size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.modalBody}>
+            <Text style={styles.deleteConfirmationText}>
+              Are you sure you want to delete this device?
+            </Text>
+            <Text style={styles.deviceNameText}>
+              {deviceToDelete?.name || 'Unknown Device'}
+            </Text>
+            <Text style={styles.deviceIdText}>
+              ID: {deviceToDelete?.deviceId || 'Unknown'}
+            </Text>
+            
+            <View style={styles.deleteModalButtons}>
+              <TouchableOpacity 
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => setIsDeleteModalVisible(false)}
+              >
+                <Text style={styles.modalButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.modalButton, styles.deleteButton]}
+                onPress={deleteDevice}
+              >
+                <Text style={styles.modalButtonText}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
 
   return (
     <View style={styles.container}>
@@ -1236,6 +1420,8 @@ export default function Dashboard({ navigation }) {
       )}
       
       {renderAddDeviceModal()}
+      {renderThresholdEditModal()}
+      {renderDeleteConfirmationModal()}
       
       <Navbar activePage="dashboard" />
     </View>
@@ -1739,5 +1925,69 @@ const styles = StyleSheet.create({
   },
   actionButtonTextSelected: {
     color: '#FFFFFF',
+  },
+  thresholdDisplayContainer: {
+    marginTop: 15,
+    padding: 15,
+    backgroundColor: '#F8F9FA',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
+  },
+  thresholdTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#212121',
+    marginBottom: 10,
+  },
+  editButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2196F3',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    marginTop: 10,
+  },
+  editButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 5,
+  },
+  deleteConfirmationText: {
+    fontSize: 16,
+    color: '#212121',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  deviceNameText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#212121',
+    textAlign: 'center',
+    marginBottom: 5,
+  },
+  deviceIdText: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  deleteModalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 20,
+  },
+  cancelButton: {
+    backgroundColor: '#9E9E9E',
+    flex: 1,
+    marginRight: 10,
+  },
+  deleteButton: {
+    backgroundColor: '#FF3B30',
+    flex: 1,
+    marginLeft: 10,
   },
 }); 
