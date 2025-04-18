@@ -4,7 +4,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { getAuth, onAuthStateChanged, signOut } from 'firebase/auth';
 import Login from './Components/Auth/Login';
 import Register from './Components/Auth/Register';
-import LocTrack from './Components/LocTrack';
+import LocTrack from './Components/locTrack';
 import ForgotPassword from './Components/Auth/ForgotPassword';
 import VerifyEmail from './Components/Auth/VerifyEmail';
 import ChangePassword from './Components/Auth/ChangePassword';
@@ -22,6 +22,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import GeofenceRequests from './Components/Admin/GeofenceRequests';
 import OwnerInitialization from './Components/Auth/OwnerInitialization';
 import LocationLog from './Components/History/locationLogs';
+import StepTracker from './Components/StepTracker';
 
 const Stack = createNativeStackNavigator();
 
@@ -241,6 +242,15 @@ export default function App() {
                   animation: 'slide_from_right'
                 }}
               />
+              <Stack.Screen 
+                name="StepTracker" 
+                component={StepTracker}
+                options={{ 
+                  headerShown: true,
+                  title: 'Step Tracker',
+                  animation: 'slide_from_right'
+                }}
+              />
             </>
           ) : isVerified ? (
             <>
@@ -293,6 +303,15 @@ export default function App() {
                 options={{ 
                   headerShown: true,
                   title: 'Geofence Setup',
+                  animation: 'slide_from_right'
+                }}
+              />
+              <Stack.Screen 
+                name="StepTracker" 
+                component={StepTracker}
+                options={{ 
+                  headerShown: true,
+                  title: 'Step Tracker',
                   animation: 'slide_from_right'
                 }}
               />

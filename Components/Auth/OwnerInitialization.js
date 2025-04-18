@@ -13,7 +13,7 @@ import {
   BackHandler
 } from 'react-native';
 import { getAuth } from 'firebase/auth';
-import { getDatabase, ref, get, set } from 'firebase/database';
+import { getDatabase, ref, get, set, update } from 'firebase/database';
 import MapView, { Marker, Polygon, Polyline } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
@@ -270,6 +270,7 @@ export default function OwnerInitialization({ navigation, route }) {
     };
   }, []);
 
+  // Modify getCurrentLocation to simply save step data when location is obtained
   const getCurrentLocation = async () => {
     // Store existing points first to avoid losing them
     const existingPoints = [...points];
@@ -284,14 +285,15 @@ export default function OwnerInitialization({ navigation, route }) {
         return;
       }
 
-      // Use a faster approach with lower accuracy requirements to speed up location acquisition
-      // Try to get cached location first (very fast)
+      // Use a faster approach to get location
       const lastKnownLocation = await Location.getLastKnownPositionAsync({
         maxAge: 60000 // Accept locations up to 1 minute old
       });
       
       if (lastKnownLocation) {
         const { latitude, longitude } = lastKnownLocation.coords;
+        
+        // Update location state
         setCurrentLocation({ latitude, longitude });
         
         // Update region immediately
@@ -316,7 +318,7 @@ export default function OwnerInitialization({ navigation, route }) {
       
       // Then try to get a fresh location with lowered accuracy requirements
       Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Low, // Lower accuracy for faster response
+        accuracy: Location.Accuracy.Low,
         maxAge: 10000,
         timeout: 5000
       }).then(location => {
@@ -341,7 +343,6 @@ export default function OwnerInitialization({ navigation, route }) {
         }
       }).catch(error => {
         console.log('Could not get high accuracy location:', error);
-        // We already have a low accuracy location, so this is fine
       });
       
     } catch (error) {
@@ -352,6 +353,44 @@ export default function OwnerInitialization({ navigation, route }) {
       }
     } finally {
       setLoadingLocation(false);
+    }
+  };
+
+  // Simplify startLocationTracking to save step data on each location update
+  const startLocationTracking = async () => {
+    if (!currentLocation) return;
+    
+    try {
+      console.log('Starting continuous location tracking with step correlation');
+      
+      // Request permissions if not already granted
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') return;
+      
+      // Start watching position with a balanced accuracy for good performance
+      const locationSubscription = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.Balanced,
+          distanceInterval: 10, // Update if moved at least 10 meters
+          timeInterval: 5000,   // Or at least every 5 seconds
+        },
+        (location) => {
+          const { latitude, longitude, accuracy } = location.coords;
+          
+          // Only update if the accuracy is reasonable
+          if (accuracy <= 50) {
+            console.log('Location update in watchPosition:', latitude, longitude, 'accuracy:', accuracy);
+            
+            // Update current location
+            setCurrentLocation({ latitude, longitude });
+          }
+        }
+      );
+      
+      // Return the subscription for cleanup
+      return locationSubscription;
+    } catch (error) {
+      console.error('Error setting up location tracking:', error);
     }
   };
 
@@ -790,66 +829,6 @@ export default function OwnerInitialization({ navigation, route }) {
     setShowTeamCodeModal(false);
     Alert.alert('Team Code Set', `Using team code: ${teamCodeInput.trim()}`);
   };
-
-  // Add a function to start continuous location tracking
-  const startLocationTracking = async () => {
-    if (!currentLocation) return;
-    
-    try {
-      console.log('Starting continuous location tracking');
-      
-      // Request permissions if not already granted
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
-      
-      // Start watching position with a balanced accuracy for good performance
-      const locationSubscription = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.Balanced,
-          distanceInterval: 10, // Update if moved at least 10 meters
-          timeInterval: 5000,   // Or at least every 5 seconds
-        },
-        (location) => {
-          const { latitude, longitude, accuracy } = location.coords;
-          
-          // Only update if the accuracy is reasonable
-          if (accuracy <= 50) {
-            console.log('Location update:', latitude, longitude, 'accuracy:', accuracy);
-            
-            // Update current location without affecting geofence points
-            setCurrentLocation({ latitude, longitude });
-          }
-        }
-      );
-      
-      // Return the subscription for cleanup
-      return locationSubscription;
-    } catch (error) {
-      console.error('Error setting up location tracking:', error);
-    }
-  };
-
-  // Add a useEffect hook to handle continuous location tracking
-  useEffect(() => {
-    let locationSubscription = null;
-    
-    const setupLocationTracking = async () => {
-      try {
-        locationSubscription = await startLocationTracking();
-      } catch (error) {
-        console.error('Failed to set up location tracking:', error);
-      }
-    };
-    
-    setupLocationTracking();
-    
-    // Cleanup function
-    return () => {
-      if (locationSubscription) {
-        locationSubscription.remove();
-      }
-    };
-  }, []); // Empty dependency array to run only once on mount
 
   return (
     <View style={styles.container}>
