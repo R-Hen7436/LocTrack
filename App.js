@@ -23,6 +23,8 @@ import GeofenceRequests from './Components/Admin/GeofenceRequests';
 import OwnerInitialization from './Components/Auth/OwnerInitialization';
 import LocationLog from './Components/History/locationLogs';
 import StepTracker from './Components/StepTracker';
+import Logs from './Components/Logs';
+import UserManagement from './Components/UserManagement';
 
 const Stack = createNativeStackNavigator();
 
@@ -199,6 +201,22 @@ export default function App() {
                 }}
               />
               <Stack.Screen 
+                name="Logs" 
+                component={Logs}
+                options={{ 
+                  headerShown: false,
+                  animation: 'slide_from_right'
+                }}
+              />
+              <Stack.Screen 
+                name="UserManagement" 
+                component={UserManagement}
+                options={{ 
+                  headerShown: false,
+                  animation: 'slide_from_right'
+                }}
+              />
+              <Stack.Screen 
                 name="Dashboard" 
                 component={Dashboard}
                 options={{ 
@@ -312,6 +330,22 @@ export default function App() {
                 options={{ 
                   headerShown: true,
                   title: 'Step Tracker',
+                  animation: 'slide_from_right'
+                }}
+              />
+              <Stack.Screen 
+                name="Logs" 
+                component={Logs}
+                options={{ 
+                  headerShown: false,
+                  animation: 'slide_from_right'
+                }}
+              />
+              <Stack.Screen 
+                name="UserManagement" 
+                component={UserManagement}
+                options={{ 
+                  headerShown: false,
                   animation: 'slide_from_right'
                 }}
               />

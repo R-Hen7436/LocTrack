@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, onValue, set, get } from "firebase/database"; // Import Realtime Database
+import { getDatabase, ref, onValue, set, get, connectDatabaseEmulator } from "firebase/database"; // Import Realtime Database
 import { getAuth } from "firebase/auth";
 import { getStorage } from "firebase/storage";
 
@@ -23,6 +23,11 @@ let storage;
 try {
   app = initializeApp(firebaseConfig);
   db = getDatabase(app);
+  
+  // Enable disk persistence (for React Native)
+  // This is done by default in newer Firebase versions
+  // No need to explicitly call enablePersistence
+  
   auth = getAuth(app);
   storage = getStorage(app);
 } catch (error) {

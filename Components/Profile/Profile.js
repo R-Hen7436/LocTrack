@@ -80,7 +80,6 @@ const isValidMacAddress = (parts) => {
 
 export default function Profile({ navigation }) {
   const [userProfile, setUserProfile] = useState(null);
-  const [teamMembers, setTeamMembers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [userStatus, setUserStatus] = useState('offline'); // Add state for user status
   const [isEditingMac, setIsEditingMac] = useState(false);
@@ -97,15 +96,7 @@ export default function Profile({ navigation }) {
       console.log("Focus effect triggered");
       if (auth?.currentUser?.uid) {
         console.log("Loading profile for user:", auth.currentUser.uid);
-        const loadData = async () => {
-          await loadUserProfile();
-          // Load team members after profile is loaded if user is an owner
-          if (userProfile?.role === 'owner' && userProfile?.teamCode) {
-            console.log("User is an owner with team code, loading team members");
-            await loadTeamMembers();
-          }
-        };
-        loadData();
+        loadUserProfile(); // Simplified - just load profile
       } else {
         console.error("No current user in auth");
         setLoading(false);
@@ -115,7 +106,7 @@ export default function Profile({ navigation }) {
       return () => {
         console.log("Focus effect cleanup");
       };
-    }, [userProfile?.teamCode]) // Include userProfile.teamCode as a dependency
+    }, [auth.currentUser?.uid]) // REMOVED: userProfile?.teamCode dependency
   );
 
   // Add a new effect to monitor the user's presence status
@@ -149,54 +140,6 @@ export default function Profile({ navigation }) {
       }
     };
   }, []);
-
-  // Add this new effect to monitor team members' presence in real-time
-  useEffect(() => {
-    let presenceUnsubscribers = [];
-    
-    const monitorTeamMembersPresence = () => {
-      // Clear any existing listeners
-      presenceUnsubscribers.forEach(unsubscribe => unsubscribe());
-      presenceUnsubscribers = [];
-      
-      // If no team members or not team owner, do nothing
-      if (teamMembers.length === 0 || userProfile?.role !== 'owner') {
-        return;
-      }
-      
-      // Set up listeners for each team member
-      teamMembers.forEach(member => {
-        if (!member.id) return;
-        
-        const presenceRef = ref(db, `users/${member.id}/presence`);
-        const unsubscribe = onValue(presenceRef, (snapshot) => {
-          if (snapshot.exists()) {
-            const presenceData = snapshot.val();
-            const isOnline = presenceData.status === 'online';
-            const lastSeen = presenceData.lastSeen || '';
-            
-            // Update the team members state with the new status
-            setTeamMembers(prevMembers => 
-              prevMembers.map(m => 
-                m.id === member.id 
-                  ? { ...m, isActive: isOnline, lastSeen: lastSeen }
-                  : m
-              )
-            );
-          }
-        });
-        
-        presenceUnsubscribers.push(unsubscribe);
-      });
-    };
-    
-    monitorTeamMembersPresence();
-    
-    return () => {
-      // Clean up all listeners when component unmounts
-      presenceUnsubscribers.forEach(unsubscribe => unsubscribe());
-    };
-  }, [teamMembers.length, userProfile?.role]); // Only re-run when team members count changes or role changes
 
   React.useLayoutEffect(() => {
     navigation.setOptions({
@@ -280,10 +223,6 @@ export default function Profile({ navigation }) {
             isOwner: true
           });
         }
-        
-        if (cleanedProfile.role === 'owner' && cleanedProfile.teamCode) {
-          await loadTeamMembers();
-        }
       } else {
         console.log("No profile data found, creating default profile");
         console.log("Auth display name:", auth.currentUser.displayName);
@@ -325,100 +264,6 @@ export default function Profile({ navigation }) {
     } catch (error) {
       console.error('Error loading profile:', error);
       setLoading(false);
-    }
-  };
-
-  const loadTeamMembers = async () => {
-    try {
-      console.log('Loading team members, team code:', userProfile?.teamCode);
-      
-      if (!userProfile || !userProfile.teamCode) {
-        console.log('No team code found in profile, cannot load members');
-        setTeamMembers([]);
-        return;
-      }
-      
-      const teamCode = userProfile.teamCode;
-      console.log('Loading team members for team code:', teamCode);
-      
-      const db = getDatabase();
-      
-      // Check if team exists first
-      const teamRef = ref(db, `teams/${teamCode}`);
-      const teamSnapshot = await get(teamRef);
-      
-      if (!teamSnapshot.exists()) {
-        console.log('Team does not exist for code:', teamCode);
-        setTeamMembers([]);
-        return;
-      }
-      
-      console.log('Team found, fetching members...');
-      const membersRef = ref(db, `teams/${teamCode}/members`);
-      const snapshot = await get(membersRef);
-      
-      if (!snapshot.exists()) {
-        console.log('No members found for team');
-        setTeamMembers([]);
-        return;
-      }
-      
-      console.log('Team members snapshot exists, processing data...');
-      const members = [];
-      
-      snapshot.forEach((child) => {
-        members.push({
-          id: child.key,
-          ...child.val()
-        });
-      });
-      
-      console.log(`Found ${members.length} members, fetching user profiles...`);
-      
-      // Fetch additional details for each member
-      const enhancedMembers = await Promise.all(
-        members.map(async (member) => {
-          try {
-            const userRef = ref(db, `users/${member.id}/profile`);
-            const userSnapshot = await get(userRef);
-            
-            // Get presence data to check online status
-            const presenceRef = ref(db, `users/${member.id}/presence`);
-            const presenceSnapshot = await get(presenceRef);
-            
-            let isOnline = false;
-            let lastSeen = '';
-            
-            if (presenceSnapshot.exists()) {
-              const presenceData = presenceSnapshot.val();
-              isOnline = presenceData.status === 'online';
-              lastSeen = presenceData.lastSeen || '';
-            }
-            
-            if (userSnapshot.exists()) {
-              const userData = userSnapshot.val();
-              return {
-                ...member,
-                name: formatName(userData.firstName || '', userData.middleName || '', userData.lastName || ''),
-                email: userData.email || member.email || '',
-                isActive: isOnline, // Use the real-time presence status
-                photoURL: userData.photoURL || '',
-                lastSeen: lastSeen || userData.lastSeen || '',
-              };
-            }
-            return member;
-          } catch (error) {
-            console.error(`Error fetching profile for member ${member.id}:`, error);
-            return member;
-          }
-        })
-      );
-      
-      console.log(`Enhanced data for ${enhancedMembers.length} members`);
-      setTeamMembers(enhancedMembers);
-    } catch (error) {
-      console.error('Error loading team members:', error);
-      Alert.alert('Error', 'Failed to load team members');
     }
   };
 
@@ -488,106 +333,6 @@ export default function Profile({ navigation }) {
       console.error('Error uploading image:', error);
       Alert.alert('Error', 'Failed to upload image. Please try again.');
     }
-  };
-
-  const handleRemoveMember = (member) => {
-    Alert.alert(
-      'Remove Member',
-      `Are you sure you want to remove ${member.name || member.email} from your team?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Remove', 
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const db = getDatabase();
-              
-              await remove(ref(db, `teams/${userProfile.teamCode}/members/${member.id}`));
-              
-              const memberProfileRef = ref(db, `users/${member.id}/profile`);
-              const memberSnapshot = await get(memberProfileRef);
-              
-              if (memberSnapshot.exists()) {
-                const profileData = memberSnapshot.val();
-                await set(memberProfileRef, {
-                  ...profileData,
-                  teamCode: null,
-                  role: 'member'
-                });
-              }
-              
-              await logAudit(
-                AUDIT_ACTIONS.MEMBER_REMOVED, 
-                { memberEmail: member.email, memberName: member.name },
-                auth.currentUser.uid,
-                member.id
-              );
-              
-              await loadTeamMembers();
-              
-              Alert.alert('Success', 'Team member removed successfully');
-            } catch (error) {
-              console.error('Error removing team member:', error);
-              Alert.alert('Error', 'Failed to remove team member');
-            }
-          }
-        }
-      ]
-    );
-  };
-
-  const handleTransferOwnership = (member) => {
-    const memberName = member.name || member.email || 'this user';
-    Alert.alert(
-      'Transfer Ownership',
-      `Are you sure you want to transfer ownership to ${memberName}? You will become a team member.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Transfer', 
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const db = getDatabase();
-              
-              // Update the team member's profile
-              const memberProfileRef = ref(db, `users/${member.id}/profile`);
-              const memberSnapshot = await get(memberProfileRef);
-              
-              if (memberSnapshot.exists()) {
-                const profileData = memberSnapshot.val();
-                await set(memberProfileRef, {
-                  ...profileData,
-                  role: 'owner'
-                });
-              }
-              
-              // Update current user's profile
-              const ownerProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
-              await set(ownerProfileRef, {
-                ...userProfile,
-                role: 'member'
-              });
-
-              await logAudit(
-                AUDIT_ACTIONS.OWNERSHIP_TRANSFERRED, 
-                { newOwnerId: member.id, newOwnerName: memberName },
-                auth.currentUser.uid
-              );
-              
-              // Get the updated profile
-              await loadUserProfile();
-              
-              Alert.alert('Success', 'Ownership transferred successfully');
-            } catch (error) {
-              console.error('Error transferring ownership:', error);
-              Alert.alert('Error', 'Failed to transfer ownership. Please try again.');
-            }
-          }
-        }
-      ]
-    );
   };
 
   const handleMacPartChange = (text, index) => {
@@ -816,44 +561,6 @@ export default function Profile({ navigation }) {
                       </TouchableOpacity>
                     </View>
                   </View>
-                </View>
-
-                <View style={styles.card}>
-                  <Text style={styles.cardTitle}>Team Members ({teamMembers.length})</Text>
-                  {teamMembers.length > 0 ? (
-                    <View>
-                      {teamMembers.map(item => (
-                        <View key={item.id} style={styles.memberItem}>
-                          <View style={styles.memberInfo}>
-                            {item.photoURL ? (
-                              <Image source={{ uri: item.photoURL }} style={styles.memberAvatar} />
-                            ) : (
-                              <View style={styles.memberAvatarFallback}>
-                                <Text style={styles.memberAvatarText}>
-                                  {item.name ? item.name[0].toUpperCase() : '?'}
-                                </Text>
-                              </View>
-                            )}
-                            <View style={styles.memberTextInfo}>
-                              <Text style={styles.memberName}>{item.name || 'Unknown User'}</Text>
-                              <Text style={styles.memberEmail}>{item.email || 'No email'}</Text>
-                              <Text style={styles.lastSeen}>
-                                {item.isActive ? 'Online' : `Last seen ${formatLastSeen(item.lastSeen)}`}
-                              </Text>
-                            </View>
-                            <View style={[
-                              styles.statusDot,
-                              { backgroundColor: item.isActive ? '#4CD964' : '#8E8E93' }
-                            ]} />
-                          </View>
-                        </View>
-                      ))}
-                    </View>
-                  ) : (
-                    <View style={styles.emptyTeamContainer}>
-                      <Text style={styles.emptyTeamText}>No team members yet</Text>
-                    </View>
-                  )}
                 </View>
               </>
             )}

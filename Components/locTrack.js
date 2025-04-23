@@ -1753,12 +1753,21 @@ return (
           })}
         </>
       )}
-      {currentLocation && (
+      {/* Consolidated Current User Marker */}
+      {estimatedIconPosition ? (
         <CurrentUserMarker
-          coordinate={currentLocation}
-          tracksViewChanges={isUserMarkerMoving}
+          coordinate={estimatedIconPosition} // Use estimated position
+          // Potentially re-enable tracksViewChanges if needed for smooth updates
+          // tracksViewChanges={true} 
         />
-      )}
+      ) : currentLocation ? (
+        // Fallback to raw GPS location if estimation isn't ready yet
+        <CurrentUserMarker
+          coordinate={currentLocation} 
+          // tracksViewChanges={isUserMarkerMoving} // This state might be less relevant now
+        />
+      ) : null /* Render nothing if neither is available */}
+
       {/* Other Users Markers Loop */}
       {Object.entries(usersLocations || {})
         .filter(([userId, userData]) => {
@@ -1828,13 +1837,6 @@ return (
           lineCap="round"
           lineJoin="round"
           // zIndex={999} // Removed, likely not needed
-        />
-      )}
-      {/* *** Render Marker at ESTIMATED position *** */}
-      {estimatedIconPosition && (
-        <CurrentUserMarker
-          coordinate={estimatedIconPosition} // Use estimated position
-          // tracksViewChanges might be needed again if blinking occurs with estimated pos
         />
       )}
     </MapView>
