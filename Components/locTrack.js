@@ -16,6 +16,214 @@ import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Pedometer } from 'expo-sensors';
 
+/**
+ * Simple implementation of a Kalman filter for 2D location data
+ * Based on the algorithm described in "Kalman Filter For Beginners" and several online implementations
+ */
+class SimpleKalmanFilter {
+  /**
+   * Create a Kalman filter for 2D location tracking
+   * @param {number} processNoise - How much we expect the process to change randomly between updates (Q)
+   * @param {number} initialMeasurementNoise - Default inaccuracy expectation (R), dynamically updated if accuracy is provided
+   */
+  constructor(processNoise = 0.01, initialMeasurementNoise = 10) { // Increased processNoise from 0.001 to 0.01, lower measurement noise
+    // State vector [x, y, vx, vy]
+    this.state = null;
+    
+    // Covariance matrix 4x4
+    this.covariance = null;
+    
+    // Process noise (Q) - how much we expect our model to be wrong
+    this.processNoise = processNoise;
+    
+    // Measurement noise (R) - Initial value, updated dynamically
+    this.measurementNoise = initialMeasurementNoise; // Used as default if accuracy unavailable
+    
+    // Transition matrix (F) - constant velocity model
+    this.transitionMatrix = [
+      [1, 0, 1, 0], // x = x + vx * dt (dt=1)
+      [0, 1, 0, 1], // y = y + vy * dt (dt=1)
+      [0, 0, 1, 0], // vx = vx
+      [0, 0, 0, 1]  // vy = vy
+    ];
+    
+    // Observation matrix (H) - we only observe x and y, not velocities
+    this.observationMatrix = [
+      [1, 0, 0, 0],
+      [0, 1, 0, 0]
+    ];
+    
+    // Identity matrix 4x4
+    this.identity = [
+      [1, 0, 0, 0],
+      [0, 1, 0, 0],
+      [0, 0, 1, 0],
+      [0, 0, 0, 1]
+    ];
+    
+    // Store the last filtered position for noise filtering
+    this.lastFilteredPosition = null;
+    
+    // Threshold for minimum movement (in degrees of lat/lon) to consider it real movement
+    this.minMovementThreshold = 0.0000001; // Drastically reduced from 0.000008 - now ~1cm instead of ~1m
+  }
+  
+  /**
+   * Calculate distance between two points in lat/lon degrees (approximation)
+   */
+  calculateDistanceApprox(pos1, pos2) {
+    if (!pos1 || !pos2) return 0;
+    const latDiff = pos1.latitude - pos2.latitude;
+    const lonDiff = pos1.longitude - pos2.longitude;
+    return Math.sqrt(latDiff * latDiff + lonDiff * lonDiff);
+  }
+  
+  /**
+   * Initialize the filter with a starting position
+   */
+  init(x, y) {
+    this.state = [[x], [y], [0], [0]];
+    const highUncertainty = 100;
+    this.covariance = [
+      [highUncertainty, 0, 0, 0],
+      [0, highUncertainty, 0, 0],
+      [0, 0, highUncertainty, 0],
+      [0, 0, 0, highUncertainty]
+    ];
+    this.lastFilteredPosition = { latitude: x, longitude: y };
+  }
+  
+  /**
+   * Update the filter with a new GPS measurement
+   */
+  update(x, y, accuracy) {
+    if (!this.state) {
+      this.init(x, y);
+      return { latitude: x, longitude: y };
+    }
+    
+    let currentMeasurementNoise = this.measurementNoise;
+    if (accuracy && !isNaN(accuracy) && accuracy > 0) {
+      currentMeasurementNoise = Math.max(1.0, accuracy * accuracy);
+    }
+    
+    const moveDistance = this.calculateDistanceApprox(
+      { latitude: x, longitude: y },
+      this.lastFilteredPosition
+    );
+    const currentAccuracyEstimate = Math.sqrt(currentMeasurementNoise);
+    if (moveDistance < this.minMovementThreshold && currentAccuracyEstimate > 5) {
+      return this.lastFilteredPosition;
+    }
+    
+    // PREDICT
+    const predictedState = this.matrixMultiply(this.transitionMatrix, this.state);
+    let predictedCovariance = this.matrixMultiply(
+      this.transitionMatrix,
+      this.matrixMultiply(this.covariance, this.transpose(this.transitionMatrix))
+    );
+    for (let i = 0; i < 4; i++) {
+      predictedCovariance[i][i] += this.processNoise;
+    }
+    
+    // UPDATE
+    const observationTranspose = this.transpose(this.observationMatrix);
+    const hph = this.matrixMultiply(
+      this.observationMatrix,
+      this.matrixMultiply(predictedCovariance, observationTranspose)
+    );
+    for (let i = 0; i < 2; i++) {
+      hph[i][i] += currentMeasurementNoise; // Use dynamic noise
+    }
+    const hphInverse = this.inverse2x2(hph);
+    const ph = this.matrixMultiply(predictedCovariance, observationTranspose);
+    const kalmanGain = this.matrixMultiply(ph, hphInverse);
+    const measurement = [[x], [y]];
+    const predictedMeasurement = this.matrixMultiply(this.observationMatrix, predictedState);
+    const innovation = this.matrixSubtract(measurement, predictedMeasurement);
+    this.state = this.matrixAdd(
+      predictedState,
+      this.matrixMultiply(kalmanGain, innovation)
+    );
+    const kh = this.matrixMultiply(kalmanGain, this.observationMatrix);
+    const identityMinusKH = this.matrixSubtract(this.identity, kh);
+    this.covariance = this.matrixMultiply(identityMinusKH, predictedCovariance);
+    
+    const result = {
+      latitude: this.state[0][0],
+      longitude: this.state[1][0]
+    };
+    this.lastFilteredPosition = result;
+    return result;
+  }
+
+  // ... Matrix helper methods ... (matrixMultiply, matrixAdd, etc.)
+  // (Ensure these helper methods are also present)
+  matrixMultiply(a, b) {
+    const result = [];
+    for (let i = 0; i < a.length; i++) {
+      result[i] = [];
+      for (let j = 0; j < b[0].length; j++) {
+        let sum = 0;
+        for (let k = 0; k < a[0].length; k++) {
+          sum += a[i][k] * b[k][j];
+        }
+        result[i][j] = sum;
+      }
+    }
+    return result;
+  }
+
+  matrixAdd(a, b) {
+    const result = [];
+    for (let i = 0; i < a.length; i++) {
+      result[i] = [];
+      for (let j = 0; j < a[0].length; j++) {
+        result[i][j] = a[i][j] + b[i][j];
+      }
+    }
+    return result;
+  }
+
+  matrixSubtract(a, b) {
+    const result = [];
+    for (let i = 0; i < a.length; i++) {
+      result[i] = [];
+      for (let j = 0; j < a[0].length; j++) {
+        result[i][j] = a[i][j] - b[i][j];
+      }
+    }
+    return result;
+  }
+
+  transpose(matrix) {
+    const result = [];
+    for (let j = 0; j < matrix[0].length; j++) {
+      result[j] = [];
+      for (let i = 0; i < matrix.length; i++) {
+        result[j][i] = matrix[i][j];
+      }
+    }
+    return result;
+  }
+
+  inverse2x2(matrix) {
+    const a = matrix[0][0];
+    const b = matrix[0][1];
+    const c = matrix[1][0];
+    const d = matrix[1][1];
+    const determinant = a * d - b * c;
+    if (Math.abs(determinant) < 1e-10) {
+      return [[1000, 0], [0, 1000]];
+    }
+    const invDet = 1 / determinant;
+    return [
+      [d * invDet, -b * invDet],
+      [-c * invDet, a * invDet]
+    ];
+  }
+}
+
 const GPSStrengthIndicator = ({ accuracy }) => {
   const getSignalStrength = (accuracy) => {
     if (!accuracy) return -1; // No signal
@@ -170,12 +378,16 @@ const CurrentUserMarker = ({ coordinate, tracksViewChanges }) => {
 };
 
 const MAX_HISTORY_POINTS = 50;
-const MIN_DISTANCE_THRESHOLD = 1.0; // Keep for potential GPS override later
+const MIN_DISTANCE_THRESHOLD = 0.1; // Reduced from 1.0 meter to 0.1 meters
 const AVERAGE_STEP_LENGTH_METERS = 0.762;
 const STEPS_PER_TRAIL_POINT = 3; // Add a trail point every 3 steps
 const METERS_TO_DEGREE_LAT = 111111; // Approx meters in 1 degree latitude
-const MIN_GPS_DISTANCE_FOR_DIRECTION = 0.2; // Min meters GPS must move to trust its direction
-const EMA_ALPHA = 0.4; // Smoothing factor (lower = smoother, more lag)
+const METERS_TO_DEGREE_LON = 111111; // Add equivalent for longitude (will be adjusted based on latitude)
+const MIN_GPS_DISTANCE_FOR_DIRECTION = 0.1; // Reduced from 1.0 to 0.1 meters
+const EMA_ALPHA = 0.3; // Decreased from 0.45 for more smoothing
+
+// Add a threshold for unrealistic jumps (in meters)
+const UNREALISTIC_JUMP_THRESHOLD_METERS = 10; // Reduced from 50m to 10m for testing in small areas
 
 export default function App() {
 const mapRef = useRef(null);
@@ -217,20 +429,32 @@ const [trackViewChanges, setTrackViewChanges] = useState(false);
   const lastTrailPointStepsRef = useRef(null); // Reinstate ref for steps
   const lastSmoothedCoordinateRef = useRef(null); // *** NEW: Ref for last smoothed point ***
   const [estimatedIconPosition, setEstimatedIconPosition] = useState(null); // *** NEW: State for icon's estimated position ***
+  const [isUserMarkerMoving, setIsUserMarkerMoving] = useState(false); // Re-added state
+  const locationSubscriptionRef = useRef(null); // Add a ref for the location subscription
+  const kalmanFilterRef = useRef(null); // Add a ref for the Kalman filter
 
   // Keep refs synced with state
   useEffect(() => { stepCountRef.current = stepCount; }, [stepCount]);
   useEffect(() => { stepsSinceLastGpsUpdateRef.current = stepsSinceLastGpsUpdate; }, [stepsSinceLastGpsUpdate]); // *** Reinstate useEffect ***
   // No longer need stepsSinceLastGpsUpdateRef here
 
-  const [locationHistory, setLocationHistory] = useState([]); // State for trail line
-  const [isUserMarkerMoving, setIsUserMarkerMoving] = useState(false); // Re-added state
+  // Make sure the locationHistory state is correctly initialized at the top of your component
+  const [locationHistory, setLocationHistory] = useState([]); // Initialize as empty array
+
+  // Add at the top with other state variables
+  const [isRemovingLocation, setIsRemovingLocation] = useState(false);
+
+  // Add this state variable at the top of your component (in the App function)
+  const [debugMode, setDebugMode] = useState(false);
 
 useEffect(() => {
   const initializeApp = async () => {
     try {
       const auth = getAuth();
       if (!auth.currentUser || !navigation) return;
+      
+      // Try to get a fast initial location while the profile loads
+      requestInitialLocation();
       
       const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
       const snapshot = await get(userProfileRef);
@@ -419,6 +643,26 @@ useEffect(() => {
 
 const initializeMap = async () => {
   try {
+    // Try to get a fast location first
+    try {
+      const { status } = await Location.getForegroundPermissionsAsync();
+      if (status === 'granted') {
+        const location = await Location.getLastKnownPositionAsync();
+        if (location && location.coords) {
+          const { latitude, longitude } = location.coords;
+          setInitialRegion({
+            latitude,
+            longitude,
+            latitudeDelta: 0.02,
+            longitudeDelta: 0.02,
+          });
+          // Don't set currentLocation here - that's managed by toggleCurrentLocation
+        }
+      }
+    } catch (error) {
+      console.warn("Error getting last known position:", error);
+    }
+    
     const locationsRef = ref(db, "UsersCurrentLocation");
     const locSnapshot = await get(locationsRef);
     
@@ -432,7 +676,7 @@ const initializeMap = async () => {
       
       setUsersLocations(locations);
       
-      const currentUserLoc = locSnapshot.val()[auth.currentUser.uid];
+      const currentUserLoc = locSnapshot.val()[auth.currentUser?.uid];
       if (currentUserLoc && currentUserLoc.Latitude && currentUserLoc.Longitude) {
         setCurrentLocation({
           latitude: currentUserLoc.Latitude,
@@ -444,24 +688,8 @@ const initializeMap = async () => {
         fitAllMarkers(true);
       }, 1000);
     } else {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status === 'granted') {
-        const location = await Location.getCurrentPositionAsync({});
-        if (location) {
-          const { latitude, longitude } = location.coords;
-          setInitialRegion({
-            latitude,
-            longitude,
-            latitudeDelta: 0.02,
-            longitudeDelta: 0.02,
-          });
-          
-          setCurrentLocation({
-            latitude,
-            longitude
-          });
-        }
-      }
+      // Start location tracking automatically if we have permission
+      requestInitialLocation();
     }
   } catch (error) {
     console.error("Error initializing map:", error);
@@ -515,20 +743,39 @@ const distanceFromPointToLine = (point, lineStart, lineEnd) => {
 
 const toggleCurrentLocation = async () => {
   try {
+    // Separate code paths for adding vs removing
     if (currentLocation) {
-      console.log("Removing current location");
+      console.log("Removing current location - explicit path");
+      setIsRemovingLocation(true);
+      
+      // Clear location tracking subscription first
+      if (locationSubscriptionRef.current) {
+        try {
+          locationSubscriptionRef.current.remove();
+        } catch (e) {
+          console.error("Error removing location subscription:", e);
+        }
+        locationSubscriptionRef.current = null;
+      }
+      
+      // Clear all location-related state
       setCurrentLocation(null);
       setGpsAccuracy(null);
-      setLocationHistory([]); // *** Clear history when stopping ***
+      setLocationHistory([]); 
+      setEstimatedIconPosition(null);
       
       const db = getDatabase();
-      const userLocationRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
+      const userLocationRef = ref(db, `UsersCurrentLocation/${auth.currentUser?.uid}`);
       
-      await update(userLocationRef, { 
-        isActive: false,
-        lastSeen: new Date().toISOString(),
-      });
+      if (auth.currentUser?.uid) {
+        // Update Firebase asynchronously but don't await it
+        update(userLocationRef, { 
+          isActive: false,
+          lastSeen: new Date().toISOString(),
+        }).catch(err => console.error("Error updating location status:", err));
+      }
       
+      setIsRemovingLocation(false);
       return;
     }
     
@@ -541,13 +788,42 @@ const toggleCurrentLocation = async () => {
       return;
     }
 
-    const location = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.High
-    });
+    // Get initial low-accuracy location quickly
+    try {
+      const fastLocation = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Low,
+        maximumAge: 10000 // Accept a cached position up to 10 seconds old
+      });
+      
+      if (fastLocation && fastLocation.coords) {
+        const { latitude, longitude } = fastLocation.coords;
+        setCurrentLocation({ latitude, longitude });
+        setGpsAccuracy(fastLocation.coords.accuracy);
+        
+        // Quick initial map focus on user
+        if (mapRef.current) {
+          mapRef.current.animateToRegion({
+            latitude,
+            longitude,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          }, 500);
+        }
+      }
+    } catch (error) {
+      console.warn("Fast location fetch failed, continuing with high accuracy only:", error);
+    }
 
-    const { latitude, longitude } = location.coords;
-    setCurrentLocation({ latitude, longitude });
-    setGpsAccuracy(location.coords.accuracy);
+    // Then get high accuracy location (but don't block UI)
+    Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.High
+    }).then(location => {
+      const { latitude, longitude } = location.coords;
+      setCurrentLocation({ latitude, longitude });
+      setGpsAccuracy(location.coords.accuracy);
+    }).catch(error => {
+      console.error("High accuracy location failed:", error);
+    });
 
     const db = getDatabase();
     const userPresenceRef = ref(db, `users/${auth.currentUser.uid}/presence`);
@@ -557,22 +833,24 @@ const toggleCurrentLocation = async () => {
     const profileSnapshot = await get(userProfileRef);
     const profileData = profileSnapshot.exists() ? profileSnapshot.val() : {};
 
-    await set(userLocationRef, { 
-      Latitude: latitude, 
-      Longitude: longitude,
-      Accuracy: location.coords.accuracy,
+    // Update Firebase in background
+    set(userLocationRef, { 
+      Latitude: currentLocation?.latitude || 0, 
+      Longitude: currentLocation?.longitude || 0,
+      Accuracy: currentLocation ? gpsAccuracy : 0,
       Timestamp: new Date().toISOString(),
       isActive: true,
       lastSeen: new Date().toISOString(),
       ...profileData
-    });
+    }).catch(err => console.error("Error updating initial location:", err));
 
     const presenceData = {
       status: 'online',
       lastSeen: new Date().toISOString(),
       deviceInfo: Platform.OS
     };
-    await set(userPresenceRef, presenceData);
+    set(userPresenceRef, presenceData)
+      .catch(err => console.error("Error updating presence:", err));
 
     const connectedRef = ref(db, '.info/connected');
     onValue(connectedRef, (snap) => {
@@ -588,21 +866,19 @@ const toggleCurrentLocation = async () => {
         });
       }
     }, { onlyOnce: true });
+    
+    setIsFetchingLocation(false);
   } catch (error) {
     console.error("Error toggling location:", error);
     Alert.alert('Error', 'Failed to update location');
-  } finally {
     setIsFetchingLocation(false);
   }
 };
 
 useEffect(() => {
-  let locationSubscription = null;
-
   const startLocationTracking = async () => {
     if (!currentLocation) {
       setGpsAccuracy(null);
-      // Don't clear history here, only when explicitly stopped
       return;
     }
 
@@ -626,136 +902,161 @@ useEffect(() => {
         return;
       }
 
-      locationSubscription = await Location.watchPositionAsync(
+      // Clean up any existing subscription
+      if (locationSubscriptionRef.current) {
+        locationSubscriptionRef.current.remove();
+      }
+
+      locationSubscriptionRef.current = await Location.watchPositionAsync(
         {
-            accuracy: Location.Accuracy.Balanced, 
-            timeInterval: 1000,
-            distanceInterval: 0, 
+            accuracy: Location.Accuracy.BestForNavigation, // Changed from Balanced to BestForNavigation 
+            timeInterval: 500, // Reduced from 1000ms to 500ms for more frequent updates
+            distanceInterval: 0, // Get all points for KF
+            mayShowUserSettingsDialog: true 
         },
         async (location) => {
-          try {
+          try { // Outer try
             const { latitude, longitude, accuracy } = location.coords;
-            const currentGpsCoordinate = { latitude, longitude }; // Actual GPS read
-            const currentTotalSteps = stepCountRef.current; 
+            console.log(`📍 Raw GPS: Lat=${latitude.toFixed(8)}, Lon=${longitude.toFixed(8)}, Acc=${accuracy.toFixed(1)}m`); // Log Raw Data with more precision
+            
+            // Log full location data for diagnosis
+            console.log(`🔍 FULL: Timestamp=${location.timestamp}, Speed=${location.coords.speed?.toFixed(3) || 'null'}, Heading=${location.coords.heading?.toFixed(2) || 'null'}, Alt=${location.coords.altitude?.toFixed(2) || 'null'}`);
 
-            setCurrentLocation(currentGpsCoordinate); // Keep actual GPS state updated
+            // --- Pre-filtering --- 
+            // 1. Accuracy Filter - much more generous now
+            if (accuracy > 100) { // Changed from 20m to 100m to accept more points
+              console.log(`KF Using low accuracy point: ${Math.round(accuracy)}m`);
             setGpsAccuracy(accuracy);
+              // We'll still update rather than return, just logging the poor accuracy
+            }
+            
+            // 2. Jump Detection
+            if (kalmanFilterRef.current && kalmanFilterRef.current.lastFilteredPosition) {
+              const jumpDistance = calculateDistance( // Use Haversine distance function
+                { latitude, longitude }, 
+                kalmanFilterRef.current.lastFilteredPosition
+              );
+              
+              if (jumpDistance > UNREALISTIC_JUMP_THRESHOLD_METERS) {
+                console.warn(`KF Skipping unrealistic jump: ${jumpDistance.toFixed(1)}m`);
+                // Don't update GPS accuracy here, as the point is likely bad
+                return; 
+              }
+            }
+            // --- End Pre-filtering --- 
+            
+            // Filter the location if the filter is initialized
+            let filteredCoordinate = { latitude, longitude };
+            let iconPositionCoordinate = { latitude, longitude }; // Separate variable for icon smoothing
+            
+            if (kalmanFilterRef.current) {
+              try { // Inner try for KF
+                // Get the actual filtered coordinate for the icon
+                iconPositionCoordinate = kalmanFilterRef.current.update(
+                  latitude,
+                  longitude,
+                  accuracy
+                );
+                
+                // *** TEMPORARY TEST: Use raw GPS directly for polyline history ***
+                filteredCoordinate = { latitude, longitude }; 
+                console.log(`🚦 Using RAW GPS for polyline history (Testing Sensitivity)`);
+
+              } catch (kfError) {
+                 console.error("Kalman Filter Error:", kfError);
+                 // Use raw for both if filter fails
+                 filteredCoordinate = { latitude, longitude }; 
+                 iconPositionCoordinate = { latitude, longitude }; 
+                 kalmanFilterRef.current = new SimpleKalmanFilter(0.01, 10); // Reset filter with more responsive settings
+              } 
+                } else {
+              console.warn("Kalman filter not initialized, using raw GPS.");
+              // Initialize the Kalman filter with current position
+              kalmanFilterRef.current = new SimpleKalmanFilter(0.01, 10); // More responsive settings
+              kalmanFilterRef.current.init(latitude, longitude);
+              // Use raw for both if filter not init
+              filteredCoordinate = { latitude, longitude };
+              iconPositionCoordinate = { latitude, longitude }; 
+            }
+            
+            console.log(`✨ Icon Coord (Filtered): Lat=${iconPositionCoordinate.latitude.toFixed(6)}, Lon=${iconPositionCoordinate.longitude.toFixed(6)}`); // Log Filtered Data for Icon
+            console.log(`〰️ History Coord (Raw): Lat=${filteredCoordinate.latitude.toFixed(6)}, Lon=${filteredCoordinate.longitude.toFixed(6)}`); // Log Coord used for History
+            
+            // Update state for icon and raw GPS display
+            const currentGpsCoordinate = { latitude, longitude };
+            setCurrentLocation(currentGpsCoordinate); 
+            setGpsAccuracy(accuracy); 
+            setEstimatedIconPosition(iconPositionCoordinate); // Icon uses the smoothed coordinate
 
             setLocationHistory(prevHistory => {
-              let rawEstimatedCoordinate = null; // The calculated estimate before smoothing
+              // Defensive check: if prevHistory is undefined, start with empty array
+              const history = prevHistory || [];
               
-              if (prevHistory.length === 0) {
-                // First point: use actual GPS, no smoothing yet
-                rawEstimatedCoordinate = currentGpsCoordinate;
-                console.log(`📜(EMA) History: Added first point ${JSON.stringify(rawEstimatedCoordinate)}`);
-                lastTrailPointStepsRef.current = currentTotalSteps;
-                lastSmoothedCoordinateRef.current = rawEstimatedCoordinate; // Initialize smoothing ref
-                setEstimatedIconPosition(rawEstimatedCoordinate); 
-                return [rawEstimatedCoordinate];
-              }
-              
-              const lastTrailSteps = lastTrailPointStepsRef.current;
-              if (lastTrailSteps === null) {
-                 lastTrailPointStepsRef.current = currentTotalSteps; 
-                 return prevHistory;
-              }
-
-              const stepsSinceLastTrailPoint = currentTotalSteps - lastTrailSteps;
-
-              if (stepsSinceLastTrailPoint >= STEPS_PER_TRAIL_POINT) {
-                const lastPolylineCoordinate = lastSmoothedCoordinateRef.current; // Use last SMOOTHED point for calcs
-                 if (!lastPolylineCoordinate) { // Should not happen after first point, but safety check
-                    console.warn("📜(EMA) lastSmoothedCoordinateRef was null unexpectedly.");
-                    lastSmoothedCoordinateRef.current = prevHistory[prevHistory.length-1];
-                    return prevHistory;
-                 }
-
-                const stepDistance = stepsSinceLastTrailPoint * AVERAGE_STEP_LENGTH_METERS;
-                const gpsDistance = calculateDistance(lastPolylineCoordinate, currentGpsCoordinate);
-                const deltaLat = currentGpsCoordinate.latitude - lastPolylineCoordinate.latitude;
-                const deltaLon = currentGpsCoordinate.longitude - lastPolylineCoordinate.longitude;
-
-                // 1. Calculate the raw estimated coordinate based on steps/direction
-                if (gpsDistance >= MIN_GPS_DISTANCE_FOR_DIRECTION) {
-                    const ratio = gpsDistance > 0 ? (stepDistance / gpsDistance) : 1; // Avoid division by zero
-                    rawEstimatedCoordinate = {
-                        latitude: lastPolylineCoordinate.latitude + deltaLat * ratio,
-                        longitude: lastPolylineCoordinate.longitude + deltaLon * ratio
-                    };
-                } else {
-                    const latitudeOffset = stepDistance / METERS_TO_DEGREE_LAT;
-                    rawEstimatedCoordinate = {
-                        latitude: lastPolylineCoordinate.latitude + latitudeOffset,
-                        longitude: lastPolylineCoordinate.longitude 
-                    };
+              // In debug mode, always add the point
+              if (debugMode) {
+                console.log(`🐞 DEBUG: Force adding point to history. New length: ${history.length + 1}`);
+                const newHistory = [...history, {
+                  latitude,
+                  longitude,
+                  timestamp: Date.now() // Keep timestamp for debugging
+                }];
+                
+                // Keep history limited
+                if (newHistory.length > MAX_HISTORY_POINTS + 20) {
+                  return newHistory.slice(-(MAX_HISTORY_POINTS + 10)); 
                 }
-
-                // 2. Apply EMA smoothing
-                const prevSmoothed = lastSmoothedCoordinateRef.current;
-                const newSmoothedCoordinate = {
-                    latitude: EMA_ALPHA * rawEstimatedCoordinate.latitude + (1 - EMA_ALPHA) * prevSmoothed.latitude,
-                    longitude: EMA_ALPHA * rawEstimatedCoordinate.longitude + (1 - EMA_ALPHA) * prevSmoothed.longitude
-                };
-
-                // 3. Update state and refs
-                const updatedHistory = [...prevHistory, newSmoothedCoordinate].slice(-MAX_HISTORY_POINTS);
-                console.log(`📜(EMA) Steps ${stepsSinceLastTrailPoint}. Added smoothed point. Len: ${updatedHistory.length}`);
-                lastTrailPointStepsRef.current = currentTotalSteps; 
-                lastSmoothedCoordinateRef.current = newSmoothedCoordinate; // *** Update smoothing ref ***
-                setEstimatedIconPosition(newSmoothedCoordinate); // *** Update icon position ***
-                return updatedHistory;
-              } 
+                return newHistory;
+              }
               
-              return prevHistory; 
+              // Normal mode - check if point is different enough
+              const lastPoint = history.length > 0 ? history[history.length - 1] : null;
+              
+              // Use EXTREMELY small threshold (essentially any change)
+              const distanceThresholdDegrees = 0.00000001; // Practically any change
+              if (!lastPoint || 
+                  Math.abs(filteredCoordinate.latitude - lastPoint.latitude) > distanceThresholdDegrees ||
+                  Math.abs(filteredCoordinate.longitude - lastPoint.longitude) > distanceThresholdDegrees) 
+              {
+                console.log(`➕ Adding point to history. New length: ${history.length + 1}`);
+                const newHistory = [...history, filteredCoordinate]; // Add the real coordinate
+                
+                // Keep history limited
+                if (newHistory.length > MAX_HISTORY_POINTS + 10) {
+                  return newHistory.slice(-(MAX_HISTORY_POINTS + 5)); 
+                }
+                return newHistory;
+              } else {
+                console.log(`➖ Skipping history add - point too close to last.`);
+                return history; // Return existing history unchanged
+              }
             });
-
-            // Firebase update logic still uses ACTUAL GPS
-            if (auth && auth.currentUser && auth.currentUser.uid) {
-              const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
-              const profileSnapshot = await get(userProfileRef);
-              const profileData = profileSnapshot.exists() ? profileSnapshot.val() : {};
-              
-              const dbRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
-              const updateData = { 
-                Latitude: latitude, 
-                Longitude: longitude,
-                Accuracy: accuracy,
-                Timestamp: new Date().toISOString(),
-                isActive: true,
-                lastSeen: new Date().toISOString(),
-                userId: auth.currentUser.uid,
-                firstName: profileData.firstName || '',
-                lastName: profileData.lastName || '',
-                photoURL: profileData.photoURL || '',
-                role: profileData.role || '',
-                teamCode: profileData.teamCode || ''
-              };
-              
-              set(dbRef, updateData);
-            }
-          } catch (error) {
+            
+            // ... (Firebase update logic - should likely use smoothed iconPositionCoordinate or raw currentGpsCoordinate)
+            // Consider which coordinate to save to Firebase based on needs
+            // Example using smoothed:
+            // writeLocationToFirebase(iconPositionCoordinate, accuracy);
+            
+          } catch (error) { // Catch for outer try
             console.error("Error updating location:", error);
-          }
-        }
-      );
-      console.log('🚶 PEDOMETER (locTrack): Step watching started.');
-      // Don't save initial state here, wait for baseline and first steps
-      // writeStepDataToFirebase(true);
-      // lastStepSaveTimestamp.current = Date.now();
+          } // End outer try-catch
+        } // End async (location) callback
+      ); // End watchPositionAsync
+      
+      console.log('Location tracking with Kalman Filter started.');
 
-    } catch (error) {
-      console.error('🚶 PEDOMETER (locTrack) ERROR: Failed to start tracking:', error);
-      startIntervalBasedStepCounting();
-    }
-  };
+    } catch (error) { // Catch for startLocationTracking setup
+      console.error('Error starting location tracking setup:', error);
+    } // End startLocationTracking setup try-catch
+  }; // End startLocationTracking function
 
   if (currentLocation) {
     startLocationTracking();
   }
 
   return () => {
-    if (locationSubscription) {
-      locationSubscription.remove();
+    if (locationSubscriptionRef.current) {
+      locationSubscriptionRef.current.remove();
+      locationSubscriptionRef.current = null;
     }
   };
 }, [currentLocation]); // Note: Dependency array might need review if stepCount directly influenced render
@@ -949,10 +1250,15 @@ const fitAllMarkers = (forceUpdate = false) => {
           ? { top: 100, right: 100, bottom: 200, left: 100 }
           : { top: 200, right: 200, bottom: 300, left: 200 };
       
+      // *** Add null check here ***
+      if (mapRef.current) { 
       mapRef.current.fitToCoordinates(allCoordinates, {
         edgePadding: edgePadding,
         animated: true
       });
+      } else {
+        console.warn("fitAllMarkers: mapRef.current is null inside setTimeout");
+      }
       
       setTrackViewChanges(true);
       
@@ -1626,6 +1932,82 @@ if (!db) {
     return <View style={styles.container}><Text>Loading...</Text></View>;
 }
 
+// Add a new function to reset steps and location data
+const resetStepsAndLocationData = async () => {
+  try {
+    Alert.alert(
+      "Reset Testing Data",
+      "This will reset your step count and location history for testing purposes. Continue?",
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Reset", 
+          style: "destructive",
+          onPress: async () => {
+            // Show loading
+            Alert.alert("Resetting...", "Please wait while data is being reset.", []);
+            
+            try {
+              // 1. Reset local state
+              setStepCount(0);
+              stepCountRef.current = 0;
+              setStepsSinceLastGpsUpdate(0);
+              stepsSinceLastGpsUpdateRef.current = 0;
+              setRealStepCount(0);
+              setStepCountHistory([]);
+              setLocationHistory([]);
+              lastSmoothedCoordinateRef.current = null;
+              lastTrailPointStepsRef.current = null;
+              
+              if (auth.currentUser?.uid) {
+                const db = getDatabase();
+                
+                // 2. Reset Firebase step data
+                const stepDataRef = ref(db, `users/${auth.currentUser.uid}/profile/stepData`);
+                await update(stepDataRef, {
+                  lastStepCount: 0,
+                  totalSteps: 0,
+                  lastUpdateTimestamp: Date.now(),
+                  history: []
+                });
+                
+                // 3. Reset team step data
+                const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+                const profileSnap = await get(userProfileRef);
+                if (profileSnap.exists()) {
+                  const teamCode = profileSnap.val()?.teamCode;
+                  if (teamCode) {
+                    const teamStepDataRef = ref(db, `teams/${teamCode}/locationStepData/${auth.currentUser.uid}`);
+                    await remove(teamStepDataRef);
+                  }
+                }
+                
+                // 4. Reset location history if needed
+                if (currentLocation) {
+                  const userLocationRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
+                  await update(userLocationRef, {
+                    Timestamp: new Date().toISOString(),
+                    lastSeen: new Date().toISOString(),
+                  });
+                }
+                
+                Alert.alert("Reset Complete", "Step count and location history have been reset for testing purposes.");
+              } else {
+                Alert.alert("Error", "You must be logged in to reset data.");
+              }
+            } catch (error) {
+              console.error("Error resetting data:", error);
+              Alert.alert("Reset Failed", "There was an error resetting your data.");
+            }
+          }
+        }
+      ]
+    );
+  } catch (error) {
+    console.error("Error in resetStepsAndLocationData:", error);
+  }
+};
+
 return (
     <SafeAreaView style={[styles.container, { paddingTop: 0 }]}>
       <View style={[styles.topLeftIndicators, { top: insets.top + 10 }]}>
@@ -1655,7 +2037,8 @@ return (
     >
       {userRole === 'member' ? (
         <>
-          {teamGeofence.length >= 3 && (
+          {/* Ensure teamGeofence is an array before accessing length */}
+          {Array.isArray(teamGeofence) && teamGeofence.length >= 3 && (
             <Polygon 
               coordinates={teamGeofence} 
               fillColor="rgba(0,0,255,0.2)" 
@@ -1663,7 +2046,8 @@ return (
               strokeWidth={2} 
             />
           )}
-          {teamGeofence.length >= 2 && teamGeofence.map((point, index) => {
+          {/* Ensure teamGeofence is an array before mapping */}
+          {Array.isArray(teamGeofence) && teamGeofence.length >= 2 && teamGeofence.map((point, index) => {
             const nextIndex = (index + 1) % teamGeofence.length;
             const nextPoint = teamGeofence[nextIndex];
             
@@ -1703,10 +2087,12 @@ return (
         </>
       ) : (
         <>
-          {points.map((point, index) => (
+          {/* Ensure points is an array before mapping */}
+          {Array.isArray(points) && points.map((point, index) => (
             <Marker key={index} coordinate={point} title={`Point ${index + 1}`} />
           ))}
-          {points.length >= 3 && (
+          {/* Ensure points is an array before accessing length */}
+          {Array.isArray(points) && points.length >= 3 && (
             <Polygon 
               coordinates={points} 
               fillColor="rgba(0,0,255,0.3)" 
@@ -1714,7 +2100,8 @@ return (
               strokeWidth={2} 
             />
           )}
-          {points.length >= 2 && points.map((point, index) => {
+          {/* Ensure points is an array before mapping */}
+          {Array.isArray(points) && points.length >= 2 && points.map((point, index) => {
             const nextIndex = (index + 1) % points.length;
             const nextPoint = points[nextIndex];
             
@@ -1769,7 +2156,8 @@ return (
       ) : null /* Render nothing if neither is available */}
 
       {/* Other Users Markers Loop */}
-      {Object.entries(usersLocations || {})
+      {/* Ensure usersLocations is an object before getting entries */}
+      {typeof usersLocations === 'object' && usersLocations !== null && Object.entries(usersLocations)
         .filter(([userId, userData]) => {
           const currentUid = auth.currentUser?.uid;
           const currentUserData = currentUid ? usersLocations[currentUid] : null;
@@ -1819,26 +2207,106 @@ return (
         ))
       }
       {/* *** Add the Polyline for the trail *** */}
-      {locationHistory.length >= 2 && (
+      {/* Ensure locationHistory is an array before accessing length */}
+      {Array.isArray(locationHistory) && locationHistory.length >= 2 && (
         <Polyline
-          coordinates={locationHistory}
-          strokeColor="#FF5722" // Orange color for the trail
-          strokeWidth={6} // Increased from 4 to 6
+          coordinates={locationHistory.map(point => ({
+            latitude: Number(point.latitude),
+            longitude: Number(point.longitude)
+          }))}
+          strokeColor={debugMode ? "#FF0000" : "#FF5722"} // Red in debug mode, orange in normal mode
+          strokeWidth={6}
           lineCap="round"
           lineJoin="round"
+          zIndex={100} // Make sure it's above other elements
         />
       )}
-      {/* *** Polyline with reverted styling *** */}
-      {locationHistory.length >= 2 && (
-        <Polyline
-          coordinates={locationHistory}
-          strokeColor="#FF5722" // Reverted to Orange
-          strokeWidth={6}     // Kept thicker width
-          lineCap="round"
-          lineJoin="round"
-          // zIndex={999} // Removed, likely not needed
-        />
-      )}
+      
+      {/* *** Add a marker for each history point for debugging purposes *** */}
+      {Array.isArray(locationHistory) && locationHistory.map((point, index) => (
+        <Marker
+          key={`history-point-${index}`}
+          coordinate={{
+            latitude: point.latitude,
+            longitude: point.longitude
+          }}
+          anchor={{ x: 0.5, y: 0.5 }}
+          tracksViewChanges={false}
+          zIndex={50}
+        >
+          <View style={{
+            width: 8,
+            height: 8,
+            borderRadius: 4,
+            backgroundColor: '#FF5722',
+            borderWidth: 1,
+            borderColor: 'white',
+          }} />
+        </Marker>
+      ))}
+      
+      {/* Debug Button - Only visible during development */}
+      <TouchableOpacity
+        style={{
+          position: 'absolute',
+          bottom: 250,
+          right: 20,
+          backgroundColor: 'rgba(0,0,0,0.7)',
+          borderRadius: 30,
+          padding: 10,
+          elevation: 5,
+        }}
+        onPress={() => {
+          console.log(`🧪 DEBUG: LocationHistory has ${locationHistory.length} points`);
+          if (locationHistory.length > 0) {
+            console.log(`🧪 First Point: Lat=${locationHistory[0].latitude.toFixed(8)}, Lon=${locationHistory[0].longitude.toFixed(8)}`);
+            console.log(`🧪 Last Point: Lat=${locationHistory[locationHistory.length-1].latitude.toFixed(8)}, Lon=${locationHistory[locationHistory.length-1].longitude.toFixed(8)}`);
+          }
+          
+          // Show alert with locationHistory info
+          Alert.alert(
+            "LocationHistory Debug",
+            `Points: ${locationHistory.length}\n` +
+            (locationHistory.length > 0 ? 
+              `First: ${locationHistory[0].latitude.toFixed(8)}, ${locationHistory[0].longitude.toFixed(8)}\n` +
+              `Last: ${locationHistory[locationHistory.length-1].latitude.toFixed(8)}, ${locationHistory[locationHistory.length-1].longitude.toFixed(8)}` : 
+              "No points yet")
+          );
+        }}
+      >
+        <Text style={{ color: 'white', fontWeight: 'bold' }}>INFO</Text>
+      </TouchableOpacity>
+      
+      {/* Debug Mode Toggle Button */}
+      <TouchableOpacity
+        style={{
+          position: 'absolute',
+          bottom: 250,
+          right: 80, // Position to the left of the INFO button
+          backgroundColor: debugMode ? 'rgba(255,0,0,0.7)' : 'rgba(0,0,0,0.7)',
+          borderRadius: 30,
+          padding: 10,
+          elevation: 5,
+        }}
+        onPress={() => {
+          const newDebugMode = !debugMode;
+          setDebugMode(newDebugMode);
+          console.log(`🐞 DEBUG MODE: ${newDebugMode ? 'ON' : 'OFF'}`);
+          
+          // Show alert
+          Alert.alert(
+            "Debug Mode",
+            `Debug Mode is now ${newDebugMode ? 'ON' : 'OFF'}\n` +
+            (newDebugMode ? 
+              "All location updates will be added to history regardless of movement." : 
+              "Normal filtering applied.")
+          );
+        }}
+      >
+        <Text style={{ color: 'white', fontWeight: 'bold' }}>
+          {debugMode ? 'DEBUG ON' : 'DEBUG OFF'}
+        </Text>
+      </TouchableOpacity>
     </MapView>
 
     <View style={styles.toolbarContainer}>
@@ -1853,22 +2321,71 @@ return (
                 style={[
                   styles.button,
                   styles.buttonSecondary, 
-                  isFetchingLocation && styles.disabledButton
+                  (isFetchingLocation || isRemovingLocation) && styles.disabledButton,
+                  currentLocation && styles.buttonActive
                 ]}
-                onPress={toggleCurrentLocation}
-                disabled={isFetchingLocation}
+                onPress={async () => {
+                  if (isFetchingLocation || isRemovingLocation) return; // Prevent double-clicks
+                  
+                  if (currentLocation) {
+                    setIsRemovingLocation(true);
+                    // Force location removal immediately
+                    const db = getDatabase();
+                    const userLocationRef = ref(db, `UsersCurrentLocation/${auth.currentUser?.uid}`);
+                    
+                    // Clean up location subscription right away
+                    if (locationSubscriptionRef.current) {
+                      try {
+                        locationSubscriptionRef.current.remove();
+                      } catch (e) {
+                        console.error("Error removing location subscription:", e);
+                      }
+                      locationSubscriptionRef.current = null;
+                    }
+                    
+                    // Clear state immediately 
+                    setCurrentLocation(null);
+                    setGpsAccuracy(null);
+                    setLocationHistory([]);
+                    setEstimatedIconPosition(null);
+                    
+                    // Then update Firebase in background
+                    if (auth.currentUser?.uid) {
+                      update(userLocationRef, { 
+                        isActive: false,
+                        lastSeen: new Date().toISOString(),
+                      }).catch(err => console.error("Error updating location status:", err))
+                      .finally(() => {
+                        setIsRemovingLocation(false);
+                      });
+                    } else {
+                      setIsRemovingLocation(false);
+                    }
+                  } else {
+                    // Start progress indicator immediately for better UX
+                    setIsFetchingLocation(true);
+                    setTimeout(() => toggleCurrentLocation(), 0); // Run in next tick
+                  }
+                }}
+                disabled={isFetchingLocation || isRemovingLocation}
               >
                 {/* *** Add Wrapper View *** */}
                 <View style={styles.buttonContentWrapper}>
-                  {isFetchingLocation ? (
+                  {isFetchingLocation || isRemovingLocation ? (
                     <ActivityIndicator size="small" color="white" />
                   ) : (
                     <>
-                      <Ionicons name="navigate" size={20} color="white" />
+                      <Ionicons 
+                        name={currentLocation ? "close-circle" : "navigate"} 
+                        size={20} 
+                        color="white" 
+                      />
                     </>
                   )}
                   <Text style={styles.buttonText}> {/* Moved Text inside Wrapper */}
-                    {isFetchingLocation ? "Loading..." : currentLocation ? "Remove Loc" : "My Location"}
+                    {isFetchingLocation ? "Loading..." : 
+                     isRemovingLocation ? "Removing..." :
+                     currentLocation ? "Remove Location" : "My Location"}
                   </Text>
                 </View> 
             </TouchableOpacity>
@@ -1998,6 +2515,17 @@ return (
                 Step Tracker
               </Text>
             </TouchableOpacity>
+            
+            {/* Add Reset Button for Testing */}
+            <TouchableOpacity 
+              style={[styles.button, styles.resetTestingButton]}
+              onPress={resetStepsAndLocationData}
+            >
+              <Ionicons name="refresh-circle" size={24} color="white" />
+              <Text style={styles.buttonText}>
+                Reset Testing Data
+              </Text>
+            </TouchableOpacity>
         </>
       ) : (
         <>
@@ -2034,6 +2562,15 @@ return (
               <Ionicons name="footsteps" size={20} color="white" />
               <Text style={styles.buttonText}>Step Tracker</Text>
             </TouchableOpacity>
+            
+            {/* Add Reset Button for Testing - Member View */}
+            <TouchableOpacity 
+              style={[styles.button, styles.resetTestingButton, styles.memberCenterButton]}
+              onPress={resetStepsAndLocationData}
+            >
+              <Ionicons name="refresh-circle" size={20} color="white" />
+              <Text style={styles.buttonText}>Reset Testing Data</Text>
+            </TouchableOpacity>
         </>
       )}
     </View>
@@ -2042,7 +2579,6 @@ return (
     </SafeAreaView>
 );
 } 
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -2347,4 +2883,65 @@ const styles = StyleSheet.create({
     justifyContent: 'center', // Center content within the button space
     gap: 8, // Add space between icon and text
   },
+  buttonActive: {
+    backgroundColor: '#4CAF50',
+    opacity: 0.7,
+  },
+  resetTestingButton: {
+    backgroundColor: "#FF5722", // Orange color to indicate a testing/dev feature
+    marginTop: 10,
+    width: '100%',
+    borderStyle: 'dashed',
+    borderWidth: 1,
+    borderColor: 'white',
+  },
 });
+
+// Add this new function to get location early
+const requestInitialLocation = async () => {
+  try {
+    // Check if we already have permission
+    const { status } = await Location.getForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      const { status: newStatus } = await Location.requestForegroundPermissionsAsync();
+      if (newStatus !== 'granted') return;
+    }
+    
+    // Get a fast, possibly cached location
+    const fastLocation = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Low,
+      maximumAge: 30000 // Accept a cached position up to 30 seconds old
+    });
+    
+    if (fastLocation && fastLocation.coords) {
+      console.log("Got initial fast location");
+      const { latitude, longitude } = fastLocation.coords;
+      setCurrentLocation({ latitude, longitude });
+      setGpsAccuracy(fastLocation.coords.accuracy);
+      
+      // Set initial map region
+      setInitialRegion({
+        latitude,
+        longitude,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      });
+      
+      // Then get more accurate location in background
+      Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced
+      }).then(location => {
+        setCurrentLocation({ 
+          latitude: location.coords.latitude, 
+          longitude: location.coords.longitude 
+        });
+        setGpsAccuracy(location.coords.accuracy);
+      }).catch(err => {
+        console.warn("Failed to get high accuracy location:", err);
+      });
+    }
+  } catch (error) {
+    console.warn("Error getting initial location:", error);
+  }
+};
+

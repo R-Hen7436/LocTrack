@@ -27,7 +27,6 @@ export default function StepTracker({ navigation }) {
   const [maxStepsPerUpdate, setMaxStepsPerUpdate] = useState(0);
   const [totalUpdates, setTotalUpdates] = useState(0);
   const [lastRefresh, setLastRefresh] = useState(null);
-  const [indoorMode, setIndoorMode] = useState(true);
   const [isPedometerUsed, setIsPedometerUsed] = useState(false);
   const [realTimeStepCount, setRealTimeStepCount] = useState(0);
   const [totalTeamSteps, setTotalTeamSteps] = useState(0);
@@ -41,14 +40,6 @@ export default function StepTracker({ navigation }) {
 
   useEffect(() => {
     loadStepData();
-    
-    // Check if we should start in indoor mode based on previous usage
-    AsyncStorage.getItem('indoorModeEnabled').then(value => {
-      if (value !== null) {
-        setIndoorMode(value === 'true');
-        console.log(`📊 STEP VIEWER: Indoor mode set to ${value === 'true'}`);
-      }
-    });
     
     // Set up auto-refresh interval
     autoRefreshInterval.current = setInterval(() => {
@@ -67,12 +58,6 @@ export default function StepTracker({ navigation }) {
       }
     };
   }, []);
-
-  // Save indoor mode preference when it changes
-  useEffect(() => {
-    AsyncStorage.setItem('indoorModeEnabled', indoorMode.toString());
-    console.log(`📊 STEP VIEWER: Indoor mode ${indoorMode ? 'enabled' : 'disabled'}`);
-  }, [indoorMode]);
 
   const loadStepData = useCallback(async (silent = false) => {
     try {
@@ -242,192 +227,18 @@ export default function StepTracker({ navigation }) {
     }
   }, []);
   
-  // Function to manually record indoor steps
-  const startIndoorTracking = async () => {
-    console.log('📊 STEP VIEWER: Starting indoor tracking');
-    if (!indoorMode) {
-      setIndoorMode(true);
-      console.log('📊 STEP VIEWER: Enabled indoor mode automatically');
-    }
+  // Function to start tracking - no longer needs indoor mode parameter
+  const startTracking = async () => {
+    console.log('📊 STEP VIEWER: Starting step tracking via map');
     
-    try {
-      const auth = getAuth();
-      if (!auth.currentUser) {
-        console.log('📊 STEP VIEWER ERROR: No authenticated user');
-        Alert.alert('Error', 'You must be logged in to track steps');
-        return;
-      }
-      
-      const db = getDatabase();
-      
-      // Check if step data has already been initialized
-      const appStateRef = ref(db, `appState/${auth.currentUser.uid}`);
-      const appStateSnapshot = await get(appStateRef);
-      const isInitialized = appStateSnapshot.exists() && appStateSnapshot.val().stepDataInitialized;
-      
-      // Get team code from profile
-      let userTeamCode = teamCode;
-      if (!userTeamCode) {
-        const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
-        const snapshot = await get(userProfileRef);
-        if (snapshot.exists()) {
-          const userData = snapshot.val();
-          userTeamCode = userData.teamCode;
-          setTeamCode(userTeamCode);
-          console.log(`📊 STEP VIEWER: Retrieved team code: ${userTeamCode}`);
-        }
-      }
-      
-      if (!userTeamCode) {
-        console.log('📊 STEP VIEWER ERROR: No team code found');
-        Alert.alert('Error', 'No team code found. Please join a team first.');
-        return;
-      }
-      
-      console.log('📊 STEP VIEWER: Preparing to start tracking steps');
-      
-      // If already initialized, give the option to just refresh
-      if (isInitialized) {
-        Alert.alert(
-          'Step Tracking Already Active',
-          'Step tracking is already initialized. Would you like to refresh the data or go to the map?',
-          [
-            {
-              text: 'Refresh Data',
-              onPress: () => {
-                console.log('📊 STEP VIEWER: User chose to refresh data');
-                loadStepData();
-              }
-            },
-            {
-              text: 'Go to Map',
-              onPress: () => {
-                console.log('📊 STEP VIEWER: User chose to navigate to map');
-                // Force refresh data when returning from map
-                const unsubscribe = navigation.addListener('focus', () => {
-                  console.log('📊 STEP VIEWER: Returned from map, refreshing data...');
-                  loadStepData();
-                  unsubscribe();
-                });
-                navigation.navigate('LocTrack');
-              }
-            },
-            {
-              text: 'Cancel',
-              style: 'cancel'
-            }
-          ]
-        );
-        return;
-      }
-      
-      // Ask the user if they want to go to the map instead of automatically redirecting
-      Alert.alert(
-        'Start Step Tracking',
-        'Do you want to go to the map screen to begin tracking steps, or initialize step tracking here?',
-        [
-          {
-            text: 'Go to Map',
-            onPress: () => {
-              console.log('📊 STEP VIEWER: User chose to navigate to map');
-              // Force refresh data when returning from map
-              const unsubscribe = navigation.addListener('focus', () => {
-                console.log('📊 STEP VIEWER: Returned from map, refreshing data...');
-                loadStepData();
-                unsubscribe();
-              });
-              navigation.navigate('LocTrack');
-            }
-          },
-          {
-            text: 'Initialize Here',
-            onPress: () => {
-              console.log('📊 STEP VIEWER: User chose to initialize step tracking from step tracker screen');
-              // Create some initial step data so we have something to display
-              tryCreateInitialStepData(userTeamCode);
-            }
-          },
-          {
-            text: 'Cancel',
-            style: 'cancel'
-          }
-        ]
-      );
-    } catch (error) {
-      console.error('📊 STEP VIEWER ERROR: Error starting indoor tracking:', error);
-      Alert.alert('Error', 'Failed to start indoor tracking: ' + error.message);
-    }
-  };
-  
-  // Function to create initial step data without requiring map navigation
-  const tryCreateInitialStepData = async (userTeamCode) => {
-    try {
-      setIsLoading(true);
-      
-      const auth = getAuth();
-      if (!auth.currentUser) return;
-      
-      const db = getDatabase();
-      const timestamp = new Date().getTime();
-      const entryId = `step_${timestamp}`;
-      
-      // Create placeholder data
-      const initialStepData = {
-        location: {
-          latitude: 0,
-          longitude: 0,
-          isIndoor: true
-        },
-        steps: 50, // Start with some steps
-        totalSteps: 50,
-        timestamp: timestamp,
-        formattedTime: new Date(timestamp).toISOString(),
-        userId: auth.currentUser.uid,
-        isIndoorTracking: true,
-        isPedometerUsed: false
-      };
-      
-      // Save to team data
-      const teamStepDataRef = ref(db, `teams/${userTeamCode}/locationStepData/${auth.currentUser.uid}/${entryId}`);
-      await set(teamStepDataRef, initialStepData);
-      
-      // Save to user profile
-      const userStepDataRef = ref(db, `users/${auth.currentUser.uid}/profile/stepData`);
-      await set(userStepDataRef, {
-        lastLocation: initialStepData.location,
-        lastStepCount: initialStepData.steps,
-        totalSteps: initialStepData.totalSteps,
-        lastUpdateTimestamp: timestamp,
-        history: [
-          {
-            latitude: initialStepData.location.latitude,
-            longitude: initialStepData.location.longitude,
-            steps: initialStepData.steps,
-            timestamp: initialStepData.timestamp,
-            formattedTime: initialStepData.formattedTime,
-            isIndoorTracking: true
-          }
-        ]
-      });
-      
-      // Set the app state flag to indicate step data is initialized
-      const appStateRef = ref(db, `appState/${auth.currentUser.uid}`);
-      await update(appStateRef, {
-        stepDataInitialized: true,
-        lastStepUpdateTimestamp: timestamp
-      });
-      
-      console.log('📊 STEP VIEWER: Created initial step data and set initialization flag');
-      Alert.alert('Step Tracking Initialized', 'Initial step data has been created. You can now begin tracking steps.');
-      
-      // Refresh data display
-      loadStepData();
-    } catch (error) {
-      console.error('📊 STEP VIEWER ERROR: Failed to create initial step data', error);
-      Alert.alert('Error', 'Failed to initialize step data: ' + error.message);
-    } finally {
-      setIsLoading(false);
-    }
+    // Navigate to map screen to start tracking
+    navigation.navigate('Home');
+    
+    Alert.alert(
+      'Step Tracking',
+      'Go to the map screen to track your steps with GPS.',
+      [{ text: 'OK' }]
+    );
   };
   
   const syncWithMap = async () => {
@@ -455,7 +266,7 @@ export default function StepTracker({ navigation }) {
           [
             {
               text: 'Indoor Tracking',
-              onPress: startIndoorTracking
+              onPress: startTracking
             },
             {
               text: 'Outdoor GPS Tracking',
@@ -485,7 +296,7 @@ export default function StepTracker({ navigation }) {
           [
             {
               text: 'Indoor Tracking',
-              onPress: startIndoorTracking
+              onPress: startTracking
             },
             {
               text: 'Outdoor GPS Tracking',
@@ -510,7 +321,7 @@ export default function StepTracker({ navigation }) {
         [
           {
             text: 'Indoor Tracking',
-            onPress: startIndoorTracking
+            onPress: startTracking
           },
           {
             text: 'Outdoor GPS Tracking',
@@ -543,26 +354,6 @@ export default function StepTracker({ navigation }) {
     const percentage = Math.max(5, (steps / maxStepsPerUpdate) * 100);
     return `${percentage}%`;
   };
-  
-  const toggleIndoorMode = () => {
-    const newMode = !indoorMode;
-    console.log(`📊 STEP VIEWER: Toggling indoor mode to ${newMode}`);
-    setIndoorMode(newMode);
-    
-    if (newMode) {
-      Alert.alert(
-        'Indoor Mode Enabled',
-        'Steps will be tracked even without GPS. Great for walking indoors!',
-        [{ text: 'OK' }]
-      );
-    } else {
-      Alert.alert(
-        'Indoor Mode Disabled',
-        'Steps will only be tracked with GPS location. Best for outdoor walking.',
-        [{ text: 'OK' }]
-      );
-    }
-  };
 
   return (
     <View style={styles.container}>
@@ -591,37 +382,22 @@ export default function StepTracker({ navigation }) {
         </View>
       ) : (
         <ScrollView contentContainerStyle={styles.scrollContent}>
-          {/* Add indoor mode toggle */}
-          <View style={styles.modeToggleCard}>
-            <View style={styles.modeToggleContent}>
-              <View>
-                <Text style={styles.modeToggleTitle}>
-                  {indoorMode ? 'Indoor Mode: ON' : 'Indoor Mode: OFF'}
-                </Text>
-                <Text style={styles.modeToggleDescription}>
-                  {indoorMode 
-                    ? 'Tracking steps without GPS for indoor walking' 
-                    : 'Using GPS for accurate outdoor tracking'}
-                </Text>
-                {isPedometerUsed && (
-                  <Text style={styles.pedometerStatus}>
-                    Using device pedometer for accurate step counting
-                  </Text>
-                )}
-              </View>
-              <Switch
-                value={indoorMode}
-                onValueChange={toggleIndoorMode}
-                trackColor={{ false: '#D1D1D1', true: '#81D4FA' }}
-                thumbColor={indoorMode ? '#2196F3' : '#f4f3f4'}
-              />
-            </View>
+          <View style={styles.trackingCard}>
+            <Text style={styles.trackingTitle}>GPS Step Tracking</Text>
+            <Text style={styles.trackingDescription}>
+              The app tracks your steps using GPS location data for accurate measurement
+            </Text>
+            {isPedometerUsed && (
+              <Text style={styles.pedometerStatus}>
+                Using device pedometer for accurate step counting
+              </Text>
+            )}
             <TouchableOpacity 
               style={styles.startTrackingButton}
-              onPress={startIndoorTracking}
+              onPress={startTracking}
             >
               <Ionicons name="play" size={16} color="white" />
-              <Text style={styles.startTrackingText}>Start Tracking Now</Text>
+              <Text style={styles.startTrackingText}>Go to Map to Track</Text>
             </TouchableOpacity>
           </View>
 
@@ -695,16 +471,12 @@ export default function StepTracker({ navigation }) {
                     <Text style={styles.historyDate}>
                       {formatDate(entry.timestamp)}
                     </Text>
-                    {entry.isIndoorTracking && (
-                      <Text style={styles.indoorBadge}>Indoor</Text>
-                    )}
                   </View>
                   <View style={styles.barContainer}>
                     <View 
                       style={[
                         styles.bar, 
                         { width: getBarWidth(entry.steps) },
-                        entry.isIndoorTracking ? styles.indoorBar : styles.outdoorBar
                       ]}
                     />
                     <Text style={styles.barText}>{entry.steps} steps</Text>
@@ -720,7 +492,7 @@ export default function StepTracker({ navigation }) {
               </Text>
               <TouchableOpacity 
                 style={styles.tryAgainButton}
-                onPress={startIndoorTracking}
+                onPress={startTracking}
               >
                 <Text style={styles.tryAgainButtonText}>Start Tracking Steps</Text>
               </TouchableOpacity>
@@ -730,8 +502,8 @@ export default function StepTracker({ navigation }) {
           <View style={styles.infoCard}>
             <Text style={styles.infoTitle}>How It Works</Text>
             <Text style={styles.infoText}>
-              • Indoor Mode: Turn on to track steps without GPS (perfect for indoors)
-              • Outdoor Mode: Use the map screen for GPS-based tracking
+              • Step tracking uses GPS to track your movement
+              • Use the map screen for GPS-based tracking
               • Keep the app open while walking for best results
               • Refresh this screen to see your updated steps
             </Text>
@@ -746,7 +518,6 @@ export default function StepTracker({ navigation }) {
                 `Team Code: ${teamCode || 'None'}\n` +
                 `Total Steps: ${totalSteps}\n` +
                 `Step History Entries: ${stepHistory.length}\n` +
-                `Indoor Mode: ${indoorMode ? 'Enabled' : 'Disabled'}\n` +
                 `Pedometer Used: ${isPedometerUsed ? 'Yes' : 'No'}\n` +
                 `Real-time Pedometer Count: ${realTimeStepCount}\n` +
                 `Last Updated: ${stepHistory.length ? new Date(stepHistory[0].timestamp).toLocaleString() : 'Never'}`
@@ -816,7 +587,7 @@ const styles = StyleSheet.create({
     elevation: 2,
     marginBottom: 6,
   },
-  modeToggleCard: {
+  trackingCard: {
     backgroundColor: 'white',
     borderRadius: 12,
     padding: 16,
@@ -827,21 +598,16 @@ const styles = StyleSheet.create({
     elevation: 2,
     marginBottom: 16,
   },
-  modeToggleContent: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  modeToggleTitle: {
+  trackingTitle: {
     fontSize: 16,
     fontWeight: 'bold',
     color: '#333',
   },
-  modeToggleDescription: {
+  trackingDescription: {
     fontSize: 12,
     color: '#666',
     marginTop: 4,
-    maxWidth: width * 0.6,
+    maxWidth: width * 0.9,
   },
   pedometerStatus: {
     fontSize: 11,
@@ -930,16 +696,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666',
   },
-  indoorBadge: {
-    fontSize: 10,
-    color: 'white',
-    backgroundColor: '#9C27B0',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 10,
-    alignSelf: 'flex-start',
-    marginTop: 4,
-  },
   barContainer: {
     flex: 1,
     height: 24,
@@ -950,12 +706,6 @@ const styles = StyleSheet.create({
   },
   bar: {
     height: '100%',
-  },
-  indoorBar: {
-    backgroundColor: '#9C27B0',
-  },
-  outdoorBar: {
-    backgroundColor: '#2196F3',
   },
   barText: {
     position: 'absolute',
