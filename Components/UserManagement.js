@@ -156,13 +156,16 @@ export default function UserManagement({ navigation }) {
         if (snapshot.exists()) {
           const locationsData = snapshot.val();
           console.log('User locations updated:', Object.keys(locationsData).length);
-          // Log specific data to debug
-          Object.keys(locationsData).forEach(userId => {
-            console.log(`Location data for ${userId}:`, 
-              locationsData[userId]?.Latitude ? 
-              `Lat: ${locationsData[userId].Latitude}, Lon: ${locationsData[userId].Longitude}, isActive: ${locationsData[userId].isActive}` : 
-              'No coordinates');
+          
+          // Debug logging to see what's in the location data
+          Object.entries(locationsData).forEach(([userId, locationData]) => {
+            if (locationData && locationData.Latitude && locationData.Longitude) {
+              console.log(`Location for user ${userId}: Lat=${locationData.Latitude}, Lng=${locationData.Longitude}, isActive=${locationData.isActive}`);
+            } else {
+              console.log(`No valid location data for user ${userId}`);
+            }
           });
+          
           setMembersLocations(locationsData);
         }
       });
@@ -361,6 +364,10 @@ export default function UserManagement({ navigation }) {
     const longitude = memberLocation.Longitude || memberLocation.longitude;
     const memberStats = userStats[item.id] || { totalDistance: 0 };
     
+    // Debug log the member and their location
+    console.log(`Rendering member: ${item.id}, ${memberName}`);
+    console.log(`Location data available: ${memberLocation.Latitude !== undefined ? 'Yes' : 'No'}`);
+    
     return (
       <View style={styles.memberItem}>
         <View style={styles.memberInfo}>
@@ -382,9 +389,27 @@ export default function UserManagement({ navigation }) {
             <View style={styles.locationContainer}>
               <Ionicons name="location" size={14} color="#007AFF" />
               <Text style={styles.locationText}>
-                {hasLocationData ? 
-                  `Lat: ${formatCoordinate(latitude)}, Lng: ${formatCoordinate(longitude)}` :
+                {memberLocation.Latitude ? 
+                  `Lat: ${formatCoordinate(memberLocation.Latitude)}, Lng: ${formatCoordinate(memberLocation.Longitude)}` :
                   'Location not available'}
+              </Text>
+              {memberLocation && memberLocation.Latitude !== undefined && !memberLocation.isActive && (
+                <Text style={styles.locationOfflineText}> (last known)</Text>
+              )}
+            </View>
+            
+            {/* Online status indicator */}
+            <View style={styles.statusIndicator}>
+              <View 
+                style={[
+                  styles.statusDot, 
+                  { backgroundColor: memberLocation && memberLocation.isActive === true ? '#4CD964' : '#8E8E93' }
+                ]} 
+              />
+              <Text style={styles.statusText}>
+                {memberLocation && memberLocation.isActive === true ? 'Online' : 'Offline'}
+                {memberLocation && memberLocation.lastSeen && !memberLocation.isActive && 
+                  ` · ${formatLastSeen(memberLocation.lastSeen)}`}
               </Text>
             </View>
             
@@ -403,20 +428,6 @@ export default function UserManagement({ navigation }) {
                 <Ionicons name="home" size={14} color="#FF9500" />
                 <Text style={styles.indicatorText}>Indoor</Text>
               </View>
-            </View>
-            
-            <View style={styles.statusIndicator}>
-              <View 
-                style={[
-                  styles.statusDot, 
-                  { backgroundColor: item.presence?.status === 'online' ? '#4CD964' : '#8E8E93' }
-                ]} 
-              />
-              <Text style={styles.statusText}>
-                {formatStatus(item.presence?.status)}
-                {item.presence?.status !== 'online' && item.presence?.lastSeen && 
-                  ` · ${formatLastSeen(item.presence.lastSeen)}`}
-              </Text>
             </View>
           </View>
         </View>
@@ -660,6 +671,12 @@ const styles = StyleSheet.create({
     color: '#333',
     marginLeft: 4,
     fontFamily: 'monospace',
+  },
+  locationOfflineText: {
+    fontSize: 12,
+    color: '#888',
+    marginLeft: 4,
+    fontStyle: 'italic',
   },
   indicatorsRow: {
     flexDirection: 'row',

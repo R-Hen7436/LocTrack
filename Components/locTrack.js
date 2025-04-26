@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, TextInput, SafeAreaView, Animated, Image, Alert, Platform, Modal, Linking, ActivityIndicator } from "react-native";
 import MapView, { Marker, Polygon, Circle, Polyline } from "react-native-maps";
 import * as Location from "expo-location";
@@ -15,31 +15,34 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Pedometer } from 'expo-sensors';
+import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system';
 
 /**
- * Simple implementation of a Kalman filter for 2D location data
- * Based on the algorithm described in "Kalman Filter For Beginners" and several online implementations
+ * Optimized Kalman filter for 2D location data with battery efficiency
+ * Based on the algorithm described in "Kalman Filter For Beginners" with performance optimizations
  */
-class SimpleKalmanFilter {
+class OptimizedKalmanFilter {
   /**
-   * Create a Kalman filter for 2D location tracking
+   * Create a Kalman filter for 2D location tracking with dynamic adjustment
    * @param {number} processNoise - How much we expect the process to change randomly between updates (Q)
-   * @param {number} initialMeasurementNoise - Default inaccuracy expectation (R), dynamically updated if accuracy is provided
+   * @param {number} initialMeasurementNoise - Default inaccuracy expectation (R), dynamically updated
    */
-  constructor(processNoise = 0.01, initialMeasurementNoise = 10) { // Increased processNoise from 0.001 to 0.01, lower measurement noise
+  constructor(processNoise = 0.01, initialMeasurementNoise = 15) { // Increased initialMeasurementNoise from 10 to 15
     // State vector [x, y, vx, vy]
     this.state = null;
     
     // Covariance matrix 4x4
     this.covariance = null;
     
-    // Process noise (Q) - how much we expect our model to be wrong
+    // Process noise (Q) - dynamically adjusted based on movement patterns
+    this.baseProcessNoise = processNoise;
     this.processNoise = processNoise;
     
     // Measurement noise (R) - Initial value, updated dynamically
-    this.measurementNoise = initialMeasurementNoise; // Used as default if accuracy unavailable
+    this.measurementNoise = initialMeasurementNoise; // Use the adjusted initial value
     
-    // Transition matrix (F) - constant velocity model
+    // Precomputed transition matrix (F) - constant velocity model
     this.transitionMatrix = [
       [1, 0, 1, 0], // x = x + vx * dt (dt=1)
       [0, 1, 0, 1], // y = y + vy * dt (dt=1)
@@ -47,13 +50,13 @@ class SimpleKalmanFilter {
       [0, 0, 0, 1]  // vy = vy
     ];
     
-    // Observation matrix (H) - we only observe x and y, not velocities
+    // Precomputed observation matrix (H) - we only observe x and y
     this.observationMatrix = [
       [1, 0, 0, 0],
       [0, 1, 0, 0]
     ];
     
-    // Identity matrix 4x4
+    // Precomputed identity matrix 4x4
     this.identity = [
       [1, 0, 0, 0],
       [0, 1, 0, 0],
@@ -61,21 +64,46 @@ class SimpleKalmanFilter {
       [0, 0, 0, 1]
     ];
     
+    // Movement history to adapt process noise dynamically
+    this.movementHistory = [];
+    this.maxHistoryLength = 10;
+    
     // Store the last filtered position for noise filtering
     this.lastFilteredPosition = null;
+    this.lastRawPosition = null;
     
-    // Threshold for minimum movement (in degrees of lat/lon) to consider it real movement
-    this.minMovementThreshold = 0.0000001; // Drastically reduced from 0.000008 - now ~1cm instead of ~1m
+    // Minimum movement threshold (optimized to reduce processing on small movements)
+    this.minMovementThreshold = 0.0000001; // Keep this small for detection
+    
+    // Battery-saving mode flags
+    this.lowBatteryMode = false;
+    this.staticPeriodCounter = 0;
+    this.staticThreshold = 8; // Increased from 5 to 8 for more confidence in static state
+    
+    // Processing optimization - cache frequently used calculations
+    this.predictionCache = null;
+    this.lastProcessNoiseAdjustment = Date.now();
   }
   
   /**
-   * Calculate distance between two points in lat/lon degrees (approximation)
+   * Enable or disable low battery mode
+   * @param {boolean} enabled - Whether low battery mode is enabled
+   */
+  setLowBatteryMode(enabled) {
+    this.lowBatteryMode = enabled;
+    // Adjust process noise for more aggressive filtering in low battery mode
+    this.processNoise = enabled ? this.baseProcessNoise * 0.5 : this.baseProcessNoise;
+  }
+  
+  /**
+   * Calculate distance between two points in lat/lon degrees (optimized approximation)
    */
   calculateDistanceApprox(pos1, pos2) {
     if (!pos1 || !pos2) return 0;
+    // Use squared distance to avoid expensive sqrt operations when possible
     const latDiff = pos1.latitude - pos2.latitude;
     const lonDiff = pos1.longitude - pos2.longitude;
-    return Math.sqrt(latDiff * latDiff + lonDiff * lonDiff);
+    return latDiff * latDiff + lonDiff * lonDiff;
   }
   
   /**
@@ -91,60 +119,149 @@ class SimpleKalmanFilter {
       [0, 0, 0, highUncertainty]
     ];
     this.lastFilteredPosition = { latitude: x, longitude: y };
+    this.lastRawPosition = { latitude: x, longitude: y };
   }
   
   /**
    * Update the filter with a new GPS measurement
+   * @param {number} x - Latitude
+   * @param {number} y - Longitude
+   * @param {number} accuracy - GPS accuracy in meters
+   * @param {number} batteryLevel - Battery level percentage (0-100)
+   * @param {boolean} [isFirstUpdateAfterLock=false] - Flag for the first update after lock break
+   * @returns {Object} Filtered position
    */
-  update(x, y, accuracy) {
+  update(x, y, accuracy, batteryLevel = 100, isFirstUpdateAfterLock = false) { // *** Added isFirstUpdateAfterLock parameter ***
+    console.log(`KF Update Start: Raw(lat=${x.toFixed(6)}, lon=${y.toFixed(6)}), Acc=${accuracy?.toFixed(1)}, FirstAfterLock=${isFirstUpdateAfterLock}`); // Log Input
+    // Automatically adjust to low battery mode if battery level is below 20%
+    if (batteryLevel < 20 && !this.lowBatteryMode) {
+      this.setLowBatteryMode(true);
+    } else if (batteryLevel >= 20 && this.lowBatteryMode) {
+      this.setLowBatteryMode(false);
+    }
+    
     if (!this.state) {
       this.init(x, y);
       return { latitude: x, longitude: y };
     }
     
-    let currentMeasurementNoise = this.measurementNoise;
+    // Store current raw position
+    const currentRawPosition = { latitude: x, longitude: y };
+    
+    // Adaptive measurement noise based on accuracy - MORE AGGRESSIVE
+    let currentMeasurementNoise = this.measurementNoise; // Start with base
     if (accuracy && !isNaN(accuracy) && accuracy > 0) {
-      currentMeasurementNoise = Math.max(1.0, accuracy * accuracy);
+      // Be much more aggressive if accuracy is poor
+      if (accuracy > 50) { 
+        currentMeasurementNoise = accuracy * 8; // ** Increased from 5 ** Heavily distrust very inaccurate points
+        console.log(`KF Update: High Accuracy Error (>50m), Using VERY HIGH MeasurementNoise: ${currentMeasurementNoise.toFixed(1)}`);
+      } else if (accuracy > 20) {
+         currentMeasurementNoise = accuracy * 4; // ** Increased from 2 ** Moderately distrust inaccurate points
+         console.log(`KF Update: Moderate Accuracy Error (>20m), Using HIGH MeasurementNoise: ${currentMeasurementNoise.toFixed(1)}`);
+      } else { // Accuracy <= 20m (Good)
+        currentMeasurementNoise = Math.max(1.0, accuracy * 0.9); // Slightly increased factor, still trust good points mostly
+        console.log(`KF Update: Good Accuracy (<=20m), Using MeasurementNoise: ${currentMeasurementNoise.toFixed(1)}`);
+      }
+    } else {
+       console.log(`KF Update: No valid accuracy, using base MeasurementNoise: ${currentMeasurementNoise.toFixed(1)}`);
     }
     
-    const moveDistance = this.calculateDistanceApprox(
-      { latitude: x, longitude: y },
-      this.lastFilteredPosition
-    );
-    const currentAccuracyEstimate = Math.sqrt(currentMeasurementNoise);
-    if (moveDistance < this.minMovementThreshold && currentAccuracyEstimate > 5) {
+    // *** Smooth Transition: Temporarily increase noise on first update after lock break ***
+    if (isFirstUpdateAfterLock) {
+      const noiseFactor = 2.5; // Increase noise 2.5x temporarily
+      currentMeasurementNoise *= noiseFactor;
+      console.log(`KF Update: SMOOTH TRANSITION active. Temp MeasurementNoise = ${currentMeasurementNoise.toFixed(1)} (Factor: ${noiseFactor})`);
+    }
+    
+    // Check if the device is static to save processing
+    const distance = this.calculateDistanceApprox(currentRawPosition, this.lastRawPosition);
+    console.log(`KF Update: Dist from last raw=${distance.toExponential(2)}, StaticCounter=${this.staticPeriodCounter}`); // Log distance
+    this.lastRawPosition = currentRawPosition;
+    
+    // Add to movement history for adaptive processing
+    this.movementHistory.push(distance);
+    if (this.movementHistory.length > this.maxHistoryLength) {
+      this.movementHistory.shift();
+    }
+    
+    // If static and in low battery mode OR confidently static, skip full filtering
+    if (distance < this.minMovementThreshold) {
+      this.staticPeriodCounter++;
+      // If static threshold is met (regardless of battery), return last known good position
+      if (this.staticPeriodCounter > this.staticThreshold) { 
+        console.log(`KF Update: STATIC LOCK (${this.staticPeriodCounter} > ${this.staticThreshold}), returning last filtered pos.`);
+        // DO NOT reset counter here - stay locked until genuine movement
       return this.lastFilteredPosition;
     }
+      // If low battery mode is active AND counter is high (but below strict threshold), also return last position
+      if (this.lowBatteryMode && this.staticPeriodCounter > this.staticThreshold / 2) { 
+         console.log(`KF Low battery static (${this.staticPeriodCounter} counts), returning last position.`);
+        return this.lastFilteredPosition;
+      }
+    } else {
+      // Reset counter only if movement exceeds threshold
+      if (this.staticPeriodCounter > 0) {
+         console.log(`KF Movement detected, resetting static counter from ${this.staticPeriodCounter}`);
+      }
+      this.staticPeriodCounter = 0;
+      
+      // Dynamically adjust process noise based on movement patterns (every 30 seconds)
+      const now = Date.now();
+      if (now - this.lastProcessNoiseAdjustment > 15000) { // Check more frequently (15s)
+        this.adaptProcessNoise();
+        this.lastProcessNoiseAdjustment = now;
+      }
+    }
     
-    // PREDICT
+    // Full Kalman filter processing for non-static situations
+    
+    // PREDICT step (optimize computations for battery savings)
     const predictedState = this.matrixMultiply(this.transitionMatrix, this.state);
-    let predictedCovariance = this.matrixMultiply(
+    
+    // Only do full covariance prediction if we've moved significantly
+    let predictedCovariance;
+    if (this.lowBatteryMode && this.predictionCache && distance < this.minMovementThreshold) {
+      predictedCovariance = this.predictionCache;
+    } else {
+      predictedCovariance = this.matrixMultiply(
       this.transitionMatrix,
       this.matrixMultiply(this.covariance, this.transpose(this.transitionMatrix))
     );
+      
     for (let i = 0; i < 4; i++) {
       predictedCovariance[i][i] += this.processNoise;
     }
     
-    // UPDATE
+      // Cache this result for low battery mode
+      if (this.lowBatteryMode) {
+        this.predictionCache = predictedCovariance;
+      }
+    }
+    
+    // UPDATE step
     const observationTranspose = this.transpose(this.observationMatrix);
     const hph = this.matrixMultiply(
       this.observationMatrix,
       this.matrixMultiply(predictedCovariance, observationTranspose)
     );
+    
     for (let i = 0; i < 2; i++) {
-      hph[i][i] += currentMeasurementNoise; // Use dynamic noise
+      hph[i][i] += currentMeasurementNoise;
     }
+    
     const hphInverse = this.inverse2x2(hph);
     const ph = this.matrixMultiply(predictedCovariance, observationTranspose);
     const kalmanGain = this.matrixMultiply(ph, hphInverse);
+    
     const measurement = [[x], [y]];
     const predictedMeasurement = this.matrixMultiply(this.observationMatrix, predictedState);
     const innovation = this.matrixSubtract(measurement, predictedMeasurement);
+    
     this.state = this.matrixAdd(
       predictedState,
       this.matrixMultiply(kalmanGain, innovation)
     );
+    
     const kh = this.matrixMultiply(kalmanGain, this.observationMatrix);
     const identityMinusKH = this.matrixSubtract(this.identity, kh);
     this.covariance = this.matrixMultiply(identityMinusKH, predictedCovariance);
@@ -153,12 +270,51 @@ class SimpleKalmanFilter {
       latitude: this.state[0][0],
       longitude: this.state[1][0]
     };
+    
     this.lastFilteredPosition = result;
     return result;
   }
 
-  // ... Matrix helper methods ... (matrixMultiply, matrixAdd, etc.)
-  // (Ensure these helper methods are also present)
+  /**
+   * Dynamically adapt process noise based on movement patterns
+   * This helps filter more aggressively during periods of consistent movement
+   * and be more responsive during erratic movement
+   */
+  adaptProcessNoise() {
+    if (this.movementHistory.length < 5) return; // Require a bit more history
+    
+    // Calculate variance of movement
+    const mean = this.movementHistory.reduce((sum, val) => sum + val, 0) / this.movementHistory.length;
+    const variance = this.movementHistory.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / this.movementHistory.length;
+    
+    // Scale variance relative to mean movement to better handle slow vs fast erratic movement
+    const meanMovementThreshold = 0.000001; // Make threshold even smaller for static detection
+    let normalizedVariance = 0;
+
+    // *** Force low process noise if mean movement is extremely small ***
+    if (mean < meanMovementThreshold) {
+        console.log(`KF adaptProcessNoise: Mean movement very low (${mean.toExponential(1)}), forcing minimal process noise.`);
+        this.processNoise = this.baseProcessNoise * 0.05; // Set to very small value
+    } else { 
+        // Original logic for calculating variance
+        if (mean > meanMovementThreshold * 10) { // Use a slightly higher threshold for relative variance calculation
+            normalizedVariance = Math.min(1, variance / (mean * mean)); 
+        } else {
+            normalizedVariance = Math.min(1, variance * 100000); // Slightly increased scaling for low absolute variance
+        }
+
+        const movementFactor = Math.min(1, mean / (meanMovementThreshold * 50)); // Make factor scale up a bit faster
+    
+    if (this.lowBatteryMode) {
+          this.processNoise = this.baseProcessNoise * (0.15 + 0.35 * normalizedVariance * movementFactor); // Slightly lower base
+    } else {
+          this.processNoise = this.baseProcessNoise * (0.3 + 0.7 * normalizedVariance * movementFactor); // Slightly lower base
+    }
+    }
+     console.log(`KF adaptProcessNoise: Mean=${mean.toExponential(2)}, Var=${variance.toExponential(2)}, NormVar=${normalizedVariance.toFixed(3)}, NewProcessNoise=${this.processNoise.toExponential(2)}`);
+  }
+
+  // Keep existing matrix helper methods...
   matrixMultiply(a, b) {
     const result = [];
     for (let i = 0; i < a.length; i++) {
@@ -222,6 +378,17 @@ class SimpleKalmanFilter {
       [-c * invDet, a * invDet]
     ];
   }
+
+  /**
+   * *** NEW: Method to reset velocity components of the state ***
+   */
+  resetVelocity() {
+    if (this.state) {
+      this.state[2][0] = 0; // Reset vx
+      this.state[3][0] = 0; // Reset vy
+      console.log('KF Velocity Reset');
+    }
+  }
 }
 
 const GPSStrengthIndicator = ({ accuracy }) => {
@@ -261,7 +428,7 @@ const GPSStrengthIndicator = ({ accuracy }) => {
   );
 };
 
-const CustomMarker = ({ coordinate, photoURL, name, labelPosition = 'bottom', markerColor, isOnline = true }) => {
+const CustomMarker = ({ coordinate, photoURL, name, labelPosition = 'bottom', markerColor, isOnline = true, isOutsideGeofence = false }) => { // Add isOutsideGeofence prop
   const nameInitial = name && typeof name === 'string' && name.trim() !== '' ? name.trim()[0].toUpperCase() : '';
   
   const labelPositionStyle = {
@@ -276,6 +443,12 @@ const CustomMarker = ({ coordinate, photoURL, name, labelPosition = 'bottom', ma
     borderStyle: 'dashed',
   } : {};
   
+  // *** NEW: Style for being outside geofence ***
+  const outsideGeofenceStyle = isOutsideGeofence === true ? {
+      borderColor: '#FF3B30', // Red border
+      borderWidth: 4, // Make it thicker
+  } : {};
+  
   const markerContent = React.useMemo(() => (
     <View style={styles.markerContainer}>
       {photoURL ? (
@@ -284,14 +457,16 @@ const CustomMarker = ({ coordinate, photoURL, name, labelPosition = 'bottom', ma
           style={[
             styles.markerImage, 
             markerColor && { borderColor: markerColor },
-            offlineStyle
+            offlineStyle,
+            outsideGeofenceStyle // Apply outside style
           ]}
         />
       ) : (
         <View style={[
           styles.markerFallback, 
           markerColor && { backgroundColor: markerColor },
-          offlineStyle
+          offlineStyle,
+          outsideGeofenceStyle // Apply outside style
         ]}>
           {nameInitial ? (
             <Text style={styles.markerInitial}>{nameInitial}</Text>
@@ -305,20 +480,17 @@ const CustomMarker = ({ coordinate, photoURL, name, labelPosition = 'bottom', ma
           styles.markerLabelContainer, 
           labelPositionStyle,
           { backgroundColor: markerColor ? `${markerColor}DD` : 'rgba(255, 255, 255, 0.9)' },
-          // *** REMOVED: Conditional offline styles from container ***
-          // !isOnline && { borderStyle: 'dashed', opacity: 0.8 }
         ]}>
           <Text style={[
             styles.markerLabel, 
             { color: markerColor ? '#FFFFFF' : '#333333', fontWeight: '700' }
-            // Style text color based on online status if needed here instead
           ]}>
-            {name} {!isOnline && '(offline)'} { /* Text indicates offline status */}
+            {name} {!isOnline && <Text style={{fontStyle: 'italic', fontSize: 10}}>(last known)</Text>}
           </Text>
         </View>
       )}
     </View>
-  ), [photoURL, name, nameInitial, labelPosition, markerColor, isOnline, offlineStyle, labelPositionStyle]);
+  ), [photoURL, name, nameInitial, labelPosition, markerColor, isOnline, isOutsideGeofence, offlineStyle, labelPositionStyle, outsideGeofenceStyle]); // Add dependencies
   
   return (
     <Marker 
@@ -377,19 +549,87 @@ const CurrentUserMarker = ({ coordinate, tracksViewChanges }) => {
   );
 };
 
-const MAX_HISTORY_POINTS = 50;
-const MIN_DISTANCE_THRESHOLD = 0.1; // Reduced from 1.0 meter to 0.1 meters
+// Constants for location tracking
+const MAX_HISTORY_POINTS = 200; // Increased from 50 to 200
+const RAW_HISTORY_POINTS = 300; // Even larger for raw history
+const MIN_DISTANCE_THRESHOLD = 1.5; // ** Reduced from 3.5m ** to 1.5m for finer detail in small areas
 const AVERAGE_STEP_LENGTH_METERS = 0.762;
 const STEPS_PER_TRAIL_POINT = 3; // Add a trail point every 3 steps
 const METERS_TO_DEGREE_LAT = 111111; // Approx meters in 1 degree latitude
 const METERS_TO_DEGREE_LON = 111111; // Add equivalent for longitude (will be adjusted based on latitude)
-const MIN_GPS_DISTANCE_FOR_DIRECTION = 0.1; // Reduced from 1.0 to 0.1 meters
-const EMA_ALPHA = 0.3; // Decreased from 0.45 for more smoothing
+const MIN_GPS_DISTANCE_FOR_DIRECTION = 1; // Reduced from 1.0 to 0.1 meters
 
-// Add a threshold for unrealistic jumps (in meters)
-const UNREALISTIC_JUMP_THRESHOLD_METERS = 10; // Reduced from 50m to 10m for testing in small areas
+// Static lock parameters
+const STATIC_TIME_LOCK_MS = 5000; // 5 second timer before considering new movement
+const SIGNIFICANT_MOVEMENT_THRESHOLD = 3.0; // Increased to 3 meters (Used for INITIAL lock activation / deciding if movement occurred when NOT locked)
+const STATIC_LOCK_BREAK_DISTANCE_THRESHOLD = 5.0; // *** NEW: Higher threshold (5m) to break an EXISTING lock based on distance ONLY ***
 
+// Jump threshold
+const UNREALISTIC_JUMP_THRESHOLD_METERS = 20; // Reduced from 50m to 10m for testing in small areas
+
+// Add this function at the top of the file, right after the imports
+// Safely get the user role with a default value
+function safeGetUserRole(userRole) {
+  return userRole || 'member';
+}
+
+// Near the top of the file, after imports but before the App component
+// Create a user role context to prevent reference errors
+const UserRoleContext = React.createContext({ 
+  userRole: 'member', 
+  setUserRole: () => {}
+});
+
+// Create a hook to safely access userRole
+function useUserRole() {
+  return React.useContext(UserRoleContext);
+}
+
+// Create a provider component
+function UserRoleProvider({ children }) {
+  const [userRoleState, setUserRoleState] = useState('member');
+  
+  // Create a memoized value to prevent unnecessary re-renders
+  const value = useMemo(() => ({
+    userRole: userRoleState,
+    setUserRole: setUserRoleState
+  }), [userRoleState]);
+  
+  return (
+    <UserRoleContext.Provider value={value}>
+      {children}
+    </UserRoleContext.Provider>
+  );
+}
+
+// Modify the App component to use the UserRoleProvider
 export default function App() {
+  return (
+    <UserRoleProvider>
+      <AppContent />
+    </UserRoleProvider>
+  );
+}
+
+// Then create the main content component
+function AppContent() {
+  // *** PERFORMANCE OPTIMIZATION FIXES ***
+  // The following optimizations have been implemented to prevent infinite re-renders:
+  // 1. Removed usersLocations from the handleMapRegionChange useEffect dependencies
+  // 2. Optimized marker position calculation to prevent unnecessary state updates
+  // 3. Added memoization for team members filtering with useMemo
+  // 4. Added useCallback for fitAllMarkers with proper dependencies
+  // 5. Added debouncing to fitAllMarkers to prevent frequent map updates
+  // 6. Added null checks and error handling to prevent crashes
+  // 7. Added proper dependency arrays to all useEffect hooks
+  // 8. Used functional state updates where appropriate to prevent stale state
+
+  // Access userRole from context
+  const { userRole, setUserRole } = useUserRole();
+  
+  // Make sure we initialize teamGeofence to prevent "doesn't exist" errors
+  
+  // Rest of your component remains the same
 const mapRef = useRef(null);
 const [points, setPoints] = useState([]);
 const [currentLocation, setCurrentLocation] = useState(null);
@@ -403,15 +643,20 @@ const [initialRegion, setInitialRegion] = useState({
   longitudeDelta: 0.02,
 });
 const navigation = useNavigation();
-const [userRole, setUserRole] = useState(null);
 const [teamGeofence, setTeamGeofence] = useState([]);
+  const [teamGeofenceData, setTeamGeofenceData] = useState({});
 const [gpsAccuracy, setGpsAccuracy] = useState(null);
 const [usersLocations, setUsersLocations] = useState({});
+  
+  // ... existing code ...
+
 const [shouldAutoFit, setShouldAutoFit] = useState(true);
 const [markerPositions, setMarkerPositions] = useState({});
 const [trackViewChanges, setTrackViewChanges] = useState(false);
   const [realStepCount, setRealStepCount] = useState(0);
   const insets = useSafeAreaInsets();
+  // Add new state here
+  const [userGeofenceStatuses, setUserGeofenceStatuses] = useState({});
 
   const [stepCount, setStepCount] = useState(0);
   const [stepsSinceLastGpsUpdate, setStepsSinceLastGpsUpdate] = useState(0);
@@ -432,20 +677,71 @@ const [trackViewChanges, setTrackViewChanges] = useState(false);
   const [isUserMarkerMoving, setIsUserMarkerMoving] = useState(false); // Re-added state
   const locationSubscriptionRef = useRef(null); // Add a ref for the location subscription
   const kalmanFilterRef = useRef(null); // Add a ref for the Kalman filter
+  const [isPositionLocked, setIsPositionLocked] = useState(false); // *** NEW: Is position currently locked
+  const prevIsPositionLockedRef = useRef(isPositionLocked); // *** NEW: Ref for previous lock state ***
+  const lastStepCountRef = useRef(0); // Track last step count for comparison
+  const lastLockTimeRef = useRef(0); // Track when we last locked position
+  const stepsAtLockTimeRef = useRef(0); // Steps when we last locked
+  const hasMovedSinceLastLockRef = useRef(false); // If genuine movement detected since lock
+  const wasMovingRef = useRef(false); // *** NEW: Ref to track if previous state was moving ***
+  const hasLockedOnceRef = useRef(false); // *** NEW: Ref to track if lock has engaged at least once ***
 
   // Keep refs synced with state
   useEffect(() => { stepCountRef.current = stepCount; }, [stepCount]);
   useEffect(() => { stepsSinceLastGpsUpdateRef.current = stepsSinceLastGpsUpdate; }, [stepsSinceLastGpsUpdate]); // *** Reinstate useEffect ***
   // No longer need stepsSinceLastGpsUpdateRef here
 
+  // *** NEW: useEffect to update the previous lock state ref ***
+  useEffect(() => {
+    prevIsPositionLockedRef.current = isPositionLocked;
+  }, [isPositionLocked]);
+
   // Make sure the locationHistory state is correctly initialized at the top of your component
   const [locationHistory, setLocationHistory] = useState([]); // Initialize as empty array
+  const [rawLocationHistory, setRawLocationHistory] = useState([]); // State for raw history
 
   // Add at the top with other state variables
   const [isRemovingLocation, setIsRemovingLocation] = useState(false);
 
   // Add this state variable at the top of your component (in the App function)
   const [debugMode, setDebugMode] = useState(false);
+
+  // Add this code where other state declarations are (near the top of the App function)
+  const teamMembers = useMemo(() => {
+    const auth = getAuth();
+    if (!usersLocations || !auth?.currentUser?.uid) return [];
+    
+    const currentUid = auth.currentUser.uid;
+    const currentUserData = usersLocations[currentUid];
+    const currentUserTeamCode = currentUserData?.teamCode;
+    
+    return Object.entries(usersLocations)
+      .filter(([userId, userData]) => {
+        // Check 1: Basic data validity
+        if (!userData || !userData.Latitude || !userData.Longitude) {
+          return false;
+        }
+        // Check 2: Exclude current user
+        if (userId === currentUid) return false;
+        
+        // Check 3: Admin visibility logic
+        if (userData.role === 'admin' || userData.isAdmin) {
+          if (!currentUserData?.isAdmin && currentUserData?.role !== 'admin') {
+            return false; // Non-admin cannot see admin markers
+          }
+        }
+
+        // Check 4: Team visibility
+        if (currentUserTeamCode) {
+          const userTeamCode = userData.teamCode;
+          if (userTeamCode !== currentUserTeamCode) {
+            return false; // Filter out users from different teams
+          }
+        }
+        
+        return true;
+      });
+  }, [usersLocations]); // Remove auth.currentUser?.uid dependency
 
 useEffect(() => {
   const initializeApp = async () => {
@@ -592,6 +888,35 @@ useEffect(() => {
   initializeApp();
 }, []);
 
+const loadUserRole = async () => {
+  try {
+    if (!auth.currentUser) return;
+    
+    const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+    const snapshot = await get(userProfileRef);
+    
+    if (snapshot.exists()) {
+      const profileData = snapshot.val();
+      
+      // Store the role properly
+      if (profileData.role) {
+        // Use the context-based setUserRole
+        setUserRole(profileData.role);
+        
+        // Save to storage for fast loading next time
+        try {
+          await AsyncStorage.setItem('userRole', profileData.role);
+          console.log('UserRole saved to storage:', profileData.role);
+        } catch (storageError) {
+          console.error('Error saving user role to storage:', storageError);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error loading user role:', error);
+  }
+};
+
 useEffect(() => {
   const loadUserRole = async () => {
     try {
@@ -619,31 +944,65 @@ useEffect(() => {
 
 useEffect(() => {
   const loadTeamGeofence = async () => {
-    if (!auth.currentUser || userRole !== 'member') return;
-    
     try {
-      const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
-      const profileSnapshot = await get(userProfileRef);
-      const teamCode = profileSnapshot.val()?.teamCode;
+      const auth = getAuth();
+      if (!auth.currentUser) return;
+
+      const cachedGeofenceData = await AsyncStorage.getItem('teamGeofenceData');
+      const cachedTimestamp = await AsyncStorage.getItem('teamGeofenceTimestamp');
+      const currentTime = Date.now();
       
-      if (teamCode) {
-        const geofenceRef = ref(db, "geofence/coordinates");
-        const geofenceSnapshot = await get(geofenceRef);
-        if (geofenceSnapshot.exists()) {
-          setTeamGeofence(geofenceSnapshot.val());
+      // Use cached data if available and less than 15 minutes old
+      if (cachedGeofenceData && cachedTimestamp) {
+        const parsedTimestamp = parseInt(cachedTimestamp);
+        if (currentTime - parsedTimestamp < 15 * 60 * 1000) {
+          console.log('Using cached geofence data');
+          const parsedGeofenceData = JSON.parse(cachedGeofenceData);
+          setTeamGeofenceData(parsedGeofenceData);
+          return;
         }
       }
+      
+      // If no valid cache, fetch from Firebase
+      const userTeamsRef = ref(db, `users/${auth.currentUser.uid}/teams`);
+      const userTeamsSnapshot = await get(userTeamsRef);
+      
+      if (userTeamsSnapshot.exists()) {
+        const userTeams = userTeamsSnapshot.val();
+        const teamIds = Object.keys(userTeams);
+        
+        // Get geofence data for each team
+        const geofencePromises = teamIds.map(async (teamId) => {
+          const geofenceRef = ref(db, `teams/${teamId}/geofence`);
+        const geofenceSnapshot = await get(geofenceRef);
+          return { teamId, geofence: geofenceSnapshot.exists() ? geofenceSnapshot.val() : null };
+        });
+        
+        const geofenceResults = await Promise.all(geofencePromises);
+        const geofenceData = {};
+        
+        for (const result of geofenceResults) {
+          if (result.geofence) {
+            geofenceData[result.teamId] = result.geofence;
+          }
+        }
+        
+        setTeamGeofenceData(geofenceData);
+        
+        // Cache the geofence data
+        await AsyncStorage.setItem('teamGeofenceData', JSON.stringify(geofenceData));
+        await AsyncStorage.setItem('teamGeofenceTimestamp', currentTime.toString());
+      }
     } catch (error) {
-      console.error("Error loading team geofence:", error);
+      console.error('Error loading team geofence data:', error);
     }
   };
 
   loadTeamGeofence();
-}, [userRole]);
+}, []); // Remove auth.currentUser from dependency array
 
-const initializeMap = async () => {
+const initializeMap = useCallback(async () => {
   try {
-    // Try to get a fast location first
     try {
       const { status } = await Location.getForegroundPermissionsAsync();
       if (status === 'granted') {
@@ -663,27 +1022,78 @@ const initializeMap = async () => {
       console.warn("Error getting last known position:", error);
     }
     
+    // Load current user profile
+    const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+    const profileSnapshot = await get(userProfileRef);
+    const currentUserProfile = profileSnapshot.exists() ? profileSnapshot.val() : {};
+    const currentUserTeamCode = currentUserProfile.teamCode;
+    
+    console.log("Current user team code:", currentUserTeamCode);
+    
+    // Load all user locations
     const locationsRef = ref(db, "UsersCurrentLocation");
     const locSnapshot = await get(locationsRef);
     
     if (locSnapshot.exists() && Object.keys(locSnapshot.val()).length > 0) {
       const locations = {};
-      Object.entries(locSnapshot.val()).forEach(([userId, userData]) => {
-        if (userData.Latitude && userData.Longitude) {
-          locations[userId] = userData;
-        }
-      });
       
-      setUsersLocations(locations);
-      
-      const currentUserLoc = locSnapshot.val()[auth.currentUser?.uid];
-      if (currentUserLoc && currentUserLoc.Latitude && currentUserLoc.Longitude) {
+      // First, add current user to locations if available
+      const currentUserLoc = locSnapshot.val()[auth.currentUser.uid];
+      if (currentUserLoc) {
+        locations[auth.currentUser.uid] = {
+          ...currentUserLoc,
+          teamCode: currentUserTeamCode, // Ensure team code is set
+          isActive: true // Make sure current user is active
+        };
+        
+        if (currentUserLoc.Latitude && currentUserLoc.Longitude) {
         setCurrentLocation({
           latitude: currentUserLoc.Latitude,
           longitude: currentUserLoc.Longitude
         });
+        }
       }
       
+      // Then add other users based on team membership
+      await Promise.all(Object.entries(locSnapshot.val()).map(async ([userId, userData]) => {
+        // Skip current user (already added)
+        if (userId === auth.currentUser.uid) return;
+        
+        // Skip users without location data
+        if (!userData || !userData.Latitude || !userData.Longitude) return;
+        
+        try {
+          // Get user profile to check team membership
+          const userProfileRef = ref(db, `users/${userId}/profile`);
+          const profileSnapshot = await get(userProfileRef);
+          
+          if (profileSnapshot.exists()) {
+            const profileData = profileSnapshot.val();
+            
+            // Only add users from the same team
+            if (profileData.teamCode === currentUserTeamCode) {
+              console.log(`Adding team member: ${userId} (${profileData.firstName || ''} ${profileData.lastName || ''})`);
+              
+              locations[userId] = {
+                ...userData,
+                firstName: profileData.firstName || '',
+                lastName: profileData.lastName || '',
+                photoURL: profileData.photoURL || '',
+                role: profileData.role || '',
+                teamCode: profileData.teamCode,
+                name: formatUserName(profileData)
+              };
+            }
+          }
+        } catch (error) {
+          console.error(`Error loading profile for user ${userId}:`, error);
+        }
+      }));
+      
+      console.log(`Loaded ${Object.keys(locations).length} user locations (including ${Object.keys(locations).filter(id => id !== auth.currentUser.uid).length} team members)`);
+      setUsersLocations(locations);
+      
+      // Use the memoized function to fit markers
       setTimeout(() => {
         fitAllMarkers(true);
       }, 1000);
@@ -691,10 +1101,65 @@ const initializeMap = async () => {
       // Start location tracking automatically if we have permission
       requestInitialLocation();
     }
+    
+    // Set up real-time listener for location updates
+    const locationsListener = onValue(locationsRef, async (snapshot) => {
+      if (!snapshot.exists()) return;
+      
+      const locationsData = snapshot.val();
+      const updatedLocations = { ...usersLocations };
+      
+      // Process each location update
+      for (const [userId, userData] of Object.entries(locationsData)) {
+        // Skip invalid entries
+        if (!userData || !userData.Latitude || !userData.Longitude) continue;
+        
+        // If this is a new user we don't have yet, get their profile
+        if (!updatedLocations[userId] && userId !== auth.currentUser.uid) {
+          try {
+            const userProfileRef = ref(db, `users/${userId}/profile`);
+            const profileSnapshot = await get(userProfileRef);
+            
+            if (profileSnapshot.exists()) {
+              const profileData = profileSnapshot.val();
+              
+              // Only add team members
+              if (profileData.teamCode === currentUserTeamCode) {
+                updatedLocations[userId] = {
+                  ...userData,
+                  firstName: profileData.firstName || '',
+                  lastName: profileData.lastName || '',
+                  photoURL: profileData.photoURL || '',
+                  role: profileData.role || '',
+                  teamCode: profileData.teamCode,
+                  name: formatUserName(profileData)
+                };
+              }
+    }
+  } catch (error) {
+            console.error(`Error loading profile for user ${userId}:`, error);
+          }
+        } 
+        // Update existing user's location data
+        else if (updatedLocations[userId]) {
+          updatedLocations[userId] = {
+            ...updatedLocations[userId],
+            ...userData
+          };
+        }
+      }
+      
+      setUsersLocations(updatedLocations);
+    });
+    
+    // Return cleanup function
+    return () => {
+      locationsListener && locationsListener();
+    };
   } catch (error) {
     console.error("Error initializing map:", error);
   }
-};
+}, [db, fitAllMarkers, formatUserName, usersLocations, requestInitialLocation, setInitialRegion, setCurrentLocation, setUsersLocations]);
 
 const getLocation = async () => {
   console.log("Set Point functionality has been disabled");
@@ -741,6 +1206,42 @@ const distanceFromPointToLine = (point, lineStart, lineEnd) => {
   return calculateDistance(point, { latitude: nearestLat, longitude: nearestLng });
 };
 
+// Add this function to ensure all location updates include profile data
+const updateLocationWithFullProfile = async (userLocationRef, locationData) => {
+  try {
+    // Get user's full profile to ensure we have team code
+    const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+    const profileSnapshot = await get(userProfileRef);
+    
+    if (profileSnapshot.exists()) {
+      const profileData = profileSnapshot.val();
+      // Ensure we have the team code and essential profile data
+      await update(userLocationRef, {
+        ...locationData,
+        teamCode: profileData.teamCode || '',
+        role: profileData.role || 'member',
+        firstName: profileData.firstName || '',
+        lastName: profileData.lastName || '',
+        photoURL: profileData.photoURL || '',
+        isActive: true,
+        lastSeen: new Date().toISOString(),
+      });
+      console.log(`Updated location with team code: ${profileData.teamCode}`);
+    } else {
+      // If profile doesn't exist, at least update location with basic info
+      await update(userLocationRef, {
+        ...locationData,
+        isActive: true,
+        lastSeen: new Date().toISOString(),
+      });
+      console.log('Updated location without profile data (profile not found)');
+    }
+  } catch (error) {
+    console.error('Error updating location with profile:', error);
+  }
+};
+
+// Update toggleCurrentLocation function to always include profile data
 const toggleCurrentLocation = async () => {
   try {
     // Separate code paths for adding vs removing
@@ -821,19 +1322,86 @@ const toggleCurrentLocation = async () => {
       const { latitude, longitude } = location.coords;
       setCurrentLocation({ latitude, longitude });
       setGpsAccuracy(location.coords.accuracy);
-    }).catch(error => {
-      console.error("High accuracy location failed:", error);
+    }).catch(err => {
+      console.warn("High accuracy location fetch failed:", err);
     });
 
+    // Set up location tracking
+    try {
+      locationSubscriptionRef.current = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.Balanced,
+          timeInterval: 30000,
+          distanceInterval: 20,
+        },
+        newLocation => {
+          const { latitude, longitude, accuracy } = newLocation.coords;
+          setCurrentLocation({ latitude, longitude });
+          setGpsAccuracy(accuracy);
+          
+          // Update online status and last seen in Firebase
+          const userPresenceRef = ref(db, `users/${auth.currentUser.uid}/presence`);
+          update(userPresenceRef, {
+            status: 'online',
+            lastSeen: new Date().toISOString()
+          }).catch(err => console.error("Error updating presence:", err));
+          
+          // Update location with isActive flag set to true to indicate user is online
+          const userLocationRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
+          
+          // Include profile data with every update to ensure team code is always present
+          const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+          get(userProfileRef).then(snapshot => {
+            if (snapshot.exists()) {
+              const profileData = snapshot.val();
+              update(userLocationRef, {
+                Latitude: latitude,
+                Longitude: longitude,
+                Accuracy: accuracy,
+                Timestamp: new Date().toISOString(),
+                isActive: true,
+                lastSeen: new Date().toISOString(),
+                teamCode: profileData.teamCode || '', // Ensure team code is included
+                role: profileData.role || 'member',
+                firstName: profileData.firstName || '',
+                lastName: profileData.lastName || '',
+                photoURL: profileData.photoURL || ''
+              }).catch(err => console.error("Error updating location:", err));
+            } else {
+              update(userLocationRef, {
+                Latitude: latitude,
+                Longitude: longitude,
+                Accuracy: accuracy,
+                Timestamp: new Date().toISOString(),
+                isActive: true,
+                lastSeen: new Date().toISOString()
+              }).catch(err => console.error("Error updating location:", err));
+            }
+          }).catch(err => console.error("Error getting profile data:", err));
+        }
+      );
+    } catch (error) {
+      console.error("Error setting up location subscription:", error);
+    }
+
+    const auth = getAuth();
     const db = getDatabase();
     const userPresenceRef = ref(db, `users/${auth.currentUser.uid}/presence`);
     const userLocationRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
 
+    // Get user profile data
     const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
     const profileSnapshot = await get(userProfileRef);
-    const profileData = profileSnapshot.exists() ? profileSnapshot.val() : {};
+    let profileData = {};
+    
+    if (profileSnapshot.exists()) {
+      profileData = profileSnapshot.val();
+      console.log("Using profile with team code:", profileData.teamCode);
+    } else {
+      console.log("Profile not found for current user");
+    }
 
-    // Update Firebase in background
+    // Update Firebase in background with full profile data
     set(userLocationRef, { 
       Latitude: currentLocation?.latitude || 0, 
       Longitude: currentLocation?.longitude || 0,
@@ -841,7 +1409,10 @@ const toggleCurrentLocation = async () => {
       Timestamp: new Date().toISOString(),
       isActive: true,
       lastSeen: new Date().toISOString(),
-      ...profileData
+      ...profileData, // This should include teamCode and other profile data
+      // Explicitly include important fields to ensure they're set
+      teamCode: profileData.teamCode || '',
+      role: profileData.role || 'member'
     }).catch(err => console.error("Error updating initial location:", err));
 
     const presenceData = {
@@ -909,31 +1480,88 @@ useEffect(() => {
 
       locationSubscriptionRef.current = await Location.watchPositionAsync(
         {
-            accuracy: Location.Accuracy.BestForNavigation, // Changed from Balanced to BestForNavigation 
-            timeInterval: 500, // Reduced from 1000ms to 500ms for more frequent updates
-            distanceInterval: 0, // Get all points for KF
+            accuracy: Location.Accuracy.BestForNavigation, // Keep BestForNavigation
+            timeInterval: 2000, // Increased from 500ms to 2000ms
+            distanceInterval: 1, // Added: Only update if moved at least 1 meter
             mayShowUserSettingsDialog: true 
         },
         async (location) => {
           try { // Outer try
             const { latitude, longitude, accuracy } = location.coords;
+            const currentRawCoords = { latitude, longitude }; // Store raw coords
+            const currentTimestamp = Date.now();
+
+            // *** Populate Raw History (Always) - with timestamp ***
+            setRawLocationHistory(prevRawHistory => {
+                const history = [...(prevRawHistory || []), {
+                  latitude: currentRawCoords.latitude, // Keep latitude
+                  longitude: currentRawCoords.longitude, // Keep longitude
+                  timestamp: location.timestamp, // Use sensor timestamp
+                  accuracy: accuracy, // Include accuracy
+                  speed: location.coords.speed ?? null, // Include speed (handle null)
+                  heading: location.coords.heading ?? null, // Include heading (handle null)
+                  altitude: location.coords.altitude ?? null // Include altitude (handle null)
+                }];
+                 // Keep history limited but larger
+                if (history.length > RAW_HISTORY_POINTS) { 
+                    return history.slice(-RAW_HISTORY_POINTS); 
+                }
+                return history;
+            });
+
             console.log(`Raw GPS: Lat=${latitude.toFixed(8)}, Lon=${longitude.toFixed(8)}, Acc=${accuracy.toFixed(1)}m`); // Log Raw Data with more precision
             
             // Log full location data for diagnosis
-            console.log(`FULL: Timestamp=${location.timestamp}, Speed=${location.coords.speed?.toFixed(3) || 'null'}, Heading=${location.coords.heading?.toFixed(2) || 'null'}, Alt=${location.coords.altitude?.toFixed(2) || 'null'}`);
+            console.log(`FULL: Timestamp=${location.timestamp}, Speed=${location.coords.speed?.toFixed(3) || 'null'}, Heading=${location.coords.heading?.toFixed(2) || 'null'}, Alt=${location.coords.altitude?.toFixed(2) || 'null'}, Acc=${location.coords.accuracy?.toFixed(1) || 'null'}`);
+
+            // Default values for step-related variables if we can't access step data
+            let currentStepCount = 0;
+            let stepDelta = 0;
+            let stepsInLockPeriod = 0;
+            
+            try {
+              // Check for movement from steps - using the steps state safely
+              currentStepCount = stepCount || 0; // Use stepCount instead of dailySteps
+              stepDelta = currentStepCount - lastStepCountRef.current;
+              lastStepCountRef.current = currentStepCount;
+              
+              // If steps have increased, mark as moved since last lock
+              if (stepDelta > 0) {
+                hasMovedSinceLastLockRef.current = true;
+                console.log(`Step movement detected: +${stepDelta} steps since last GPS update`);
+              }
+              
+              // Calculate steps in lock period
+              stepsInLockPeriod = currentStepCount - stepsAtLockTimeRef.current;
+            } catch (error) {
+              console.warn("Error handling step data:", error);
+              // We'll continue with default values (0) for step-related variables
+            }
+            
+            // --- Time-based static lock check --- // *** Renaming slightly - it's now persistent lock check ***
+            // Check if we're in a persistent static lock (and no steps taken) 
+            // const timeSinceLastLock = currentTimestamp - lastLockTimeRef.current; // Time check no longer needed here
+            
+            if (isPositionLocked && stepsInLockPeriod === 0) { 
+              console.log(`Persistent position lock active. Holding until movement detected.`);
+              // Only update raw position indicators
+              setCurrentLocation(currentRawCoords);
+              setGpsAccuracy(accuracy);
+              return; // Early return, skipping all filter/state updates
+            }
 
             // --- Pre-filtering --- 
             // 1. Accuracy Filter - much more generous now
             if (accuracy > 100) { // Changed from 20m to 100m to accept more points
               console.log(`KF Using low accuracy point: ${Math.round(accuracy)}m`);
-            setGpsAccuracy(accuracy);
+              setGpsAccuracy(accuracy); // Still update GPS indicator
               // We'll still update rather than return, just logging the poor accuracy
             }
             
             // 2. Jump Detection
             if (kalmanFilterRef.current && kalmanFilterRef.current.lastFilteredPosition) {
               const jumpDistance = calculateDistance( // Use Haversine distance function
-                { latitude, longitude }, 
+                currentRawCoords, 
                 kalmanFilterRef.current.lastFilteredPosition
               );
               
@@ -945,88 +1573,170 @@ useEffect(() => {
             }
             // --- End Pre-filtering --- 
             
-            // Filter the location if the filter is initialized
-            let filteredCoordinate = { latitude, longitude };
-            let iconPositionCoordinate = { latitude, longitude }; // Separate variable for icon smoothing
+            // Initialize filter if needed
+            if (!kalmanFilterRef.current) {
+              console.warn("Kalman filter not initialized, using raw GPS.");
+              kalmanFilterRef.current = new OptimizedKalmanFilter(0.01, 15); // Use tuned constructor
+              kalmanFilterRef.current.init(latitude, longitude);
+            }
             
+            // *** Check for significant movement compared to last filtered position ***
+            const lastFilteredPos = estimatedIconPosition || kalmanFilterRef.current.lastFilteredPosition; 
+            let distFromLastFiltered = 0;
+            
+            if (lastFilteredPos) {
+                distFromLastFiltered = calculateDistance(currentRawCoords, lastFilteredPos);
+            }
+
+            // --- Determine Significant Movement --- 
+            // 1. Check for step-based movement first (always breaks lock)
+            const stepsDetected = (stepDelta > 2) || hasMovedSinceLastLockRef.current;
+            
+            // 2. Determine the appropriate distance threshold based on lock state
+            const distanceThresholdForBreaking = isPositionLocked 
+                ? STATIC_LOCK_BREAK_DISTANCE_THRESHOLD // Use 5.0m if currently locked
+                : SIGNIFICANT_MOVEMENT_THRESHOLD;      // Use 3.0m if not locked (for activation check)
+            
+            // 3. Check if distance movement occurred based on the relevant threshold
+            const distanceMovementDetected = distFromLastFiltered >= distanceThresholdForBreaking;
+            
+            // 4. Combine step and distance checks
+            const isSignificantMovement = stepsDetected || distanceMovementDetected;
+            console.log(`Movement Check: Steps=${stepsDetected}, Dist=${distFromLastFiltered.toFixed(1)}m >= Thresh=${distanceThresholdForBreaking}m -> DistMov=${distanceMovementDetected}. RESULT -> isSignificantMovement=${isSignificantMovement}`);
+
+            // *** NEW: Detect transition from moving to stopped and reset filter velocity ***
+            if (wasMovingRef.current === true && isSignificantMovement === false) {
+              console.log("Transition Detected: Moving -> Stopped. Resetting KF velocity.");
             if (kalmanFilterRef.current) {
+                kalmanFilterRef.current.resetVelocity();
+              }
+            }
+            // Update the ref for the next cycle
+            wasMovingRef.current = isSignificantMovement;
+            // *** End NEW section ***
+
+            if (!isSignificantMovement && kalmanFilterRef.current.staticPeriodCounter > 0) {
+                // Static detection - update lock time & counter, skip update
+                console.log(`Static position maintained (Dist: ${distFromLastFiltered.toFixed(1)}m < ${SIGNIFICANT_MOVEMENT_THRESHOLD}m, Steps: ${stepDelta}). Lock timer reset.`);
+                
+                // Start/Renew the time-based position lock
+                lastLockTimeRef.current = currentTimestamp;
+                stepsAtLockTimeRef.current = currentStepCount;
+                setIsPositionLocked(true);
+                
+                // *** NEW: Set flag indicating lock has engaged at least once ***
+                if (!hasLockedOnceRef.current) {
+                  hasLockedOnceRef.current = true;
+                  console.log("First position lock engaged.");
+                }
+                
+                // Make sure internal counter stays high
+                if(kalmanFilterRef.current.staticPeriodCounter <= kalmanFilterRef.current.staticThreshold) {
+                    kalmanFilterRef.current.staticPeriodCounter++; 
+                }
+                
+                // Update raw GPS indicator, but not filtered position
+                setCurrentLocation(currentRawCoords); 
+                setGpsAccuracy(accuracy);
+                return; // Skip filter update and state setting
+            } else {
+                 // Significant movement detected
+                 if (kalmanFilterRef.current.staticPeriodCounter > 0 || isPositionLocked) {
+                    console.log(`Movement detected! (Dist: ${distFromLastFiltered.toFixed(1)}m, Steps Since Lock: ${stepsInLockPeriod})`);
+                    kalmanFilterRef.current.staticPeriodCounter = 0; // Reset the filter's counter
+                    setIsPositionLocked(false); // Turn off position lock
+                    hasMovedSinceLastLockRef.current = false; // Reset movement flag
+                 }
+            }
+            // --- End Static Lock Check ---
+            
+            // --- Filter the location (only runs if not determined static above) ---
+            let filteredCoordinate = { latitude, longitude }; // Default to raw if KF fails
+            let iconPositionCoordinate = { latitude, longitude }; 
+            
               try { // Inner try for KF
-                // Get the actual filtered coordinate for the icon
+                // *** Determine if lock just broke ***
+                const justUnlocked = prevIsPositionLockedRef.current === true && isPositionLocked === false;
+                console.log(`KF Call Params: justUnlocked = ${justUnlocked} (Prev: ${prevIsPositionLockedRef.current}, Curr: ${isPositionLocked})`);
+
+                // Get the actual filtered coordinate for the icon, passing the flag
                 iconPositionCoordinate = kalmanFilterRef.current.update(
                   latitude,
                   longitude,
-                  accuracy
+                  accuracy,
+                  100, // Assuming battery level is not critical here, can pass actual if available
+                  justUnlocked // *** Pass the flag ***
                 );
                 
-                // *** TEMPORARY TEST: Use raw GPS directly for polyline history ***
-                filteredCoordinate = { latitude, longitude }; 
-                console.log(`Using RAW GPS for polyline history (Testing Sensitivity)`);
+                // Use filtered coordinate for polyline history
+                filteredCoordinate = iconPositionCoordinate; 
+                console.log(`Using FILTERED GPS for polyline history`);
 
               } catch (kfError) {
                  console.error("Kalman Filter Error:", kfError);
+                 // Reset filter if it errors out
+                 kalmanFilterRef.current = new OptimizedKalmanFilter(0.01, 15);
+                 kalmanFilterRef.current.init(latitude, longitude);
                  // Use raw for both if filter fails
-                 filteredCoordinate = { latitude, longitude }; 
-                 iconPositionCoordinate = { latitude, longitude }; 
-                 kalmanFilterRef.current = new SimpleKalmanFilter(0.01, 10); // Reset filter with more responsive settings
-              } 
-                } else {
-              console.warn("Kalman filter not initialized, using raw GPS.");
-              // Initialize the Kalman filter with current position
-              kalmanFilterRef.current = new SimpleKalmanFilter(0.01, 10); // More responsive settings
-              kalmanFilterRef.current.init(latitude, longitude);
-              // Use raw for both if filter not init
               filteredCoordinate = { latitude, longitude };
               iconPositionCoordinate = { latitude, longitude }; 
             }
             
             console.log(`Icon Coord (Filtered): Lat=${iconPositionCoordinate.latitude.toFixed(6)}, Lon=${iconPositionCoordinate.longitude.toFixed(6)}`); // Log Filtered Data for Icon
-            console.log(`History Coord (Raw): Lat=${filteredCoordinate.latitude.toFixed(6)}, Lon=${filteredCoordinate.longitude.toFixed(6)}`); // Log Coord used for History
+            console.log(`?History Coord (Filtered): Lat=${filteredCoordinate.latitude.toFixed(6)}, Lon=${filteredCoordinate.longitude.toFixed(6)}`); // Log Coord used for History
             
             // Update state for icon and raw GPS display
             const currentGpsCoordinate = { latitude, longitude };
-            setCurrentLocation(currentGpsCoordinate); 
+            setCurrentLocation(currentGpsCoordinate); // Update raw display
             setGpsAccuracy(accuracy); 
-            setEstimatedIconPosition(iconPositionCoordinate); // Icon uses the smoothed coordinate
+            setEstimatedIconPosition(iconPositionCoordinate); // Update filtered icon position
 
             setLocationHistory(prevHistory => {
-              // Defensive check: if prevHistory is undefined, start with empty array
-              const history = prevHistory || [];
+              // *** MODIFIED: Only add to history if the lock has engaged at least once ***
+              if (!hasLockedOnceRef.current) {
+                // console.log("? Skipping history add - Initial lock not yet engaged.");
+                return prevHistory; // Return existing history (likely empty or null)
+              }
+              
+              const history = prevHistory || []; // Now safe to assume it might be empty initially
+              const lastPoint = history.length > 0 ? history[history.length - 1] : null;
               
               // In debug mode, always add the point
               if (debugMode) {
                 console.log(`DEBUG: Force adding point to history. New length: ${history.length + 1}`);
                 const newHistory = [...history, {
-                  latitude,
-                  longitude,
-                  timestamp: Date.now() // Keep timestamp for debugging
+                  // Use the filtered coordinate even in debug for consistency display
+                  latitude: filteredCoordinate.latitude, 
+                  longitude: filteredCoordinate.longitude,
+                  timestamp: Date.now() 
                 }];
                 
                 // Keep history limited
-                if (newHistory.length > MAX_HISTORY_POINTS + 20) {
+                if (newHistory.length > MAX_HISTORY_POINTS + 20) { // Keep slightly more for debug inspection
                   return newHistory.slice(-(MAX_HISTORY_POINTS + 10)); 
                 }
                 return newHistory;
               }
               
-              // Normal mode - check if point is different enough
-              const lastPoint = history.length > 0 ? history[history.length - 1] : null;
-              
-              // Use EXTREMELY small threshold (essentially any change)
-              const distanceThresholdDegrees = 0.00000001; // Practically any change
-              if (!lastPoint || 
-                  Math.abs(filteredCoordinate.latitude - lastPoint.latitude) > distanceThresholdDegrees ||
-                  Math.abs(filteredCoordinate.longitude - lastPoint.longitude) > distanceThresholdDegrees) 
+              // Normal mode - check if point is different enough using actual distance
+              let distanceMoved = 0;
+              if (lastPoint) {
+                  distanceMoved = calculateDistance(filteredCoordinate, lastPoint); // Use Haversine distance
+              }
+
+              // Use MIN_DISTANCE_THRESHOLD (currently 1m)
+              if (!lastPoint || distanceMoved > MIN_DISTANCE_THRESHOLD) 
               {
-                console.log(`Adding point to history. New length: ${history.length + 1}`);
-                const newHistory = [...history, filteredCoordinate]; // Add the real coordinate
+                console.log(`Adding point to history (Dist: ${distanceMoved.toFixed(1)}m). New length: ${history.length + 1}`);
+                const newHistory = [...history, filteredCoordinate]; // Add the filtered coordinate
                 
-                // Keep history limited
+                // Keep history limited (original logic)
                 if (newHistory.length > MAX_HISTORY_POINTS + 10) {
                   return newHistory.slice(-(MAX_HISTORY_POINTS + 5)); 
                 }
                 return newHistory;
               } else {
-                console.log(`Skipping history add - point too close to last.`);
+                // console.log(`? Skipping history add - distance ${distanceMoved.toFixed(1)}m <= ${MIN_DISTANCE_THRESHOLD}m`); // Optional log
                 return history; // Return existing history unchanged
               }
             });
@@ -1182,98 +1892,107 @@ const saveCoordinatesToFirebase = (coordinates) => {
   }
 };
 
-const fitAllMarkers = (forceUpdate = false) => {
+// Add this safe getter function inside AppContent
+const getRole = () => userRole || 'member';
+
+// Update the fitAllMarkers function
+const fitAllMarkers = useCallback((forceUpdate = false) => {
   if (!mapRef.current) return;
   
   if (!forceUpdate && !shouldAutoFit) return;
   
   setShouldAutoFit(true);
   
-  setTimeout(() => {
+  // Debounce the actual fit operation to prevent too frequent updates
+  if (fitMarkersTimeoutRef.current) {
+    clearTimeout(fitMarkersTimeoutRef.current);
+  }
+  
+  fitMarkersTimeoutRef.current = setTimeout(() => {
+    try {
     const allCoordinates = [];
     
-    const geofencePoints = userRole === 'member' ? teamGeofence : points;
-    if (geofencePoints.length >= 3) {
+      // Use the safe getter function
+      const effectiveUserRole = getRole();
+      const geofencePoints = effectiveUserRole === 'member' ? teamGeofence : points;
+      
+      if (Array.isArray(geofencePoints) && geofencePoints.length >= 3) {
+        // Add geofence points
       geofencePoints.forEach(point => {
+          if (point && typeof point.latitude === 'number' && typeof point.longitude === 'number') {
         allCoordinates.push(point);
+          }
       });
       
-      if (currentLocation) {
+        // Add current location
+        if (currentLocation && typeof currentLocation.latitude === 'number' && typeof currentLocation.longitude === 'number') {
         allCoordinates.push({
           latitude: currentLocation.latitude,
           longitude: currentLocation.longitude
         });
       }
       
-      if (usersLocations) {
-        Object.entries(usersLocations).filter(([userId, userData]) => {
-          if (!userData || !userData.Latitude || !userData.Longitude) return false;
-          if (userId === auth.currentUser?.uid) return false;
-          
-          const currentUserProfile = usersLocations[auth.currentUser?.uid];
-          return userData.teamCode === currentUserProfile?.teamCode;
-        }).forEach(([_, userData]) => {
+        // Add team members from the memoized array
+        if (Array.isArray(teamMembers)) {
+          teamMembers.forEach(([_, userData]) => {
+            if (userData && typeof userData.Latitude === 'number' && typeof userData.Longitude === 'number') {
           allCoordinates.push({
             latitude: userData.Latitude,
             longitude: userData.Longitude
           });
+            }
         });
       }
     } else {
-      if (currentLocation) {
+        // Simplified logic for when there's no proper geofence
+        if (currentLocation && typeof currentLocation.latitude === 'number' && typeof currentLocation.longitude === 'number') {
         allCoordinates.push({
           latitude: currentLocation.latitude,
           longitude: currentLocation.longitude
         });
       }
       
-      if (usersLocations) {
-        Object.values(usersLocations).forEach(user => {
-          if (user.Latitude && user.Longitude) {
+        // Add all user locations using memoized team members
+        if (Array.isArray(teamMembers)) {
+          teamMembers.forEach(([_, userData]) => {
+            if (userData && typeof userData.Latitude === 'number' && typeof userData.Longitude === 'number') {
             allCoordinates.push({
-              latitude: user.Latitude,
-              longitude: user.Longitude
+                latitude: userData.Latitude,
+                longitude: userData.Longitude
             });
           }
         });
       }
       
-      if (geofencePoints.length > 0) {
+        // Add any geofence points
+        if (Array.isArray(geofencePoints) && geofencePoints.length > 0) {
         geofencePoints.forEach(point => {
+            if (point && typeof point.latitude === 'number' && typeof point.longitude === 'number') {
           allCoordinates.push(point);
+            }
         });
       }
     }
     
+      // Only fit if we have coordinates
     if (allCoordinates.length > 0) {
-      const edgePadding = geofencePoints.length >= 3 
-          ? { top: 100, right: 100, bottom: 200, left: 100 }
-          : { top: 200, right: 200, bottom: 300, left: 200 };
-      
-      // *** Add null check here ***
-      if (mapRef.current) { 
+        try {
       mapRef.current.fitToCoordinates(allCoordinates, {
-        edgePadding: edgePadding,
+            edgePadding: { top: 100, right: 100, bottom: 100, left: 100 },
         animated: true
       });
-      } else {
-        console.warn("fitAllMarkers: mapRef.current is null inside setTimeout");
+        } catch (error) {
+          console.error('Error fitting to coordinates:', error);
+        }
       }
-      
-      setTrackViewChanges(true);
-      
-      setTimeout(() => {
-        setTrackViewChanges(false);
-        }, 1000);
-    } else {
-      mapRef.current.animateToRegion({
-        ...initialRegion,
-          latitudeDelta: 0.03,
-        longitudeDelta: 0.03
-      }, 1000);
+    } catch (error) {
+      console.error('Error in fitAllMarkers:', error);
     }
     }, 100);
-};
+}, [currentLocation, points, teamGeofence, teamMembers, userRole, shouldAutoFit, getRole]);
+
+// Add a missing ref for debouncing
+const fitMarkersTimeoutRef = useRef(null);
 
 useEffect(() => {
   if (shouldAutoFit && (Object.keys(usersLocations).length > 0 || currentLocation)) {
@@ -1286,83 +2005,49 @@ useEffect(() => {
   initializeMap();
 }, []);
 
+// Commenting out the potentially problematic useEffect and helpers
+/*
 useEffect(() => {
   const loadAllUserLocations = async () => {
+    if (!userId || !isLocationSharing) return;
+    
     try {
-      console.log("Loading user locations...");
-      const locationsRef = ref(db, "UsersCurrentLocation");
+      // Check if we need to update based on last fetch time
+      const lastFetchTime = parseInt(await AsyncStorage.getItem('lastUserLocationsFetchTime') || '0');
+      const currentTime = Date.now();
+      const timeSinceLastFetch = currentTime - lastFetchTime;
       
-      const unsubscribe = onValue(locationsRef, async (snapshot) => {
-        if (snapshot.exists()) {
-          const locationsData = snapshot.val();
+      // Only fetch if more than 10 seconds have passed since last fetch or if it's forced
+      if (timeSinceLastFetch < 10000 && allUserData.length > 0) {
+        console.log('Using cached user locations data');
+        return;
+      }
+      
+      // Get current user's team
+      const userTeamRef = ref(database, `users/${userId}/teams`);
+      const userTeamSnapshot = await get(userTeamRef);
+      
+      if (!userTeamSnapshot.exists()) return;
+      
+      // Only subscribe to location updates for team members instead of all users
+      const userTeams = Object.keys(userTeamSnapshot.val());
+      
+      for (const teamId of userTeams) {
+        const teamRef = ref(database, `teams/${teamId}/members`);
+        const teamMembersSnapshot = await get(teamRef);
+        
+        if (teamMembersSnapshot.exists()) {
+          const teamMembers = Object.keys(teamMembersSnapshot.val());
           
-          const formattedLocations = {};
-          
-          // First, load all profiles and locations in parallel
-          const allUserIds = Object.keys(locationsData);
-          console.log(`Found ${allUserIds.length} user locations`);
-          
-          // Load all user profiles in parallel for better performance
-          const profilePromises = allUserIds.map(async (userId) => {
-            try {
-              const userProfileRef = ref(db, `users/${userId}/profile`);
-              const profileSnapshot = await get(userProfileRef);
-              return { 
-                userId, 
-                profileData: profileSnapshot.exists() ? profileSnapshot.val() : null
-              };
-            } catch (error) {
-              console.error(`Error loading profile for ${userId}:`, error);
-              return { userId, profileData: null };
-            }
-          });
-          
-          // Wait for all profile requests to complete
-          const profiles = await Promise.all(profilePromises);
-          
-          // Now merge location and profile data
-          for (const { userId, profileData } of profiles) {
-            const userData = locationsData[userId];
-            
-            // Skip users with no location data
-            if (!userData) continue;
-            
-            // Merge location data with profile data
-            if (profileData) {
-              // Ensure latitude/longitude are available regardless of case
-              const hasCoordinates = userData.Latitude !== undefined || userData.latitude !== undefined;
-              
-              formattedLocations[userId] = {
-                ...userData,
-                ...profileData,
-                // Explicitly preserve these keys from location data in case of conflicts
-                Latitude: userData.Latitude || userData.latitude,
-                Longitude: userData.Longitude || userData.longitude,
-                isActive: userData.isActive,
-                lastSeen: userData.lastSeen,
-                // Make location data case-insensitive
-                latitude: userData.Latitude || userData.latitude,
-                longitude: userData.Longitude || userData.longitude,
-                hasLocationData: hasCoordinates
-              };
-              
-              console.log(`Loaded ${formatUserName(formattedLocations[userId])} (${userId}): ` + 
-                (hasCoordinates ? `Lat: ${formattedLocations[userId].Latitude}, Lon: ${formattedLocations[userId].Longitude}` : 'No coordinates') +
-                `, teamCode: ${formattedLocations[userId].teamCode || 'None'}, isActive: ${userData.isActive}`);
-            } else {
-              // If no profile data, still include the location data
-              formattedLocations[userId] = userData;
-            }
-          }
-          
-          setUsersLocations(formattedLocations);
+          // For each team member, get their location
+          await fetchUserProfiles(teamMembers);
         }
-      });
+      }
       
-      return unsubscribe;
+      // Save fetch timestamp
+      await AsyncStorage.setItem('lastUserLocationsFetchTime', currentTime.toString());
     } catch (error) {
-      console.error("Error loading user locations:", error);
-      return () => {};
+      console.error('Error loading user locations:', error);
     }
   };
   
@@ -1378,7 +2063,222 @@ useEffect(() => {
          });
       }
     };
-  }, [db]);
+  }, [db]); // Dependency array might need review
+
+// Helper function to fetch and cache user profile
+const fetchAndCacheUserProfile = async (userId) => {
+  try {
+    const userProfileRef = ref(database, `users/${userId}/profile`);
+    const profileSnapshot = await get(userProfileRef);
+    
+    if (profileSnapshot.exists()) {
+      const profileData = profileSnapshot.val();
+      // Add timestamp for cache invalidation
+      profileData._timestamp = Date.now();
+      
+      // Cache the profile data
+      await AsyncStorage.setItem(`userProfile_${userId}`, JSON.stringify(profileData));
+      return profileData;
+    }
+  } catch (error) {
+    console.error(`Error fetching profile for user ${userId}:`, error);
+  }
+  return null;
+};
+
+const fetchUserProfiles = async (teamMemberIds) => {
+  if (!teamMemberIds || teamMemberIds.length === 0) return;
+  
+  const formattedLocations = { ...usersLocations };
+  
+  for (const memberId of teamMemberIds) {
+    // Skip if it's the current user
+    if (memberId === userId) continue;
+    
+    try {
+      // Get user location
+      const userLocationRef = ref(database, `UsersCurrentLocation/${memberId}`);
+      const locationSnapshot = await get(userLocationRef);
+      
+      if (locationSnapshot.exists()) {
+        const locationData = locationSnapshot.val();
+        
+        // Only process if valid coordinates exist
+        if (locationData && locationData.Latitude && locationData.Longitude) {
+          // Check if user profile data exists in cache
+          const cachedProfileData = await AsyncStorage.getItem(`userProfile_${memberId}`);
+          let profileData;
+          
+          if (cachedProfileData) {
+            profileData = JSON.parse(cachedProfileData);
+            // Check if profile data is stale (older than 30 minutes)
+            const profileTimestamp = profileData._timestamp || 0;
+            if (Date.now() - profileTimestamp > 30 * 60 * 1000) {
+              // Profile data is stale, fetch new data
+              profileData = await fetchAndCacheUserProfile(memberId);
+            }
+          } else {
+            // No cached data, fetch from Firebase
+            profileData = await fetchAndCacheUserProfile(memberId);
+          }
+          
+          if (profileData) {
+            formattedLocations[memberId] = {
+              ...locationData,
+              firstName: profileData.firstName || '',
+              lastName: profileData.lastName || '',
+              photoURL: profileData.photoURL || '',
+              role: profileData.role || '',
+              teamCode: profileData.teamCode || '',
+              name: formatUserName(profileData)
+            };
+          }
+        }
+      }
+    } catch (error) {
+      console.error(`Error fetching data for user ${memberId}:`, error);
+    }
+  }
+  
+  setUsersLocations(formattedLocations);
+};
+*/
+
+// *** NEW: Real-time listener for all user locations ***
+useEffect(() => {
+  const db = getDatabase();
+  const currentUserId = auth.currentUser?.uid;
+  if (!currentUserId) return;
+
+  let currentUserTeamCode = null; // To store the current user's team code
+  let currentGeofence = []; // Store the relevant geofence here
+  let currentUserRole = null; // Store the current user's role
+
+  // 1. Get current user's team code AND the relevant geofence
+  const profileRef = ref(db, `users/${currentUserId}/profile`);
+  get(profileRef).then(profileSnap => {
+    if (profileSnap.exists()) {
+      const profileData = profileSnap.val();
+      currentUserTeamCode = profileData?.teamCode;
+      currentUserRole = profileData?.role; // Store the role
+      console.log(`Realtime Listener: Current user team code is ${currentUserTeamCode}`);
+
+      // Determine which geofence to use based on role (needs teamGeofence state)
+      // Assuming 'teamGeofence' state holds the coordinates for members
+      if (profileData?.role === 'member' && Array.isArray(teamGeofence) && teamGeofence.length >= 3) {
+          currentGeofence = teamGeofence;
+          console.log(`Realtime Listener: Using TEAM geofence (${currentGeofence.length} points) for checks.`);
+      } else if (profileData?.role === 'owner' && Array.isArray(points) && points.length >= 3) {
+          // Owner might want to see status relative to their defined fence? Let's use 'points'
+          currentGeofence = points;
+           console.log(`Realtime Listener: Using OWNER geofence (${currentGeofence.length} points) for checks.`);
+      } else {
+           console.log("Realtime Listener: No valid geofence available for checks.");
+      }
+    }
+
+    // 2. Set up the listener
+    const locationsRef = ref(db, 'UsersCurrentLocation');
+    const unsubscribe = onValue(locationsRef, (snapshot) => {
+      if (!snapshot.exists()) {
+        setUsersLocations({});
+        setUserGeofenceStatuses({}); // Clear statuses too
+        return;
+      }
+
+      const allLocationsData = snapshot.val();
+      // Instead of creating a new empty object, start with existing locations
+      // This preserves offline users' last known coordinates
+      const formattedLocations = { ...usersLocations };
+      const newGeofenceStatuses = { ...userGeofenceStatuses }; // Copy previous statuses
+
+      Object.entries(allLocationsData).forEach(([userId, userData]) => {
+          // Basic validity check
+          if (!userData || typeof userData.Latitude !== 'number' || typeof userData.Longitude !== 'number') {
+            // Don't remove the user from the state if they already exist and just have invalid new data
+            // This preserves their last known good coordinates
+            return; 
+          }
+
+          // Team filtering (only apply if current user HAS a team code)
+          // Check if the current user is an owner - owners see everyone in their org
+          if (currentUserRole === 'owner') {
+            // Owners see all members in the organization with any teamCode 
+            // This assumes members in the organization have some teamCode set
+            if (!userData.teamCode) {
+              return; // Skip users without any team (not part of ANY organization)
+            }
+          } else if (currentUserTeamCode && userData.teamCode !== currentUserTeamCode) {
+            // For non-owners (members), only show those with matching teamCode
+            return;
+          }
+          
+          // Check 3: Geofence Status Check (only if geofence is valid)
+          let isOutsideGeofence = null; // Default to null if no check performed
+          const userName = formatUserName(userData) || userId; // For logging
+
+          if (currentGeofence.length >= 3 && userId !== currentUserId) { // Only check others for now
+              const userPoint = { latitude: userData.Latitude, longitude: userData.Longitude };
+              const isInside = isPointInsidePolygon(userPoint, currentGeofence);
+              isOutsideGeofence = !isInside;
+
+              // Check against previous status for logging
+              const previousStatus = userGeofenceStatuses[userId];
+              if (previousStatus !== undefined && previousStatus.wasOutside !== isOutsideGeofence) {
+                  if (isOutsideGeofence) {
+                      console.log(`GEOFENCE LOG: ${userName} EXITED the geofence area at ${new Date().toISOString()}`);
+                  } else {
+                      console.log(`GEOFENCE LOG: ${userName} ENTERED the geofence area at ${new Date().toISOString()}`);
+                  }
+              }
+              // Update status for the next check
+              newGeofenceStatuses[userId] = { wasOutside: isOutsideGeofence };
+          }
+
+          // Check if we should update the user's location
+          // For offline users, we may want to keep their existing entry with last known position
+          const isUserOffline = userData.isActive === false;
+          
+          // Include user (online or offline) if they pass filters
+          formattedLocations[userId] = {
+              ...userData, // Spread all data (includes Lat, Lon, Accuracy, isActive, profile info)
+              name: formatUserName(userData), // Ensure name is formatted
+              isOutsideGeofence: isOutsideGeofence, // Add the flag
+              lastUpdated: Date.now(), // Add timestamp of when this entry was last updated
+          };
+          
+          // For debugging
+          if (isUserOffline) {
+            console.log(`Preserving location for offline user: ${userName}`);
+          }
+      });
+
+      // Update states
+      console.log(`Realtime Listener: Updating usersLocations with ${Object.keys(formattedLocations).length} users.`);
+      setUsersLocations(formattedLocations); 
+      setUserGeofenceStatuses(newGeofenceStatuses); // Update the tracked statuses
+
+    }, (error) => {
+      console.error("Error listening to user locations:", error);
+      // Handle error appropriately, maybe clear locations
+      setUsersLocations({});
+      setUserGeofenceStatuses({}); // Clear statuses on error
+    });
+
+    // Return the unsubscribe function for cleanup
+    return () => {
+      console.log("Realtime Listener: Unsubscribing from user locations.");
+      unsubscribe();
+    };
+
+  }).catch(error => {
+    console.error("Error fetching current user profile for team code/geofence:", error);
+  });
+
+  // Initial return function (in case profile fetch fails)
+  return () => {}; 
+
+}, [teamGeofence, points]); // Remove auth.currentUser from dependencies
 
 const getUniqueColor = (str) => {
   let hash = 0;
@@ -1458,14 +2358,26 @@ const calculateMarkerLabelPositions = (locations) => {
 };
 
 useEffect(() => {
-  if (Object.keys(usersLocations).length > 0) {
+  if (Object.keys(usersLocations || {}).length > 0) {
+    // Only recalculate if we have a significant change in locations
+    // This helps prevent unnecessary state updates
     const positions = calculateMarkerLabelPositions(usersLocations);
-    setMarkerPositions(positions);
+    
+    // Use functional update to avoid stale state issues
+    setMarkerPositions(prevPositions => {
+      // Only update if positions have actually changed
+      const hasChanged = !prevPositions || 
+        Object.keys(positions).length !== Object.keys(prevPositions).length ||
+        Object.keys(positions).some(id => positions[id] !== prevPositions[id]);
+        
+      return hasChanged ? positions : prevPositions;
+    });
   }
 }, [usersLocations]);
 
 useEffect(() => {
   const checkNotifications = async () => {
+    const auth = getAuth();
     if (!auth.currentUser || !navigation) return;
     
     try {
@@ -1491,7 +2403,7 @@ useEffect(() => {
               [{ text: 'OK' }]
             );
             
-            if (notification.type === 'geofence_approved' && userRole === 'owner') {
+            if (notification.type === 'geofence_approved' && getRole() === 'owner') {
               const profileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
               const profileSnapshot = await get(profileRef);
               
@@ -1552,7 +2464,7 @@ useEffect(() => {
   };
   
   checkNotifications();
-}, [auth.currentUser, userRole, navigation, db]);
+}, [userRole, navigation, db]); // Remove auth.currentUser from dependencies
 
 useEffect(() => {
   const handleMapRegionChange = () => {
@@ -1572,7 +2484,7 @@ useEffect(() => {
   return () => {
     setTrackViewChanges(false);
   };
-}, [currentLocation, usersLocations, points, teamGeofence]);
+}, [currentLocation, points, teamGeofence]); // Removed usersLocations from dependencies
 
   useEffect(() => {
     if (!auth.currentUser) {
@@ -1620,6 +2532,8 @@ useEffect(() => {
 
   useEffect(() => {
     let isMounted = true;
+    // Get auth inside the effect
+    const auth = getAuth();
     if (isStepCountingInitialized.current || !auth.currentUser) return; 
     console.log('STEP INIT (locTrack): Initializing step counting...');
 
@@ -1664,7 +2578,7 @@ useEffect(() => {
       }
        isStepCountingInitialized.current = false; 
     };
-  }, [auth.currentUser]);
+  }, []); // Remove auth.currentUser dependency
 
   const startPedometerTracking = async () => {
     console.log('PEDOMETER (locTrack): Starting tracking...');
@@ -2005,24 +2919,138 @@ const resetStepsAndLocationData = async () => {
   }
 };
 
+// *** NEW Function to Save and Share History ***
+const saveAndShareHistory = async (historyData, historyType) => {
+  if (!historyData || historyData.length === 0) {
+    Alert.alert("No History", `There is no ${historyType} history data to export.`);
+    return;
+  }
+
+  const filename = `${historyType}_history_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  const fileUri = FileSystem.documentDirectory + filename;
+
+  try {
+    const jsonString = JSON.stringify(historyData, null, 2); // Pretty print JSON
+    await FileSystem.writeAsStringAsync(fileUri, jsonString, { encoding: FileSystem.EncodingType.UTF8 });
+    console.log(`History saved to: ${fileUri}`);
+
+    if (!(await Sharing.isAvailableAsync())) {
+      Alert.alert("Sharing Unavailable", "Sharing is not available on this device.");
+      return;
+    }
+
+    await Sharing.shareAsync(fileUri, {
+      mimeType: 'application/json',
+      dialogTitle: `Share ${historyType} History`,
+    });
+  } catch (error) {
+    console.error(`Error saving or sharing ${historyType} history:`, error);
+    Alert.alert("Export Error", `Failed to export ${historyType} history.`);
+  }
+};
+
+// ... existing code ...
+// Update the current user to make sure they're active when tracking is enabled
+useEffect(() => {
+  // Get auth inside the effect
+  const auth = getAuth();
+  // Set user presence and location active status when app is running
+  if (auth?.currentUser?.uid && currentLocation) {
+    const db = getDatabase();
+    const userPresenceRef = ref(db, `users/${auth.currentUser.uid}/presence`);
+    const userLocationRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
+    
+    // Update user presence
+    update(userPresenceRef, {
+      status: 'online',
+      lastSeen: new Date().toISOString(),
+      deviceInfo: Platform.OS
+    }).catch(err => console.error("Error updating presence:", err));
+    
+    // Update location active status
+    update(userLocationRef, {
+      isActive: true,
+      lastSeen: new Date().toISOString()
+    }).catch(err => console.error("Error updating location active status:", err));
+    
+    // Set up disconnect hooks
+    const connectedRef = ref(db, '.info/connected');
+    onValue(connectedRef, (snap) => {
+      if (snap.val() === true) {
+        // When we disconnect, update status
+        onDisconnect(userPresenceRef).update({
+          status: 'offline',
+          lastSeen: new Date().toISOString()
+        });
+        
+        onDisconnect(userLocationRef).update({
+          isActive: false,
+          lastSeen: new Date().toISOString()
+        });
+      }
+    }, { onlyOnce: true });
+  }
+}, [currentLocation]); // Remove auth.currentUser?.uid from dependency
+
+// Log users_locations every time they change for debugging
+useEffect(() => {
+  console.log('Users locations updated, count:', Object.keys(usersLocations).length);
+  
+  // Debug: log each user location
+  Object.entries(usersLocations).forEach(([userId, userData]) => {
+    console.log(`User ${userId} location: ${userData.Latitude},${userData.Longitude} - Team: ${userData.teamCode} - isActive: ${userData.isActive}`);
+  });
+  
+  // Re-check team member visibility each time locations change
+  fitAllMarkers(true);
+}, [usersLocations]);
+// ... existing code ...
+
+// Inside the render function, update the filter for team members
+{teamMembers.map(([userId, userData]) => (
+  <CustomMarker
+    key={userId}
+    coordinate={{
+      latitude: userData.Latitude,
+      longitude: userData.Longitude
+    }}
+    photoURL={userData.photoURL}
+    name={formatUserName(userData)}
+    labelPosition={markerPositions[userId] || 'bottom'}
+    markerColor={getUniqueColor(userId)}
+    isOnline={userData.isActive !== false}
+  />
+))}
+// ... existing code ...
+
 return (
     <SafeAreaView style={[styles.container, { paddingTop: 0 }]}>
       <View style={[styles.topLeftIndicators, { top: insets.top + 10 }]}>
     {gpsAccuracy !== null && <GPSStrengthIndicator accuracy={gpsAccuracy} />}
-
         <View style={styles.stepIndicator}>
           <Ionicons name="footsteps" size={16} color="#666" />
           <Text style={styles.stepIndicatorText}>{realStepCount}</Text>
         </View>
+        {/* *** Moved Export RAW History Button *** */}
+        <TouchableOpacity
+          style={styles.exportButtonRaw} // Use new style
+          onPress={() => saveAndShareHistory(rawLocationHistory, 'RawLocation')}
+        >
+          <Text style={styles.exportButtonText}>EXPORT RAW</Text>
+        </TouchableOpacity>
+        {/* *** Moved Export History Button *** */}
+        <TouchableOpacity
+          style={styles.exportButtonFiltered} // Use new style
+          onPress={() => saveAndShareHistory(locationHistory, 'FilteredLocation')}
+        >
+          <Text style={styles.exportButtonText}>EXPORT</Text>
+        </TouchableOpacity>
       </View>
 
     <MapView 
       ref={mapRef} 
       style={styles.map} 
       initialRegion={initialRegion}
-      showsUserLocation={false}
-      showsMyLocationButton={false}
-      showsCompass={true}
       rotateEnabled={true}
       minZoomLevel={10}
       maxZoomLevel={20}
@@ -2032,9 +3060,10 @@ return (
       loadingIndicatorColor="#2196F3"
       loadingBackgroundColor="rgba(255,255,255,0.7)"
     >
-      {userRole === 'member' ? (
+      {/* SAFE CONDITIONAL RENDERING BASED ON USER ROLE */}
+      {getRole() === 'member' ? (
         <>
-          {/* Ensure teamGeofence is an array before accessing length */}
+          {/* MEMBER VIEW - SHOW TEAM GEOFENCE */}
           {Array.isArray(teamGeofence) && teamGeofence.length >= 3 && (
             <Polygon 
               coordinates={teamGeofence} 
@@ -2043,13 +3072,16 @@ return (
               strokeWidth={2} 
             />
           )}
-          {/* Ensure teamGeofence is an array before mapping */}
+          
           {Array.isArray(teamGeofence) && teamGeofence.length >= 2 && teamGeofence.map((point, index) => {
-            const nextIndex = (index + 1) % teamGeofence.length;
-            const nextPoint = teamGeofence[nextIndex];
+            if (!point) return null;
             
+            const nextIndex = (index + 1) % teamGeofence.length;
             if (nextIndex === 0 && teamGeofence.length < 3) return null;
             
+            const nextPoint = teamGeofence[nextIndex];
+            if (!nextPoint) return null;
+            
             const midPoint = {
               latitude: (point.latitude + nextPoint.latitude) / 2,
               longitude: (point.longitude + nextPoint.longitude) / 2
@@ -2084,468 +3116,10 @@ return (
         </>
       ) : (
         <>
-          {/* Ensure points is an array before mapping */}
+          {/* OWNER/ADMIN VIEW - SHOW POINTS */}
           {Array.isArray(points) && points.map((point, index) => (
-            <Marker key={index} coordinate={point} title={`Point ${index + 1}`} />
+            point ? <Marker key={index} coordinate={point} title={`Point ${index + 1}`} /> : null
           ))}
-          {/* Ensure points is an array before accessing length */}
-          {Array.isArray(points) && points.length >= 3 && (
-            <Polygon 
-              coordinates={points} 
-              fillColor="rgba(0,0,255,0.3)" 
-              strokeColor="blue" 
-              strokeWidth={2} 
-            />
-          )}
-          {/* Ensure points is an array before mapping */}
-          {Array.isArray(points) && points.length >= 2 && points.map((point, index) => {
-            const nextIndex = (index + 1) % points.length;
-            const nextPoint = points[nextIndex];
-            
-            if (nextIndex === 0 && points.length < 3) return null;
-            
-            const midPoint = {
-              latitude: (point.latitude + nextPoint.latitude) / 2,
-              longitude: (point.longitude + nextPoint.longitude) / 2
-            };
-            
-            const distance = calculateDistance(point, nextPoint);
-            const distanceText = distance < 1000 
-              ? `${Math.round(distance)}m` 
-              : `${(distance / 1000).toFixed(2)}km`;
-            
-            return (
-              <React.Fragment key={`distance-${index}`}>
-                <Polygon
-                  coordinates={[point, nextPoint]}
-                  strokeColor="rgba(255, 0, 0, 0.7)"
-                  strokeWidth={2}
-                  fillColor="transparent"
-                />
-                <Marker
-                  coordinate={midPoint}
-                  anchor={{ x: 0.5, y: 0.5 }}
-                    tracksViewChanges={trackViewChanges}
-                    zIndex={500}
-                >
-                  <View style={styles.distanceMarker}>
-                    <Text style={styles.distanceText}>{distanceText}</Text>
-                  </View>
-                </Marker>
-              </React.Fragment>
-            );
-          })}
-        </>
-      )}
-      {/* Consolidated Current User Marker */}
-      {estimatedIconPosition ? (
-        <CurrentUserMarker
-          coordinate={estimatedIconPosition} // Use estimated position
-          // Potentially re-enable tracksViewChanges if needed for smooth updates
-          // tracksViewChanges={true} 
-        />
-      ) : currentLocation ? (
-        // Fallback to raw GPS location if estimation isn't ready yet
-        <CurrentUserMarker
-          coordinate={currentLocation} 
-          // tracksViewChanges={isUserMarkerMoving} // This state might be less relevant now
-        />
-      ) : null /* Render nothing if neither is available */}
-
-      {/* Other Users Markers Loop */}
-      {typeof usersLocations === 'object' && usersLocations !== null && 
-        Object.entries(usersLocations)
-          .filter(([userId, userData]) => {
-            const currentUid = auth.currentUser?.uid;
-            const currentUserData = currentUid ? usersLocations[currentUid] : null;
-            const currentUserTeamCode = currentUserData?.teamCode;
-            const memberName = formatUserName(userData) || userId;
-
-            // Check 1: Basic data validity
-            if (!userData) {
-              console.log(`Filtering out ${memberName}: Missing user data`);
-              return false;
-            }
-            
-            // For offline users, we still want to show their last known position
-            if (!userData.Latitude && !userData.Longitude && !userData.latitude && !userData.longitude) {
-              console.log(`Filtering out ${memberName}: No coordinates available`);
-              return false;
-            }
-
-            // Check 2: Exclude current user
-            if (currentUid && userId === currentUid) {
-              // console.log(`Filtering out ${memberName}: Is current user`);
-              return false;
-            }
-            
-            // Check 3: Admin visibility logic
-            if (userData.role === 'admin' || userData.isAdmin) {
-              if (!currentUserData?.isAdmin && currentUserData?.role !== 'admin') {
-                // console.log(`Filtering out ${memberName}: Admin visibility rule`);
-                return false; // Non-admin cannot see admin markers
-              }
-            }
-
-            // Get team code from userData
-            const userTeamCode = userData.teamCode; 
-            
-            // Check 4: Team visibility check
-            if (currentUserTeamCode) {
-              if (userTeamCode && userTeamCode !== currentUserTeamCode) {
-                console.log(`Filtering out ${memberName} (${userTeamCode || 'No Team Code'}): Different team from owner (${currentUserTeamCode})`);
-                return false; // Filter out users from different teams
-              }
-            } else {
-              console.warn(`Owner (${currentUid}) may have missing teamCode. Allowing user to pass filter.`);
-            }
-            
-            return true;
-          })
-          .map(([userId, userData]) => {
-            // Get the coordinates regardless of case
-            const latitude = userData.Latitude || userData.latitude;
-            const longitude = userData.Longitude || userData.longitude;
-            
-            return (
-              <CustomMarker
-                key={userId}
-                coordinate={{
-                  latitude: latitude,
-                  longitude: longitude
-                }}
-                photoURL={userData.photoURL}
-                name={formatUserName(userData)}
-                labelPosition={calculateMarkerLabelPositions(usersLocations)}
-                markerColor={getUniqueColor(userId)}
-                isOnline={userData.isActive !== false}
-              />
-            );
-          })
-      }
-      {/* *** Add the Polyline for the trail *** */}
-      {/* Ensure locationHistory is an array before accessing length */}
-      {Array.isArray(locationHistory) && locationHistory.length >= 2 && (
-        <Polyline
-          coordinates={locationHistory.map(point => ({
-            latitude: Number(point.latitude),
-            longitude: Number(point.longitude)
-          }))}
-          strokeColor={debugMode ? "#FF0000" : "#FF5722"} // Red in debug mode, orange in normal mode
-          strokeWidth={6}
-          lineCap="round"
-          lineJoin="round"
-          zIndex={100} // Make sure it's above other elements
-        />
-      )}
-      
-      {/* *** Add a marker for each history point for debugging purposes *** */}
-      {Array.isArray(locationHistory) && locationHistory.map((point, index) => (
-        <Marker
-          key={`history-point-${index}`}
-          coordinate={{
-            latitude: point.latitude,
-            longitude: point.longitude
-          }}
-          anchor={{ x: 0.5, y: 0.5 }}
-          tracksViewChanges={false}
-          zIndex={50}
-        >
-          <View style={{
-            width: 8,
-            height: 8,
-            borderRadius: 4,
-            backgroundColor: '#FF5722',
-            borderWidth: 1,
-            borderColor: 'white',
-          }} />
-        </Marker>
-      ))}
-      
-      {/* Debug Button - Only visible during development */}
-      <TouchableOpacity
-        style={{
-          position: 'absolute',
-          bottom: 250,
-          right: 20,
-          backgroundColor: 'rgba(0,0,0,0.7)',
-          borderRadius: 30,
-          padding: 10,
-          elevation: 5,
-        }}
-        onPress={() => {
-          console.log(`Points: ${locationHistory.length}`);
-          if (locationHistory.length > 0) {
-            console.log(`First: ${locationHistory[0].latitude.toFixed(8)}, ${locationHistory[0].longitude.toFixed(8)}`);
-            console.log(`Last: ${locationHistory[locationHistory.length-1].latitude.toFixed(8)}, ${locationHistory[locationHistory.length-1].longitude.toFixed(8)}`);
-          }
-          
-          // Show alert with locationHistory info
-          Alert.alert(
-            "LocationHistory Debug",
-            `Points: ${locationHistory.length}\n` +
-            (locationHistory.length > 0 ? 
-              `First: ${locationHistory[0].latitude.toFixed(8)}, ${locationHistory[0].longitude.toFixed(8)}\n` +
-              `Last: ${locationHistory[locationHistory.length-1].latitude.toFixed(8)}, ${locationHistory[locationHistory.length-1].longitude.toFixed(8)}` : 
-              "No points yet")
-          );
-        }}
-      >
-        <Text style={{ color: 'white', fontWeight: 'bold' }}>INFO</Text>
-      </TouchableOpacity>
-      
-      {/* Debug Mode Toggle Button */}
-      <TouchableOpacity
-        style={{
-          position: 'absolute',
-          bottom: 250,
-          right: 80, // Position to the left of the INFO button
-          backgroundColor: debugMode ? 'rgba(255,0,0,0.7)' : 'rgba(0,0,0,0.7)',
-          borderRadius: 30,
-          padding: 10,
-          elevation: 5,
-        }}
-        onPress={() => {
-          const newDebugMode = !debugMode;
-          setDebugMode(newDebugMode);
-          console.log(`DEBUG MODE: ${newDebugMode ? 'ON' : 'OFF'}`);
-          
-          // Show alert
-          Alert.alert(
-            "Debug Mode",
-            `Debug Mode is now ${newDebugMode ? 'ON' : 'OFF'}\n` +
-            (newDebugMode ? 
-              "All location updates will be added to history regardless of movement." : 
-              "Normal filtering applied.")
-          );
-        }}
-      >
-        <Text style={{ color: 'white', fontWeight: 'bold' }}>
-          {debugMode ? 'DEBUG ON' : 'DEBUG OFF'}
-        </Text>
-      </TouchableOpacity>
-    </MapView>
-
-    <View style={styles.toolbarContainer}>
-      {userRole !== 'member' ? (
-        <>
-          <View style={styles.pointsIndicator}>
-            <Text style={styles.pointsText}>Number of Geofenced Points: {points.length}</Text>
-          </View>
-
-          <View style={styles.buttonContainer}>
-              <TouchableOpacity 
-                style={[
-                  styles.button,
-                  styles.buttonSecondary, 
-                  (isFetchingLocation || isRemovingLocation) && styles.disabledButton,
-                  currentLocation && styles.buttonActive
-                ]}
-                onPress={async () => {
-                  if (isFetchingLocation || isRemovingLocation) return; // Prevent double-clicks
-                  
-                  if (currentLocation) {
-                    setIsRemovingLocation(true);
-                    // Force location removal immediately
-                    const db = getDatabase();
-                    const userLocationRef = ref(db, `UsersCurrentLocation/${auth.currentUser?.uid}`);
-                    
-                    // Clean up location subscription right away
-                    if (locationSubscriptionRef.current) {
-                      try {
-                        locationSubscriptionRef.current.remove();
-                      } catch (e) {
-                        console.error("Error removing location subscription:", e);
-                      }
-                      locationSubscriptionRef.current = null;
-                    }
-                    
-                    // Clear state immediately 
-                    setCurrentLocation(null);
-                    setGpsAccuracy(null);
-                    setLocationHistory([]);
-                    setEstimatedIconPosition(null);
-                    
-                    // Then update Firebase in background
-                    if (auth.currentUser?.uid) {
-                      update(userLocationRef, { 
-                        isActive: false,
-                        lastSeen: new Date().toISOString(),
-                      }).catch(err => console.error("Error updating location status:", err))
-                      .finally(() => {
-                        setIsRemovingLocation(false);
-                      });
-                    } else {
-                      setIsRemovingLocation(false);
-                    }
-                  } else {
-                    // Start progress indicator immediately for better UX
-                    setIsFetchingLocation(true);
-                    setTimeout(() => toggleCurrentLocation(), 0); // Run in next tick
-                  }
-                }}
-                disabled={isFetchingLocation || isRemovingLocation}
-              >
-                {/* *** Add Wrapper View *** */}
-                <View style={styles.buttonContentWrapper}>
-                  {isFetchingLocation || isRemovingLocation ? (
-                    <ActivityIndicator size="small" color="white" />
-                  ) : (
-                    <>
-                      <Ionicons 
-                        name={currentLocation ? "close-circle" : "navigate"} 
-                        size={20} 
-                        color="white" 
-                      />
-                    </>
-                  )}
-                  <Text style={styles.buttonText}> {/* Moved Text inside Wrapper */}
-                    {isFetchingLocation ? "Loading..." : 
-                     isRemovingLocation ? "Removing..." :
-                     currentLocation ? "Remove Location" : "My Location"}
-                  </Text>
-                </View> 
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={[styles.button, styles.buttonCenter]} 
-              onPress={() => {
-                // *** New logic: Focus on currentLocation ***
-                if (currentLocation && mapRef.current) {
-                  mapRef.current.animateToRegion(
-                    {
-                      latitude: currentLocation.latitude,
-                      longitude: currentLocation.longitude,
-                      latitudeDelta: 0.01, // Adjust zoom level as needed
-                      longitudeDelta: 0.01,
-                    },
-                    1000 // Animation duration in ms
-                  );
-                } else {
-                  Alert.alert("Location Unavailable", "Your current location isn't available yet.");
-                }
-              }}
-            >
-              <Ionicons name="locate-outline" size={20} color="white" /> {/* Changed icon */} 
-              <Text style={styles.buttonText}>Center on Me</Text> {/* Changed text */} 
-            </TouchableOpacity>
-          </View>
-
-          <TouchableOpacity 
-            style={[styles.button, styles.resetButton]}
-            onPress={() => {
-              if (!auth.currentUser) return;
-              
-              get(ref(db, `users/${auth.currentUser.uid}/profile`))
-                .then((snapshot) => {
-                  if (snapshot.exists()) {
-                    const userData = snapshot.val();
-                    
-                    if (userData.role === 'owner' && userData.teamCode) {
-                      get(ref(db, `teams/${userData.teamCode}/geofence/coordinates`))
-                        .then((geofenceSnapshot) => {
-                          const hasGeofence = geofenceSnapshot.exists() && 
-                                             Array.isArray(geofenceSnapshot.val()) && 
-                                             geofenceSnapshot.val().length >= 3;
-                          
-                          if (hasGeofence) {
-                            Alert.alert(
-                              'Request Geofence Reset',
-                              'Are you sure you want to request a reset of the existing geofence area? This will require admin approval.',
-                              [
-                                { text: 'Cancel', style: 'cancel' },
-                                { 
-                                  text: 'Request Reset', 
-                                  style: 'destructive',
-                                  onPress: () => {
-                                    const resetRequestRef = ref(db, `adminRequests/geofenceReset/${userData.teamCode}`);
-                                    const currentPoints = geofenceSnapshot.val();
-                                    
-                                    set(resetRequestRef, {
-                                      teamCode: userData.teamCode,
-                                      ownerId: auth.currentUser.uid,
-                                      ownerName: userData.firstName && userData.lastName ? 
-                                        `${userData.firstName} ${userData.lastName}` : auth.currentUser.email,
-                                      requestDate: new Date().toISOString(),
-                                      status: 'pending',
-                                      currentPoints: currentPoints,
-                                      teamName: userData.teamName || userData.teamCode
-                                    })
-                                      .then(() => {
-                                        console.log("Reset request created successfully");
-                                        Alert.alert(
-                                          'Reset Request Submitted',
-                                          'Your geofence reset request has been submitted for admin approval. You will be notified when it is processed.'
-                                        );
-                                      })
-                                      .catch((error) => {
-                                        console.error("Error creating reset request:", error);
-                                        Alert.alert('Error', 'Failed to submit reset request.');
-                                      });
-                                  }
-                                }
-                              ]
-                            );
-                          } else {
-                            Alert.alert(
-                              'Set Geofence Area',
-                              'You need to set up location boundaries for your team. Would you like to do this now?',
-                              [
-                                { text: 'Cancel', style: 'cancel' },
-                                { 
-                                  text: 'Set Up Now', 
-                                  onPress: () => {
-                                    navigation.navigate('OwnerInitialization', { teamCode: userData.teamCode });
-                                  }
-                                }
-                              ]
-                            );
-                          }
-                        })
-                        .catch(error => {
-                          console.error("Error checking geofence data:", error);
-                          Alert.alert('Error', 'Failed to check geofence status.');
-                        });
-                    } else {
-                      Alert.alert('Error', 'Only team owners can manage geofence areas.');
-                    }
-                  }
-                })
-                .catch((error) => {
-                  console.error("Error getting user profile:", error);
-                  Alert.alert('Error', 'Failed to access user profile.');
-                });
-            }}
-          >
-            <Ionicons name={points.length >= 3 ? "refresh-circle" : "locate"} size={24} color="white" />
-            <Text style={styles.buttonText}>
-              {points.length >= 3 ? "Request Geofence Reset" : "Set Geofence Area"}
-            </Text>
-          </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={[styles.button, styles.stepTrackerButton]}
-              onPress={() => navigation.navigate('StepTracker')}
-            >
-              <Ionicons name="footsteps" size={24} color="white" />
-              <Text style={styles.buttonText}>
-                Step Tracker
-              </Text>
-            </TouchableOpacity>
-            
-            {/* Add Reset Button for Testing */}
-            <TouchableOpacity 
-              style={[styles.button, styles.resetTestingButton]}
-              onPress={resetStepsAndLocationData}
-            >
-              <Ionicons name="refresh-circle" size={24} color="white" />
-              <Text style={styles.buttonText}>
-                Reset Testing Data
-              </Text>
-            </TouchableOpacity>
-        </>
-      ) : (
-        <>
           <View style={styles.memberMessage}>
             <Text style={styles.memberText}>Member View - Location tracking active</Text>
           </View>
@@ -2590,7 +3164,7 @@ return (
             </TouchableOpacity>
         </>
       )}
-    </View>
+    </MapView>
 
     <Navbar activePage="maps" />
     </SafeAreaView>
@@ -2866,10 +3440,11 @@ const styles = StyleSheet.create({
   topLeftIndicators: {
     position: 'absolute',
     left: 15,
-    flexDirection: 'row',
+    flexDirection: 'row', // Keep items in a row
     alignItems: 'center',
-    gap: 10,
-    zIndex: 10,
+    gap: 10, // Space between indicators and buttons
+    zIndex: 10, // Ensure it's above the map
+    // top is set dynamically using insets
   },
   stepIndicator: {
     backgroundColor: 'rgba(255, 255, 255, 0.9)',
@@ -2912,8 +3487,30 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'white',
   },
+  exportButtonBase: { // Base style for export buttons
+    borderRadius: 15,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    elevation: 3,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+  },
+  exportButtonRaw: {
+    backgroundColor: 'rgba(33, 150, 243, 0.9)', // Blue
+    // Inherits from exportButtonBase
+  },
+  exportButtonFiltered: {
+    backgroundColor: 'rgba(76, 175, 80, 0.9)', // Green
+    // Inherits from exportButtonBase
+  },
+  exportButtonText: { // Text style for export buttons
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 10,
+  },
 });
-
 // Add this new function to get location early
 const requestInitialLocation = async () => {
   try {
@@ -2961,4 +3558,61 @@ const requestInitialLocation = async () => {
     console.warn("Error getting initial location:", error);
   }
 };
+
+// Make sure any useEffect calling fitAllMarkers uses the ref version
+useEffect(() => {
+  // Only fit markers when user role or team geofence changes
+  // This is a meaningful time to refit the map
+  if (mapRef.current) {
+    fitAllMarkers(true);
+  }
+}, [teamGeofence?.length, fitAllMarkers]); // Add the optional chaining operator to prevent errors
+
+// Add this useEffect to ensure userRole is loaded as soon as possible
+useEffect(() => {
+  // Ensure user role is loaded immediately if possible
+  const loadUserRoleFromStorage = async () => {
+    try {
+      // Try to load the role from storage first
+      const storedRole = await AsyncStorage.getItem('userRole');
+      if (storedRole) {
+        setUserRole(storedRole);
+        console.log('UserRole loaded from storage:', storedRole);
+      }
+
+      // Also trigger a fresh load
+      loadUserRole();
+    } catch (error) {
+      console.error('Error loading user role from storage:', error);
+      loadUserRole();
+    }
+  };
+
+  loadUserRoleFromStorage();
+}, []);
+
+useEffect(() => {
+  // Get auth inside the effect
+  const auth = getAuth();
+  if (auth?.currentUser?.uid && currentLocation) {
+    get(ref(db, `users/${auth.currentUser.uid}/presence`)).then(snapshot => {
+      if (!snapshot.exists()) {
+        const userPresenceRef = ref(db, `users/${auth.currentUser.uid}/presence`);
+        const userLocationRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
+        
+        set(userPresenceRef, {
+          status: 'online',
+          lastSeen: new Date().toISOString()
+        });
+        
+        onDisconnect(userLocationRef).update({
+          isActive: false,
+          lastSeen: new Date().toISOString()
+        });
+      }
+    }, { onlyOnce: true });
+  }
+}, [currentLocation]); // Remove auth.currentUser?.uid from dependency
+
+
 
