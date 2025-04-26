@@ -917,10 +917,10 @@ useEffect(() => {
         async (location) => {
           try { // Outer try
             const { latitude, longitude, accuracy } = location.coords;
-            console.log(`📍 Raw GPS: Lat=${latitude.toFixed(8)}, Lon=${longitude.toFixed(8)}, Acc=${accuracy.toFixed(1)}m`); // Log Raw Data with more precision
+            console.log(`Raw GPS: Lat=${latitude.toFixed(8)}, Lon=${longitude.toFixed(8)}, Acc=${accuracy.toFixed(1)}m`); // Log Raw Data with more precision
             
             // Log full location data for diagnosis
-            console.log(`🔍 FULL: Timestamp=${location.timestamp}, Speed=${location.coords.speed?.toFixed(3) || 'null'}, Heading=${location.coords.heading?.toFixed(2) || 'null'}, Alt=${location.coords.altitude?.toFixed(2) || 'null'}`);
+            console.log(`FULL: Timestamp=${location.timestamp}, Speed=${location.coords.speed?.toFixed(3) || 'null'}, Heading=${location.coords.heading?.toFixed(2) || 'null'}, Alt=${location.coords.altitude?.toFixed(2) || 'null'}`);
 
             // --- Pre-filtering --- 
             // 1. Accuracy Filter - much more generous now
@@ -960,7 +960,7 @@ useEffect(() => {
                 
                 // *** TEMPORARY TEST: Use raw GPS directly for polyline history ***
                 filteredCoordinate = { latitude, longitude }; 
-                console.log(`🚦 Using RAW GPS for polyline history (Testing Sensitivity)`);
+                console.log(`Using RAW GPS for polyline history (Testing Sensitivity)`);
 
               } catch (kfError) {
                  console.error("Kalman Filter Error:", kfError);
@@ -979,8 +979,8 @@ useEffect(() => {
               iconPositionCoordinate = { latitude, longitude }; 
             }
             
-            console.log(`✨ Icon Coord (Filtered): Lat=${iconPositionCoordinate.latitude.toFixed(6)}, Lon=${iconPositionCoordinate.longitude.toFixed(6)}`); // Log Filtered Data for Icon
-            console.log(`〰️ History Coord (Raw): Lat=${filteredCoordinate.latitude.toFixed(6)}, Lon=${filteredCoordinate.longitude.toFixed(6)}`); // Log Coord used for History
+            console.log(`Icon Coord (Filtered): Lat=${iconPositionCoordinate.latitude.toFixed(6)}, Lon=${iconPositionCoordinate.longitude.toFixed(6)}`); // Log Filtered Data for Icon
+            console.log(`History Coord (Raw): Lat=${filteredCoordinate.latitude.toFixed(6)}, Lon=${filteredCoordinate.longitude.toFixed(6)}`); // Log Coord used for History
             
             // Update state for icon and raw GPS display
             const currentGpsCoordinate = { latitude, longitude };
@@ -994,7 +994,7 @@ useEffect(() => {
               
               // In debug mode, always add the point
               if (debugMode) {
-                console.log(`🐞 DEBUG: Force adding point to history. New length: ${history.length + 1}`);
+                console.log(`DEBUG: Force adding point to history. New length: ${history.length + 1}`);
                 const newHistory = [...history, {
                   latitude,
                   longitude,
@@ -1017,7 +1017,7 @@ useEffect(() => {
                   Math.abs(filteredCoordinate.latitude - lastPoint.latitude) > distanceThresholdDegrees ||
                   Math.abs(filteredCoordinate.longitude - lastPoint.longitude) > distanceThresholdDegrees) 
               {
-                console.log(`➕ Adding point to history. New length: ${history.length + 1}`);
+                console.log(`Adding point to history. New length: ${history.length + 1}`);
                 const newHistory = [...history, filteredCoordinate]; // Add the real coordinate
                 
                 // Keep history limited
@@ -1026,7 +1026,7 @@ useEffect(() => {
                 }
                 return newHistory;
               } else {
-                console.log(`➖ Skipping history add - point too close to last.`);
+                console.log(`Skipping history add - point too close to last.`);
                 return history; // Return existing history unchanged
               }
             });
@@ -1292,80 +1292,77 @@ useEffect(() => {
       console.log("Loading user locations...");
       const locationsRef = ref(db, "UsersCurrentLocation");
       
-      const unsubscribe = onValue(locationsRef, (snapshot) => {
+      const unsubscribe = onValue(locationsRef, async (snapshot) => {
         if (snapshot.exists()) {
           const locationsData = snapshot.val();
           
           const formattedLocations = {};
           
-          const fetchUserProfiles = async () => {
-            for (const [userId, userData] of Object.entries(locationsData)) {
-              if (userData && userData.Latitude && userData.Longitude) {
-                try {
-                  const userProfileRef = ref(db, `users/${userId}/profile`);
-                  const profileSnapshot = await get(userProfileRef);
-                  
-                  if (profileSnapshot.exists()) {
-                    const profileData = profileSnapshot.val();
-                    
-                    let displayName = '';
-                    if (profileData.firstName && profileData.firstName.trim() !== '') {
-                      displayName = profileData.firstName;
-                      if (profileData.lastName && profileData.lastName.trim() !== '') {
-                        displayName += ' ' + profileData.lastName;
-                      }
-                    } else if (profileData.lastName && profileData.lastName.trim() !== '') {
-                      displayName = profileData.lastName;
-                    }
-                    
-                    formattedLocations[userId] = {
-                      ...userData,
-                      firstName: profileData.firstName || '',
-                      lastName: profileData.lastName || '',
-                      photoURL: profileData.photoURL || '',
-                      role: profileData.role || '',
-                      teamCode: profileData.teamCode || '',
-                      name: formatUserName(profileData)
-                    };
-                  } else {
-                    formattedLocations[userId] = {
-                      ...userData,
-                      firstName: '',
-                      lastName: '',
-                      photoURL: '',
-                      role: '',
-                      teamCode: '',
-                      name: ''
-                    };
-                  }
-                } catch (error) {
-                  console.error(`Error fetching profile for user ${userId}`);
-                  formattedLocations[userId] = {
-                    ...userData,
-                    firstName: '',
-                    lastName: '',
-                    photoURL: '',
-                    role: '',
-                    teamCode: '',
-                    name: ''
-                  };
-                }
-              }
-            }
-            
-            setUsersLocations(formattedLocations);
-          };
+          // First, load all profiles and locations in parallel
+          const allUserIds = Object.keys(locationsData);
+          console.log(`Found ${allUserIds.length} user locations`);
           
-          fetchUserProfiles();
-        } else {
-          console.log("No user locations found in database");
-          setUsersLocations({});
+          // Load all user profiles in parallel for better performance
+          const profilePromises = allUserIds.map(async (userId) => {
+            try {
+              const userProfileRef = ref(db, `users/${userId}/profile`);
+              const profileSnapshot = await get(userProfileRef);
+              return { 
+                userId, 
+                profileData: profileSnapshot.exists() ? profileSnapshot.val() : null
+              };
+            } catch (error) {
+              console.error(`Error loading profile for ${userId}:`, error);
+              return { userId, profileData: null };
+            }
+          });
+          
+          // Wait for all profile requests to complete
+          const profiles = await Promise.all(profilePromises);
+          
+          // Now merge location and profile data
+          for (const { userId, profileData } of profiles) {
+            const userData = locationsData[userId];
+            
+            // Skip users with no location data
+            if (!userData) continue;
+            
+            // Merge location data with profile data
+            if (profileData) {
+              // Ensure latitude/longitude are available regardless of case
+              const hasCoordinates = userData.Latitude !== undefined || userData.latitude !== undefined;
+              
+              formattedLocations[userId] = {
+                ...userData,
+                ...profileData,
+                // Explicitly preserve these keys from location data in case of conflicts
+                Latitude: userData.Latitude || userData.latitude,
+                Longitude: userData.Longitude || userData.longitude,
+                isActive: userData.isActive,
+                lastSeen: userData.lastSeen,
+                // Make location data case-insensitive
+                latitude: userData.Latitude || userData.latitude,
+                longitude: userData.Longitude || userData.longitude,
+                hasLocationData: hasCoordinates
+              };
+              
+              console.log(`Loaded ${formatUserName(formattedLocations[userId])} (${userId}): ` + 
+                (hasCoordinates ? `Lat: ${formattedLocations[userId].Latitude}, Lon: ${formattedLocations[userId].Longitude}` : 'No coordinates') +
+                `, teamCode: ${formattedLocations[userId].teamCode || 'None'}, isActive: ${userData.isActive}`);
+            } else {
+              // If no profile data, still include the location data
+              formattedLocations[userId] = userData;
+            }
+          }
+          
+          setUsersLocations(formattedLocations);
         }
       });
       
       return unsubscribe;
     } catch (error) {
       console.error("Error loading user locations:", error);
+      return () => {};
     }
   };
   
@@ -1624,24 +1621,24 @@ useEffect(() => {
   useEffect(() => {
     let isMounted = true;
     if (isStepCountingInitialized.current || !auth.currentUser) return; 
-    console.log('🦶 STEP INIT (locTrack): Initializing step counting...');
+    console.log('STEP INIT (locTrack): Initializing step counting...');
 
     const checkPedometerAvailability = async () => {
       try {
         const isAvailable = await Pedometer.isAvailableAsync();
         if (isMounted) {
           setIsPedometerAvailable(String(isAvailable));
-          console.log(`🦶 STEP INIT (locTrack): Pedometer Available = ${isAvailable}`);
+          console.log(`STEP INIT (locTrack): Pedometer Available = ${isAvailable}`);
           if (isAvailable) {
             await startPedometerTracking();
           } else {
-            console.log('🦶 STEP INIT (locTrack): Pedometer not available, using simulated steps.');
+            console.log('STEP INIT (locTrack): Pedometer not available, using simulated steps.');
             startIntervalBasedStepCounting();
           }
           isStepCountingInitialized.current = true; 
         }
       } catch (error) {
-        console.error('🦶 STEP INIT (locTrack) ERROR: Error checking availability:', error);
+        console.error('STEP INIT (locTrack) ERROR: Error checking availability:', error);
         if (isMounted) {
           setIsPedometerAvailable('error');
           startIntervalBasedStepCounting();
@@ -1654,23 +1651,23 @@ useEffect(() => {
 
     return () => {
       isMounted = false;
-      console.log('🦶 STEP CLEANUP (locTrack): Cleaning up step counter...');
+      console.log('STEP CLEANUP (locTrack): Cleaning up step counter...');
       if (pedometerSubscription.current) {
         pedometerSubscription.current.remove();
         pedometerSubscription.current = null;
-        console.log('🦶 STEP CLEANUP (locTrack): Pedometer subscription removed.');
+        console.log('STEP CLEANUP (locTrack): Pedometer subscription removed.');
       }
       if (stepCounterInterval.current) {
         clearInterval(stepCounterInterval.current);
         stepCounterInterval.current = null;
-        console.log('🦶 STEP CLEANUP (locTrack): Interval counter cleared.');
+        console.log('STEP CLEANUP (locTrack): Interval counter cleared.');
       }
        isStepCountingInitialized.current = false; 
     };
   }, [auth.currentUser]);
 
   const startPedometerTracking = async () => {
-    console.log('🚶 PEDOMETER (locTrack): Starting tracking...');
+    console.log('PEDOMETER (locTrack): Starting tracking...');
     try {
       const auth = getAuth();
       if (!auth.currentUser) return;
@@ -1680,7 +1677,7 @@ useEffect(() => {
       const stepDataRef = ref(db, `users/${auth.currentUser.uid}/profile/stepData/totalSteps`);
       const snapshot = await get(stepDataRef);
       const initialSavedSteps = snapshot.exists() ? (snapshot.val() || 0) : 0;
-      console.log(`🚶 PEDOMETER (locTrack): Initial total steps loaded: ${initialSavedSteps}`);
+      console.log(`PEDOMETER (locTrack): Initial total steps loaded: ${initialSavedSteps}`);
       setStepCount(initialSavedSteps);
       stepCountRef.current = initialSavedSteps; // Sync ref too
       
@@ -1692,7 +1689,7 @@ useEffect(() => {
       // 2. Request permissions
       const { status } = await Pedometer.requestPermissionsAsync();
       if (status !== 'granted') {
-          console.error('🚶 PEDOMETER (locTrack) ERROR: Permission not granted!');
+          console.error('PEDOMETER (locTrack) ERROR: Permission not granted!');
           setIsPedometerAvailable('denied');
           // Show Alert to guide user
           Alert.alert(
@@ -1706,7 +1703,7 @@ useEffect(() => {
               {
                 text: 'Use Fallback',
                 onPress: () => {
-                  console.log('🚶 PEDOMETER (locTrack): User chose fallback due to denied permission.');
+                  console.log('PEDOMETER (locTrack): User chose fallback due to denied permission.');
                   startIntervalBasedStepCounting(); // Use fallback if user chooses
                 },
                 style: 'cancel',
@@ -1717,7 +1714,7 @@ useEffect(() => {
       }
 
       // 3. REMOVED: Don't get initial sensor reading baseline here - use first watch value
-      console.log('🚶 PEDOMETER (locTrack): Waiting for first sensor reading to set baseline...');
+      console.log('PEDOMETER (locTrack): Waiting for first sensor reading to set baseline...');
        
       // 4. Start watching
       pedometerSubscription.current = Pedometer.watchStepCount(result => {
@@ -1725,7 +1722,7 @@ useEffect(() => {
 
         // *** Set baseline on the first reading ***
         if (lastPedometerStepsRef.current === null) {
-            console.log(`🚶 PEDOMETER (locTrack): Baseline set to ${currentSensorSteps}`);
+            console.log(`PEDOMETER (locTrack): Baseline set to ${currentSensorSteps}`);
             lastPedometerStepsRef.current = currentSensorSteps;
             // Optionally save initial state right after baseline is set
             // writeStepDataToFirebase(true);
@@ -1735,11 +1732,11 @@ useEffect(() => {
 
         // Calculate delta based on the now-set baseline
         const deltaSteps = currentSensorSteps - lastPedometerStepsRef.current;
-        // console.log(`🚶 PEDOMETER CB (locTrack): Sensor=${currentSensorSteps}, LastRef=${lastPedometerStepsRef.current}, Delta=${deltaSteps}`); // Verbose log
+        // console.log(`PEDOMETER CB (locTrack): Sensor=${currentSensorSteps}, LastRef=${lastPedometerStepsRef.current}, Delta=${deltaSteps}`); // Verbose log
 
         // Handle sensor reset or negative values
         if (deltaSteps < 0) {
-            console.warn(`🚶 PEDOMETER CB (locTrack): Negative delta (${deltaSteps}), resetting baseline to ${currentSensorSteps}`);
+            console.warn(`PEDOMETER CB (locTrack): Negative delta (${deltaSteps}), resetting baseline to ${currentSensorSteps}`);
             lastPedometerStepsRef.current = currentSensorSteps;
             // Reset steps since last save as well, as history is broken
             setStepsSinceLastGpsUpdate(0);
@@ -1754,7 +1751,7 @@ useEffect(() => {
         }
 
         // Apply positive delta
-        console.log(`🚶 PEDOMETER CB (locTrack): Applying Delta: ${deltaSteps}`);
+        console.log(`PEDOMETER CB (locTrack): Applying Delta: ${deltaSteps}`);
         setStepCount(prevTotal => {
           const newTotal = (stepCountRef.current || 0) + deltaSteps;
           stepCountRef.current = newTotal; 
@@ -1772,24 +1769,24 @@ useEffect(() => {
 
         const currentTime = Date.now();
         if (currentTime - lastStepSaveTimestamp.current >= 1000) {
-          console.log('🚶 PEDOMETER CB (locTrack): 1s passed, calling save...');
+          console.log('PEDOMETER CB (locTrack): 1s passed, calling save...');
           writeStepDataToFirebase();
           lastStepSaveTimestamp.current = currentTime;
         }
       });
-      console.log('🚶 PEDOMETER (locTrack): Step watching started.');
+      console.log('PEDOMETER (locTrack): Step watching started.');
       // Don't save initial state here, wait for baseline and first steps
       // writeStepDataToFirebase(true);
       // lastStepSaveTimestamp.current = Date.now();
 
     } catch (error) {
-      console.error('🚶 PEDOMETER (locTrack) ERROR: Failed to start tracking:', error);
+      console.error('PEDOMETER (locTrack) ERROR: Failed to start tracking:', error);
       startIntervalBasedStepCounting();
     }
   };
 
   const startIntervalBasedStepCounting = () => {
-    console.log('📱 FALLBACK (locTrack): Using simulated step counting.');
+    console.log('FALLBACK (locTrack): Using simulated step counting.');
     if (stepCounterInterval.current) clearInterval(stepCounterInterval.current);
      const auth = getAuth();
      if (auth.currentUser) {
@@ -1798,13 +1795,13 @@ useEffect(() => {
          get(stepDataRef).then(snapshot => {
              const initialSavedSteps = snapshot.exists() ? (snapshot.val() || 0) : 0;
              setStepCount(initialSavedSteps);
-             console.log(`📱 FALLBACK (locTrack): Initial steps loaded: ${initialSavedSteps}`);
-         }).catch(err => console.error("📱 FALLBACK (locTrack): Error loading initial steps:", err));
+             console.log(`FALLBACK (locTrack): Initial steps loaded: ${initialSavedSteps}`);
+         }).catch(err => console.error("FALLBACK (locTrack): Error loading initial steps:", err));
           setStepsSinceLastGpsUpdate(0); 
      }
     stepCounterInterval.current = setInterval(() => {
       const increment = 3;
-      console.log(`📱 FALLBACK CB (locTrack): Incrementing by ${increment}`);
+      console.log(`FALLBACK CB (locTrack): Incrementing by ${increment}`);
       
       setStepCount(prevCount => {
         const newTotal = (stepCountRef.current || 0) + increment;
@@ -1820,18 +1817,18 @@ useEffect(() => {
       
       const currentTime = Date.now();
       if (currentTime - lastStepSaveTimestamp.current >= 1000) {
-        console.log('📱 FALLBACK CB (locTrack): 1s passed, calling save...');
+        console.log('FALLBACK CB (locTrack): 1s passed, calling save...');
         writeStepDataToFirebase(); // Will now use refs internally
         lastStepSaveTimestamp.current = currentTime;
       }
     }, 1500);
-    console.log('📱 FALLBACK (locTrack): Saving initial state after setup...');
+    console.log('FALLBACK (locTrack): Saving initial state after setup...');
     writeStepDataToFirebase(true);
     lastStepSaveTimestamp.current = Date.now();
   };
 
   const writeStepDataToFirebase = async (isInitialReading = false) => {
-    console.log(`📱 STEP SAVE (locTrack): Initiated. isInitialReading=${isInitialReading}`);
+    console.log(`STEP SAVE (locTrack): Initiated. isInitialReading=${isInitialReading}`);
     try {
       const auth = getAuth();
       if (!auth.currentUser) return;
@@ -1843,7 +1840,7 @@ useEffect(() => {
           userTeamCode = profileSnap.val()?.teamCode;
       } 
       if (!userTeamCode) {
-          console.log('📱 STEP SAVE (locTrack) ERROR: No team code found in profile.');
+          console.log('STEP SAVE (locTrack) ERROR: No team code found in profile.');
           return; 
       }
 
@@ -1866,10 +1863,10 @@ useEffect(() => {
       const currentTotalSteps = stepCountRef.current; 
       // *** Use stepsSinceLastGpsUpdateRef correctly ***
       const currentStepsSinceSave = stepsSinceLastGpsUpdateRef.current;
-      console.log(`📱 STEP SAVE (locTrack): Captured state: total=${currentTotalSteps}, sinceSave=${currentStepsSinceSave}`);
+      console.log(`STEP SAVE (locTrack): Captured state: total=${currentTotalSteps}, sinceSave=${currentStepsSinceSave}`);
 
       if (currentStepsSinceSave <= 0 && !isInitialReading) {
-          console.log(`📱 STEP SAVE (locTrack): Skipping save - no new steps (${currentStepsSinceSave})`);
+          console.log(`STEP SAVE (locTrack): Skipping save - no new steps (${currentStepsSinceSave})`);
           return;
       }
 
@@ -1883,7 +1880,7 @@ useEffect(() => {
         isIndoorTracking: locationData.isIndoor,
         isPedometerUsed: isPedometerAvailable === 'true',
       };
-      console.log(`📱 STEP SAVE (locTrack): Payload ready:`, stepDataPayload);
+      console.log(`STEP SAVE (locTrack): Payload ready:`, stepDataPayload);
 
       const newHistoryEntry = {
           latitude: locationData.latitude,
@@ -1912,18 +1909,18 @@ useEffect(() => {
       };
       updates[`appState/${auth.currentUser.uid}/stepDataInitialized`] = true;
       updates[`appState/${auth.currentUser.uid}/lastStepUpdateTimestamp`] = timestamp;
-      console.log("📱 STEP SAVE (locTrack): Prepared Firebase updates object:", updates);
+      console.log("STEP SAVE (locTrack): Prepared Firebase updates object:", updates);
       
       await update(ref(db), updates);
-      console.log("📱 STEP SAVE (locTrack): Firebase update successful.");
+      console.log("STEP SAVE (locTrack): Firebase update successful.");
 
       // *** Reset state AND ref ***
       setStepsSinceLastGpsUpdate(0);
       stepsSinceLastGpsUpdateRef.current = 0; 
-      console.log("📱 STEP SAVE (locTrack): Reset stepsSinceLastGpsUpdate to 0.");
+      console.log("STEP SAVE (locTrack): Reset stepsSinceLastGpsUpdate to 0.");
 
     } catch (error) {
-      console.error('📱 STEP SAVE (locTrack) ERROR:', error);
+      console.error('STEP SAVE (locTrack) ERROR:', error);
     }
   };
 
@@ -2156,55 +2153,75 @@ return (
       ) : null /* Render nothing if neither is available */}
 
       {/* Other Users Markers Loop */}
-      {/* Ensure usersLocations is an object before getting entries */}
-      {typeof usersLocations === 'object' && usersLocations !== null && Object.entries(usersLocations)
-        .filter(([userId, userData]) => {
-          const currentUid = auth.currentUser?.uid;
-          const currentUserData = currentUid ? usersLocations[currentUid] : null;
-          const currentUserTeamCode = currentUserData?.teamCode;
+      {typeof usersLocations === 'object' && usersLocations !== null && 
+        Object.entries(usersLocations)
+          .filter(([userId, userData]) => {
+            const currentUid = auth.currentUser?.uid;
+            const currentUserData = currentUid ? usersLocations[currentUid] : null;
+            const currentUserTeamCode = currentUserData?.teamCode;
+            const memberName = formatUserName(userData) || userId;
 
-          // Check 1: Basic data validity
-          if (!userData || !userData.Latitude || !userData.Longitude) return false;
-          // Check 2: Exclude current user
-          if (currentUid && userId === currentUid) return false;
-          
-          // Check 3: Admin visibility logic (keep existing)
-          if (userData.role === 'admin' || userData.isAdmin) {
-            // Check if current user is also admin
-            if (!currentUserData?.isAdmin && currentUserData?.role !== 'admin') {
-              return false; // Non-admin cannot see admin markers
+            // Check 1: Basic data validity
+            if (!userData) {
+              console.log(`Filtering out ${memberName}: Missing user data`);
+              return false;
             }
-          }
+            
+            // For offline users, we still want to show their last known position
+            if (!userData.Latitude && !userData.Longitude && !userData.latitude && !userData.longitude) {
+              console.log(`Filtering out ${memberName}: No coordinates available`);
+              return false;
+            }
 
-          // Check 4: Team visibility - *** ADDED/MODIFIED ***
-          if (currentUserTeamCode) { // Only apply team filter if current user has a team code
-             if (userData.teamCode !== currentUserTeamCode) {
-                // console.log(`Filtering out ${userId} (${userData.teamCode}) - Different team from ${currentUserTeamCode}`);
+            // Check 2: Exclude current user
+            if (currentUid && userId === currentUid) {
+              // console.log(`Filtering out ${memberName}: Is current user`);
+              return false;
+            }
+            
+            // Check 3: Admin visibility logic
+            if (userData.role === 'admin' || userData.isAdmin) {
+              if (!currentUserData?.isAdmin && currentUserData?.role !== 'admin') {
+                // console.log(`Filtering out ${memberName}: Admin visibility rule`);
+                return false; // Non-admin cannot see admin markers
+              }
+            }
+
+            // Get team code from userData
+            const userTeamCode = userData.teamCode; 
+            
+            // Check 4: Team visibility check
+            if (currentUserTeamCode) {
+              if (userTeamCode && userTeamCode !== currentUserTeamCode) {
+                console.log(`Filtering out ${memberName} (${userTeamCode || 'No Team Code'}): Different team from owner (${currentUserTeamCode})`);
                 return false; // Filter out users from different teams
-             } 
-          } else {
-             // If current user somehow has NO team code, maybe filter everyone else?
-             // Or maybe only show admins? For now, let them pass if current user has no team.
-             // Depending on requirements, could return false here for non-admins.
-          }
-          
-          // Passed all filters
-          return true;
-        })
-        .map(([userId, userData]) => (
-          <CustomMarker
-            key={userId} 
-            coordinate={{
-              latitude: userData.Latitude,
-              longitude: userData.Longitude
-            }}
-            photoURL={userData.photoURL}
-            name={formatUserName(userData)}
-            labelPosition={'bottom'} // *** Force bottom position for testing ***
-            markerColor={getUniqueColor(userId)}
-            isOnline={userData.isActive !== false}
-          />
-        ))
+              }
+            } else {
+              console.warn(`Owner (${currentUid}) may have missing teamCode. Allowing user to pass filter.`);
+            }
+            
+            return true;
+          })
+          .map(([userId, userData]) => {
+            // Get the coordinates regardless of case
+            const latitude = userData.Latitude || userData.latitude;
+            const longitude = userData.Longitude || userData.longitude;
+            
+            return (
+              <CustomMarker
+                key={userId}
+                coordinate={{
+                  latitude: latitude,
+                  longitude: longitude
+                }}
+                photoURL={userData.photoURL}
+                name={formatUserName(userData)}
+                labelPosition={calculateMarkerLabelPositions(usersLocations)}
+                markerColor={getUniqueColor(userId)}
+                isOnline={userData.isActive !== false}
+              />
+            );
+          })
       }
       {/* *** Add the Polyline for the trail *** */}
       {/* Ensure locationHistory is an array before accessing length */}
@@ -2257,10 +2274,10 @@ return (
           elevation: 5,
         }}
         onPress={() => {
-          console.log(`🧪 DEBUG: LocationHistory has ${locationHistory.length} points`);
+          console.log(`Points: ${locationHistory.length}`);
           if (locationHistory.length > 0) {
-            console.log(`🧪 First Point: Lat=${locationHistory[0].latitude.toFixed(8)}, Lon=${locationHistory[0].longitude.toFixed(8)}`);
-            console.log(`🧪 Last Point: Lat=${locationHistory[locationHistory.length-1].latitude.toFixed(8)}, Lon=${locationHistory[locationHistory.length-1].longitude.toFixed(8)}`);
+            console.log(`First: ${locationHistory[0].latitude.toFixed(8)}, ${locationHistory[0].longitude.toFixed(8)}`);
+            console.log(`Last: ${locationHistory[locationHistory.length-1].latitude.toFixed(8)}, ${locationHistory[locationHistory.length-1].longitude.toFixed(8)}`);
           }
           
           // Show alert with locationHistory info
@@ -2291,7 +2308,7 @@ return (
         onPress={() => {
           const newDebugMode = !debugMode;
           setDebugMode(newDebugMode);
-          console.log(`🐞 DEBUG MODE: ${newDebugMode ? 'ON' : 'OFF'}`);
+          console.log(`DEBUG MODE: ${newDebugMode ? 'ON' : 'OFF'}`);
           
           // Show alert
           Alert.alert(

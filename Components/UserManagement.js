@@ -156,6 +156,13 @@ export default function UserManagement({ navigation }) {
         if (snapshot.exists()) {
           const locationsData = snapshot.val();
           console.log('User locations updated:', Object.keys(locationsData).length);
+          // Log specific data to debug
+          Object.keys(locationsData).forEach(userId => {
+            console.log(`Location data for ${userId}:`, 
+              locationsData[userId]?.Latitude ? 
+              `Lat: ${locationsData[userId].Latitude}, Lon: ${locationsData[userId].Longitude}, isActive: ${locationsData[userId].isActive}` : 
+              'No coordinates');
+          });
           setMembersLocations(locationsData);
         }
       });
@@ -344,6 +351,14 @@ export default function UserManagement({ navigation }) {
   const renderMemberItem = ({ item }) => {
     const memberName = formatName(item.firstName, item.middleName, item.lastName);
     const memberLocation = membersLocations[item.id] || {};
+    // Check if we have location data regardless of case sensitivity and property names
+    const hasLocationData = memberLocation && 
+      ((memberLocation.Latitude !== undefined && memberLocation.Longitude !== undefined) ||
+       (memberLocation.latitude !== undefined && memberLocation.longitude !== undefined));
+    
+    // Get coordinates regardless of case
+    const latitude = memberLocation.Latitude || memberLocation.latitude;
+    const longitude = memberLocation.Longitude || memberLocation.longitude;
     const memberStats = userStats[item.id] || { totalDistance: 0 };
     
     return (
@@ -367,8 +382,8 @@ export default function UserManagement({ navigation }) {
             <View style={styles.locationContainer}>
               <Ionicons name="location" size={14} color="#007AFF" />
               <Text style={styles.locationText}>
-                {memberLocation.Latitude ? 
-                  `Lat: ${formatCoordinate(memberLocation.Latitude)}, Lng: ${formatCoordinate(memberLocation.Longitude)}` :
+                {hasLocationData ? 
+                  `Lat: ${formatCoordinate(latitude)}, Lng: ${formatCoordinate(longitude)}` :
                   'Location not available'}
               </Text>
             </View>
