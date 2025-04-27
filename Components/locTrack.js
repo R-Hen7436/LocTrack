@@ -453,6 +453,10 @@ const [trackViewChanges, setTrackViewChanges] = useState(false);
     }
   });
   const [isLoggingGps, setIsLoggingGps] = useState(false);
+  // Replace state with ref for immediate updates
+  const gpsLogStepCountRef = useRef(0);
+  const gpsLogLastStepCountRef = useRef(0); // Track last total step count for differential calculation
+  const lastGpsLogUpdateTime = useRef(0);
 
   // Keep refs synced with state
   useEffect(() => { stepCountRef.current = stepCount; }, [stepCount]);
@@ -930,9 +934,9 @@ useEffect(() => {
 
       locationSubscriptionRef.current = await Location.watchPositionAsync(
         {
-            accuracy: Location.Accuracy.BestForNavigation, // Changed from Balanced to BestForNavigation 
-            timeInterval: 5000, // Reduced from 1000ms to 500ms for more frequent updates
-            distanceInterval: 0, // Get all points for KF
+            accuracy: Location.Accuracy.BestForNavigation, 
+            timeInterval: 1000, // 1 second interval
+            distanceInterval: 2.5, // Increased to 5 meters to reduce update frequency
             mayShowUserSettingsDialog: true 
         },
         async (location) => {
@@ -1011,57 +1015,85 @@ useEffect(() => {
 
             // Log GPS data if logging is enabled
             if (isLoggingGps) {
-              const timestamp = Date.now();
-              const logEntry = {
-                timestamp,
-                formattedTime: new Date(timestamp).toISOString(),
-                accuracy,
-                altitude: location.coords.altitude,
-                speed: location.coords.speed,
-                heading: location.coords.heading,
-                stepsSinceLastUpdate: stepsSinceLastGpsUpdateRef.current || 0,
-                isMoving: isUserMoving
-              };
+              const currentTime = Date.now();
+              // Add minimum time between log entries to prevent excessive logging
+              const timeSinceLastLog = currentTime - lastGpsLogUpdateTime.current;
               
-              // Add raw GPS data point
-              const rawDataPoint = {
-                ...logEntry,
-                latitude,
-                longitude
-              };
-              
-              // Add filtered GPS data point
-              const filteredDataPoint = {
-                ...logEntry,
-                latitude: iconPositionCoordinate.latitude,
-                longitude: iconPositionCoordinate.longitude
-              };
-              
-              setGpsLogData(prevData => {
-                // Create new arrays with added data points
-                const newRawData = [...prevData.raw, rawDataPoint].slice(-MAX_GPS_LOG_ENTRIES);
-                const newFilteredData = [...prevData.filtered, filteredDataPoint].slice(-MAX_GPS_LOG_ENTRIES);
+              // Only log if at least 500ms have passed since last log, regardless of other conditions
+              if (timeSinceLastLog >= 500) {
+                lastGpsLogUpdateTime.current = currentTime;
                 
-                // Add to appropriate movement category
-                const movementCategory = isUserMoving ? 'walking' : 'stationary';
-                const newMovementRawData = [...prevData[movementCategory].raw, rawDataPoint].slice(-MAX_GPS_LOG_ENTRIES);
-                const newMovementFilteredData = [...prevData[movementCategory].filtered, filteredDataPoint].slice(-MAX_GPS_LOG_ENTRIES);
+                // Calculate steps taken since last GPS log by comparing with main step counter
+                const currentTotalSteps = stepCountRef.current || 0;
+                const lastLoggedSteps = gpsLogLastStepCountRef.current || 0;
+                const stepsSinceLastLog = Math.max(0, currentTotalSteps - lastLoggedSteps);
                 
-                return {
-                  raw: newRawData,
-                  filtered: newFilteredData,
-                  stationary: {
-                    raw: movementCategory === 'stationary' ? newMovementRawData : prevData.stationary.raw,
-                    filtered: movementCategory === 'stationary' ? newMovementFilteredData : prevData.stationary.filtered
-                  },
-                  walking: {
-                    raw: movementCategory === 'walking' ? newMovementRawData : prevData.walking.raw,
-                    filtered: movementCategory === 'walking' ? newMovementFilteredData : prevData.walking.filtered
-                  }
+                // Update our reference for next comparison
+                gpsLogLastStepCountRef.current = currentTotalSteps;
+                
+                // Determine if moving based on both steps and GPS speed
+                // If speed is available and above threshold OR steps detected, consider moving
+                const isMovingBySpeed = location.coords.speed && location.coords.speed > 0.5; // >0.5 m/s (~1.8 km/h)
+                const isMovingBySteps = stepsSinceLastLog > 0;
+                const isCurrentlyMoving = isMovingBySpeed || isMovingBySteps || isUserMoving;
+                
+                const logEntry = {
+                  timestamp: currentTime,
+                  formattedTime: new Date(currentTime).toISOString(),
+                  accuracy,
+                  altitude: location.coords.altitude,
+                  speed: location.coords.speed,
+                  heading: location.coords.heading,
+                  stepsSinceLastUpdate: stepsSinceLastLog,
+                  totalStepCount: currentTotalSteps,
+                  stepDetected: isMovingBySteps,
+                  speedDetected: isMovingBySpeed,
+                  isMoving: isCurrentlyMoving 
                 };
-              });
-              
-              console.log(`📊 GPS LOGGING: Logged ${isUserMoving ? 'walking' : 'stationary'} data point`);
+                
+                // Add raw GPS data point
+                const rawDataPoint = {
+                  ...logEntry,
+                  latitude,
+                  longitude
+                };
+                
+                // Add filtered GPS data point
+                const filteredDataPoint = {
+                  ...logEntry,
+                  latitude: iconPositionCoordinate.latitude,
+                  longitude: iconPositionCoordinate.longitude
+                };
+                
+                setGpsLogData(prevData => {
+                  // Create new arrays with added data points
+                  const newRawData = [...prevData.raw, rawDataPoint].slice(-MAX_GPS_LOG_ENTRIES);
+                  const newFilteredData = [...prevData.filtered, filteredDataPoint].slice(-MAX_GPS_LOG_ENTRIES);
+                  
+                  // Add to appropriate movement category based on updated movement detection
+                  const movementCategory = isCurrentlyMoving ? 'walking' : 'stationary';
+                  const newMovementRawData = [...prevData[movementCategory].raw, rawDataPoint].slice(-MAX_GPS_LOG_ENTRIES);
+                  const newMovementFilteredData = [...prevData[movementCategory].filtered, filteredDataPoint].slice(-MAX_GPS_LOG_ENTRIES);
+                  
+                  return {
+                    raw: newRawData,
+                    filtered: newFilteredData,
+                    stationary: {
+                      raw: movementCategory === 'stationary' ? newMovementRawData : prevData.stationary.raw,
+                      filtered: movementCategory === 'stationary' ? newMovementFilteredData : prevData.stationary.filtered
+                    },
+                    walking: {
+                      raw: movementCategory === 'walking' ? newMovementRawData : prevData.walking.raw,
+                      filtered: movementCategory === 'walking' ? newMovementFilteredData : prevData.walking.filtered
+                    }
+                  };
+                });
+                
+                // Reset the GPS log step counter after logging
+                gpsLogStepCountRef.current = 0;
+                
+                console.log(`📊 GPS LOGGING: Logged ${isCurrentlyMoving ? 'walking' : 'stationary'} data point with ${stepsSinceLastLog} steps since last log (total: ${currentTotalSteps}, speed: ${location.coords.speed?.toFixed(2) || 'N/A'} m/s)`);
+              }
             }
 
             setLocationHistory(prevHistory => {
@@ -1878,6 +1910,13 @@ useEffect(() => {
           writeStepDataToFirebase();
           lastStepSaveTimestamp.current = currentTime;
         }
+
+        // Also update GPS log step counter when logging is active
+        if (isLoggingGps) {
+          // Update ref directly for immediate effect
+          gpsLogStepCountRef.current += deltaSteps;
+          console.log(`🚶 GPS STEP TRACKING: Added ${deltaSteps} steps, total now ${gpsLogStepCountRef.current}`);
+        }
       });
       console.log('🚶 PEDOMETER (locTrack): Step watching started.');
       // Don't save initial state here, wait for baseline and first steps
@@ -1929,6 +1968,13 @@ useEffect(() => {
         console.log('📱 FALLBACK CB (locTrack): 1s passed, calling save...');
         writeStepDataToFirebase(); // Will now use refs internally
         lastStepSaveTimestamp.current = currentTime;
+      }
+
+      // Also update GPS log step counter when logging is active
+      if (isLoggingGps) {
+        // Update ref directly for immediate effect
+        gpsLogStepCountRef.current += increment;
+        console.log(`📱 GPS STEP TRACKING: Added ${increment} steps, total now ${gpsLogStepCountRef.current}`);
       }
     }, 1500);
     console.log('📱 FALLBACK (locTrack): Saving initial state after setup...');
@@ -2168,6 +2214,13 @@ const toggleGpsLogging = () => {
   setIsLoggingGps(prev => {
     const newState = !prev;
     console.log(`📊 GPS LOGGING: ${newState ? 'Started' : 'Stopped'}`);
+    
+    // Initialize with current step count when starting logging
+    if (newState) {
+      gpsLogLastStepCountRef.current = stepCountRef.current || 0;
+      lastGpsLogUpdateTime.current = Date.now();
+      console.log(`📊 GPS LOGGING: Initialized with current step count: ${gpsLogLastStepCountRef.current}`);
+    }
     
     if (!newState) {
       // If stopping logging, offer to export the data
