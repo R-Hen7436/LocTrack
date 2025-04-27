@@ -385,6 +385,8 @@ const METERS_TO_DEGREE_LAT = 111111; // Approx meters in 1 degree latitude
 const METERS_TO_DEGREE_LON = 111111; // Add equivalent for longitude (will be adjusted based on latitude)
 const MIN_GPS_DISTANCE_FOR_DIRECTION = 0.1; // Reduced from 1.0 to 0.1 meters
 const EMA_ALPHA = 0.3; // Decreased from 0.45 for more smoothing
+const STATIONARY_STEP_THRESHOLD = 1; // Minimum steps required to consider user moving
+const STATIONARY_TIME_THRESHOLD = 5000; // Time in ms to consider user stationary if no step changes
 
 // Add a threshold for unrealistic jumps (in meters)
 const UNREALISTIC_JUMP_THRESHOLD_METERS = 10; // Reduced from 50m to 10m for testing in small areas
@@ -432,6 +434,8 @@ const [trackViewChanges, setTrackViewChanges] = useState(false);
   const [isUserMarkerMoving, setIsUserMarkerMoving] = useState(false); // Re-added state
   const locationSubscriptionRef = useRef(null); // Add a ref for the location subscription
   const kalmanFilterRef = useRef(null); // Add a ref for the Kalman filter
+  const [lastStepUpdateTime, setLastStepUpdateTime] = useState(Date.now());
+  const [isUserMoving, setIsUserMoving] = useState(false);
 
   // Keep refs synced with state
   useEffect(() => { stepCountRef.current = stepCount; }, [stepCount]);
@@ -1008,6 +1012,23 @@ useEffect(() => {
                 return newHistory;
               }
               
+              // Check if user is moving based on step count
+              const currentTime = Date.now();
+              const stepsSinceLastUpdate = stepsSinceLastGpsUpdateRef.current || 0;
+              const timeSinceLastStepUpdate = currentTime - lastStepUpdateTime;
+              
+              if (stepsSinceLastUpdate < STATIONARY_STEP_THRESHOLD && 
+                  timeSinceLastStepUpdate > STATIONARY_TIME_THRESHOLD) {
+                console.log(`👣 USER STATIONARY: Steps ${stepsSinceLastUpdate} < threshold ${STATIONARY_STEP_THRESHOLD}, time since update: ${timeSinceLastStepUpdate}ms`);
+                setIsUserMoving(false);
+                return history; // Don't add point if user is stationary
+              } else if (stepsSinceLastUpdate >= STATIONARY_STEP_THRESHOLD) {
+                console.log(`👣 USER MOVING: Steps ${stepsSinceLastUpdate} >= threshold ${STATIONARY_STEP_THRESHOLD}`);
+                setIsUserMoving(true);
+                // Update last step update time when movement is detected
+                setLastStepUpdateTime(currentTime);
+              }
+              
               // Normal mode - check if point is different enough
               const lastPoint = history.length > 0 ? history[history.length - 1] : null;
               
@@ -1017,14 +1038,20 @@ useEffect(() => {
                   Math.abs(filteredCoordinate.latitude - lastPoint.latitude) > distanceThresholdDegrees ||
                   Math.abs(filteredCoordinate.longitude - lastPoint.longitude) > distanceThresholdDegrees) 
               {
-                console.log(`➕ Adding point to history. New length: ${history.length + 1}`);
-                const newHistory = [...history, filteredCoordinate]; // Add the real coordinate
-                
-                // Keep history limited
-                if (newHistory.length > MAX_HISTORY_POINTS + 10) {
-                  return newHistory.slice(-(MAX_HISTORY_POINTS + 5)); 
+                // Only add point if user is moving or this is the first point
+                if (isUserMoving || !lastPoint) {
+                  console.log(`➕ Adding point to history. New length: ${history.length + 1}`);
+                  const newHistory = [...history, filteredCoordinate]; // Add the real coordinate
+                  
+                  // Keep history limited
+                  if (newHistory.length > MAX_HISTORY_POINTS + 10) {
+                    return newHistory.slice(-(MAX_HISTORY_POINTS + 5)); 
+                  }
+                  return newHistory;
+                } else {
+                  console.log(`➖ Skipping history add - user not moving.`);
+                  return history; // Return existing history unchanged
                 }
-                return newHistory;
               } else {
                 console.log(`➖ Skipping history add - point too close to last.`);
                 return history; // Return existing history unchanged
@@ -1727,9 +1754,6 @@ useEffect(() => {
         if (lastPedometerStepsRef.current === null) {
             console.log(`🚶 PEDOMETER (locTrack): Baseline set to ${currentSensorSteps}`);
             lastPedometerStepsRef.current = currentSensorSteps;
-            // Optionally save initial state right after baseline is set
-            // writeStepDataToFirebase(true);
-            // lastStepSaveTimestamp.current = Date.now();
             return; // Don't process steps on the first reading
         }
 
@@ -1766,6 +1790,12 @@ useEffect(() => {
             stepsSinceLastGpsUpdateRef.current = newSinceSave;
             return newSinceSave;
         });
+        
+        // Update movement status when steps are detected
+        if (deltaSteps > 0) {
+          setIsUserMoving(true);
+          setLastStepUpdateTime(Date.now());
+        }
         
         // Update the reference *after* applying the delta for the next callback
         lastPedometerStepsRef.current = currentSensorSteps;
@@ -1817,6 +1847,10 @@ useEffect(() => {
           stepsSinceLastGpsUpdateRef.current = newSinceSave;
           return newSinceSave;
       });
+      
+      // Update movement status
+      setIsUserMoving(true);
+      setLastStepUpdateTime(Date.now());
       
       const currentTime = Date.now();
       if (currentTime - lastStepSaveTimestamp.current >= 1000) {
@@ -1956,6 +1990,8 @@ const resetStepsAndLocationData = async () => {
               setRealStepCount(0);
               setStepCountHistory([]);
               setLocationHistory([]);
+              setIsUserMoving(false);
+              setLastStepUpdateTime(Date.now());
               lastSmoothedCoordinateRef.current = null;
               lastTrailPointStepsRef.current = null;
               
