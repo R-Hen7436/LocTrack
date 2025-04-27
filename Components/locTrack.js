@@ -15,6 +15,9 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Pedometer } from 'expo-sensors';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import { MaterialIcons } from '@expo/vector-icons';
 
 /**
  * Simple implementation of a Kalman filter for 2D location data
@@ -387,6 +390,7 @@ const MIN_GPS_DISTANCE_FOR_DIRECTION = 0.1; // Reduced from 1.0 to 0.1 meters
 const EMA_ALPHA = 0.3; // Decreased from 0.45 for more smoothing
 const STATIONARY_STEP_THRESHOLD = 1; // Minimum steps required to consider user moving
 const STATIONARY_TIME_THRESHOLD = 5000; // Time in ms to consider user stationary if no step changes
+const MAX_GPS_LOG_ENTRIES = 200; // Maximum number of entries to store for GPS logging
 
 // Add a threshold for unrealistic jumps (in meters)
 const UNREALISTIC_JUMP_THRESHOLD_METERS = 10; // Reduced from 50m to 10m for testing in small areas
@@ -436,6 +440,19 @@ const [trackViewChanges, setTrackViewChanges] = useState(false);
   const kalmanFilterRef = useRef(null); // Add a ref for the Kalman filter
   const [lastStepUpdateTime, setLastStepUpdateTime] = useState(Date.now());
   const [isUserMoving, setIsUserMoving] = useState(false);
+  const [gpsLogData, setGpsLogData] = useState({
+    raw: [],
+    filtered: [],
+    stationary: {
+      raw: [],
+      filtered: []
+    },
+    walking: {
+      raw: [],
+      filtered: []
+    }
+  });
+  const [isLoggingGps, setIsLoggingGps] = useState(false);
 
   // Keep refs synced with state
   useEffect(() => { stepCountRef.current = stepCount; }, [stepCount]);
@@ -991,6 +1008,61 @@ useEffect(() => {
             setCurrentLocation(currentGpsCoordinate); 
             setGpsAccuracy(accuracy); 
             setEstimatedIconPosition(iconPositionCoordinate); // Icon uses the smoothed coordinate
+
+            // Log GPS data if logging is enabled
+            if (isLoggingGps) {
+              const timestamp = Date.now();
+              const logEntry = {
+                timestamp,
+                formattedTime: new Date(timestamp).toISOString(),
+                accuracy,
+                altitude: location.coords.altitude,
+                speed: location.coords.speed,
+                heading: location.coords.heading,
+                stepsSinceLastUpdate: stepsSinceLastGpsUpdateRef.current || 0,
+                isMoving: isUserMoving
+              };
+              
+              // Add raw GPS data point
+              const rawDataPoint = {
+                ...logEntry,
+                latitude,
+                longitude
+              };
+              
+              // Add filtered GPS data point
+              const filteredDataPoint = {
+                ...logEntry,
+                latitude: iconPositionCoordinate.latitude,
+                longitude: iconPositionCoordinate.longitude
+              };
+              
+              setGpsLogData(prevData => {
+                // Create new arrays with added data points
+                const newRawData = [...prevData.raw, rawDataPoint].slice(-MAX_GPS_LOG_ENTRIES);
+                const newFilteredData = [...prevData.filtered, filteredDataPoint].slice(-MAX_GPS_LOG_ENTRIES);
+                
+                // Add to appropriate movement category
+                const movementCategory = isUserMoving ? 'walking' : 'stationary';
+                const newMovementRawData = [...prevData[movementCategory].raw, rawDataPoint].slice(-MAX_GPS_LOG_ENTRIES);
+                const newMovementFilteredData = [...prevData[movementCategory].filtered, filteredDataPoint].slice(-MAX_GPS_LOG_ENTRIES);
+                
+                return {
+                  raw: newRawData,
+                  filtered: newFilteredData,
+                  stationary: {
+                    raw: movementCategory === 'stationary' ? newMovementRawData : prevData.stationary.raw,
+                    filtered: movementCategory === 'stationary' ? newMovementFilteredData : prevData.stationary.filtered
+                  },
+                  walking: {
+                    raw: movementCategory === 'walking' ? newMovementRawData : prevData.walking.raw,
+                    filtered: movementCategory === 'walking' ? newMovementFilteredData : prevData.walking.filtered
+                  }
+                };
+              });
+              
+              console.log(`📊 GPS LOGGING: Logged ${isUserMoving ? 'walking' : 'stationary'} data point`);
+            }
 
             setLocationHistory(prevHistory => {
               // Defensive check: if prevHistory is undefined, start with empty array
@@ -2044,6 +2116,100 @@ const resetStepsAndLocationData = async () => {
   }
 };
 
+// Add this function to export the GPS log data
+const exportGpsLogData = async () => {
+  try {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const fileName = `gps_log_data_${timestamp}.json`;
+    const fileUri = FileSystem.documentDirectory + fileName;
+    
+    // Format the data for export
+    const exportData = {
+      timestamp: new Date().toISOString(),
+      totalEntries: {
+        raw: gpsLogData.raw.length,
+        filtered: gpsLogData.filtered.length,
+        stationaryRaw: gpsLogData.stationary.raw.length,
+        stationaryFiltered: gpsLogData.stationary.filtered.length,
+        walkingRaw: gpsLogData.walking.raw.length,
+        walkingFiltered: gpsLogData.walking.filtered.length
+      },
+      data: gpsLogData
+    };
+    
+    // Write data to file
+    await FileSystem.writeAsStringAsync(fileUri, JSON.stringify(exportData, null, 2));
+    
+    // Share the file
+    await Sharing.shareAsync(fileUri, {
+      mimeType: 'application/json',
+      dialogTitle: 'Export GPS Log Data',
+      UTI: 'public.json'
+    });
+    
+    console.log(`📊 GPS DATA EXPORT: Successfully exported to ${fileName}`);
+    Alert.alert(
+      "Export Successful",
+      `GPS data exported to ${fileName}`,
+      [{ text: "OK" }]
+    );
+  } catch (error) {
+    console.error('📊 GPS DATA EXPORT ERROR:', error);
+    Alert.alert(
+      "Export Failed",
+      `Failed to export GPS data: ${error.message}`,
+      [{ text: "OK" }]
+    );
+  }
+};
+
+// Add a function to toggle GPS logging
+const toggleGpsLogging = () => {
+  setIsLoggingGps(prev => {
+    const newState = !prev;
+    console.log(`📊 GPS LOGGING: ${newState ? 'Started' : 'Stopped'}`);
+    
+    if (!newState) {
+      // If stopping logging, offer to export the data
+      Alert.alert(
+        "GPS Logging Stopped",
+        "Would you like to export the collected GPS data?",
+        [
+          { 
+            text: "Export", 
+            onPress: exportGpsLogData 
+          },
+          { 
+            text: "Reset Data",
+            style: "destructive",
+            onPress: () => {
+              setGpsLogData({
+                raw: [],
+                filtered: [],
+                stationary: {
+                  raw: [],
+                  filtered: []
+                },
+                walking: {
+                  raw: [],
+                  filtered: []
+                }
+              });
+              console.log(`📊 GPS LOGGING: Data reset`);
+            }
+          },
+          { 
+            text: "Cancel", 
+            style: "cancel" 
+          }
+        ]
+      );
+    }
+    
+    return newState;
+  });
+};
+
 return (
     <SafeAreaView style={[styles.container, { paddingTop: 0 }]}>
       <View style={[styles.topLeftIndicators, { top: insets.top + 10 }]}>
@@ -2280,6 +2446,86 @@ return (
           }} />
         </Marker>
       ))}
+      
+      {/* GPS Data Logging Buttons */}
+      <TouchableOpacity 
+        style={{
+          position: 'absolute',
+          top: insets.top + 120,
+          left: 20,
+          backgroundColor: isLoggingGps ? '#ff6347' : '#4682b4',
+          borderRadius: 30,
+          paddingVertical: 10,
+          paddingHorizontal: 15,
+          flexDirection: 'row',
+          alignItems: 'center',
+          elevation: 5,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.3,
+          shadowRadius: 3,
+        }}
+        onPress={toggleGpsLogging}
+      >
+        <MaterialIcons 
+          name={isLoggingGps ? "stop-circle" : "data-usage"} 
+          size={24} 
+          color="white" 
+        />
+        <Text style={{ color: 'white', marginLeft: 5, fontWeight: 'bold' }}>
+          {isLoggingGps ? "Stop Logging" : "Start GPS Log"}
+        </Text>
+      </TouchableOpacity>
+      
+      {(isLoggingGps || gpsLogData.raw.length > 0) && (
+        <TouchableOpacity 
+          style={{
+            position: 'absolute',
+            top: insets.top + 180,
+            left: 20,
+            backgroundColor: '#32cd32',
+            borderRadius: 30,
+            paddingVertical: 10,
+            paddingHorizontal: 15,
+            flexDirection: 'row',
+            alignItems: 'center',
+            elevation: 5,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.3,
+            shadowRadius: 3,
+          }}
+          onPress={exportGpsLogData}
+        >
+          <MaterialIcons name="save-alt" size={24} color="white" />
+          <Text style={{ color: 'white', marginLeft: 5, fontWeight: 'bold' }}>
+            Export GPS Data
+          </Text>
+        </TouchableOpacity>
+      )}
+      
+      {/* Logging status indicator */}
+      {isLoggingGps && (
+        <View style={{
+          position: 'absolute',
+          top: insets.top + 60,
+          left: 10,
+          right: 10,
+          backgroundColor: 'rgba(0, 0, 0, 0.7)',
+          borderRadius: 10,
+          padding: 8,
+          flexDirection: 'row',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}>
+          <Text style={{ color: 'white', fontWeight: 'bold' }}>
+            Recording GPS Data: {gpsLogData.raw.length} points
+          </Text>
+          <Text style={{ color: 'white', fontWeight: 'bold' }}>
+            {isUserMoving ? '🚶 Walking' : '🧍 Stationary'}
+          </Text>
+        </View>
+      )}
       
       {/* Debug Button - Only visible during development */}
       <TouchableOpacity
@@ -2930,6 +3176,28 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed',
     borderWidth: 1,
     borderColor: 'white',
+  },
+  floatingButton: {
+    position: 'absolute',
+    right: 20,
+    height: 50,
+    paddingHorizontal: 15,
+    borderRadius: 25,
+    backgroundColor: '#4682b4',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    zIndex: 999,
+  },
+  buttonText: {
+    color: 'white',
+    marginLeft: 5,
+    fontWeight: 'bold',
   },
 });
 
