@@ -390,7 +390,7 @@ const MIN_GPS_DISTANCE_FOR_DIRECTION = 0.1; // Reduced from 1.0 to 0.1 meters
 const EMA_ALPHA = 0.3; // Decreased from 0.45 for more smoothing
 const STATIONARY_STEP_THRESHOLD = 1; // Minimum steps required to consider user moving
 const STATIONARY_TIME_THRESHOLD = 5000; // Time in ms to consider user stationary if no step changes
-const MAX_GPS_LOG_ENTRIES = 200; // Maximum number of entries to store for GPS logging
+const MAX_GPS_LOG_ENTRIES = 500; // Maximum number of entries to store for GPS logging (Increased from 200)
 
 // Add a threshold for unrealistic jumps (in meters)
 const UNREALISTIC_JUMP_THRESHOLD_METERS = 10; // Reduced from 50m to 10m for testing in small areas
@@ -931,7 +931,7 @@ useEffect(() => {
       locationSubscriptionRef.current = await Location.watchPositionAsync(
         {
             accuracy: Location.Accuracy.BestForNavigation, // Changed from Balanced to BestForNavigation 
-            timeInterval: 500, // Reduced from 1000ms to 500ms for more frequent updates
+            timeInterval: 5000, // Reduced from 1000ms to 500ms for more frequent updates
             distanceInterval: 0, // Get all points for KF
             mayShowUserSettingsDialog: true 
         },
