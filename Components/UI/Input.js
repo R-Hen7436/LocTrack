@@ -200,34 +200,35 @@ const Input = ({
 
 const styles = StyleSheet.create({
   container: {
-    marginBottom: 24,
+    marginBottom: 18,
   },
   inputContainer: {
     borderWidth: 1.5,
-    borderRadius: 12,
-    padding: 16,
-    paddingTop: 24,
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     backgroundColor: theme.colors.backgroundAlt,
     position: 'relative',
-    minHeight: 60,
+    minHeight: 50,
   },
   inputContainerNonFloating: {
-    paddingTop: 16,
+    paddingVertical: 12,
   },
   inputRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    minHeight: 28,
+    minHeight: 24,
   },
   label: {
     position: 'absolute',
     left: 16,
-    top: -10,
+    top: -8,
     backgroundColor: theme.colors.backgroundAlt,
     paddingHorizontal: 4,
     fontWeight: '500',
     marginLeft: 6,
     zIndex: 1,
+    fontSize: 11,
   },
   labelWithLeftIcon: {
     marginLeft: 24,
@@ -235,15 +236,15 @@ const styles = StyleSheet.create({
   staticLabel: {
     fontSize: 14,
     color: theme.colors.text.secondary,
-    marginBottom: 8,
+    marginBottom: 6,
     fontWeight: '500',
   },
   input: {
     flex: 1,
-    fontSize: 16,
+    fontSize: 15,
     color: theme.colors.text.primary,
-    paddingVertical: 2,
-    height: 28,
+    paddingVertical: 0,
+    height: 24,
   },
   inputWithLeftIcon: {
     paddingLeft: 8,
@@ -252,14 +253,14 @@ const styles = StyleSheet.create({
     paddingRight: 8,
   },
   leftIconContainer: {
-    marginRight: 12,
+    marginRight: 10,
     justifyContent: 'center',
     alignItems: 'center',
     width: 20,
     height: 20,
   },
   rightIconContainer: {
-    marginLeft: 12,
+    marginLeft: 10,
     justifyContent: 'center',
     alignItems: 'center',
     width: 20,
@@ -267,7 +268,7 @@ const styles = StyleSheet.create({
   },
   errorText: {
     color: theme.colors.error,
-    fontSize: 12,
+    fontSize: 11,
     marginTop: 4,
     marginLeft: 8,
   },

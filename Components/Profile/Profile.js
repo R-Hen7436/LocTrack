@@ -294,8 +294,8 @@ export default function Profile({ navigation }) {
       setLoading(true);
       
       if (!auth || !auth.currentUser) {
-        setLoading(false);
-        return;
+          setLoading(false);
+          return;
       }
       
       console.log("Loading profile for user ID:", auth.currentUser.uid);
@@ -444,9 +444,9 @@ export default function Profile({ navigation }) {
     const hexOnly = text.replace(/[^0-9A-Fa-f]/g, '').substring(0, 2);
     
     // Update the MAC parts array
-    const newParts = [...macParts];
+      const newParts = [...macParts];
     newParts[index] = hexOnly;
-    setMacParts(newParts);
+      setMacParts(newParts);
       
     // Auto-focus next input if this one is filled
     if (hexOnly.length === 2 && index < 5) {
@@ -464,10 +464,10 @@ export default function Profile({ navigation }) {
   const handleSaveMacAddress = async () => {
     try {
       // Validate MAC address format
-      if (!isValidMacAddress(macParts)) {
+    if (!isValidMacAddress(macParts)) {
         Alert.alert('Invalid MAC Address', 'Please enter a valid MAC address (6 hex pairs)');
-        return;
-      }
+      return;
+    }
 
       setLoading(true);
       
@@ -501,11 +501,11 @@ export default function Profile({ navigation }) {
   };
 
   if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
+  return (
+          <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#4682B4" />
-        <Text style={styles.loadingText}>Loading profile...</Text>
-      </View>
+            <Text style={styles.loadingText}>Loading profile...</Text>
+          </View>
     );
   }
 
@@ -529,9 +529,9 @@ export default function Profile({ navigation }) {
       >
         {/* Profile Card (NOT a header) */}
         <View style={styles.profileCard}>
-          <View style={styles.profileHeader}>
-            <TouchableOpacity onPress={pickImage} style={styles.profileImageContainer}>
-              {userProfile?.photoURL ? (
+              <View style={styles.profileHeader}>
+                <TouchableOpacity onPress={pickImage} style={styles.profileImageContainer}>
+                  {userProfile?.photoURL ? (
                 <Image 
                   source={{ uri: userProfile.photoURL }} 
                   style={styles.profileImage}
@@ -540,43 +540,43 @@ export default function Profile({ navigation }) {
                 <View style={styles.profileImagePlaceholder}>
                   <Text style={styles.profileImagePlaceholderText}>
                     {getInitials(userProfile?.firstName, userProfile?.lastName)}
-                  </Text>
-                </View>
-              )}
+                      </Text>
+                    </View>
+                  )}
               <View style={styles.cameraIconContainer}>
                 <Ionicons name="camera" size={16} color="#FFFFFF" />
               </View>
-            </TouchableOpacity>
+                </TouchableOpacity>
             
-            <View style={styles.profileInfo}>
+                <View style={styles.profileInfo}>
               <Text style={styles.profileName}>
                 {formatName(userProfile?.firstName, userProfile?.middleName, userProfile?.lastName)}
-              </Text>
+                  </Text>
               <Text style={styles.profileEmail}>{userProfile?.email}</Text>
-              
+                  
               <View style={styles.statusRow}>
                 <View style={[
-                  styles.statusDot, 
+                        styles.statusDot, 
                   userStatus === 'online' ? styles.statusOnline : 
                   userStatus === 'away' ? styles.statusAway : 
                   styles.statusOffline
                 ]} />
-                <Text style={styles.statusText}>{formatStatus(userStatus)}</Text>
+                    <Text style={styles.statusText}>{formatStatus(userStatus)}</Text>
+              </View>
+                  </View>
+                  
+                  <TouchableOpacity 
+                    style={styles.editButton} 
+                    onPress={() => navigation.navigate('EditProfile', { userProfile })}
+                  >
+              <Ionicons name="pencil-outline" size={18} color="#4682B4" />
+                  </TouchableOpacity>
               </View>
             </View>
-            
-            <TouchableOpacity 
-              style={styles.editButton} 
-              onPress={() => navigation.navigate('EditProfile', { userProfile })}
-            >
-              <Ionicons name="pencil-outline" size={18} color="#4682B4" />
-            </TouchableOpacity>
-          </View>
-        </View>
-        
+
         {/* Tabs */}
         <View style={styles.tabContainer}>
-          <TouchableOpacity
+                      <TouchableOpacity
             style={[styles.tab, activeTab === 'profile' && styles.activeTab]}
             onPress={() => setActiveTab('profile')}
           >
@@ -591,9 +591,9 @@ export default function Profile({ navigation }) {
             ]}>
               Profile
             </Text>
-          </TouchableOpacity>
+                      </TouchableOpacity>
           
-          <TouchableOpacity
+                      <TouchableOpacity
             style={[styles.tab, activeTab === 'activity' && styles.activeTab]}
             onPress={() => setActiveTab('activity')}
           >
@@ -602,14 +602,14 @@ export default function Profile({ navigation }) {
               size={20} 
               color={activeTab === 'activity' ? "#4682B4" : "#666666"} 
             />
-            <Text style={[
+                    <Text style={[
               styles.tabText, 
               activeTab === 'activity' && styles.activeTabText
-            ]}>
+                    ]}>
               Activity
-            </Text>
-          </TouchableOpacity>
-        </View>
+                    </Text>
+              </TouchableOpacity>
+            </View>
 
         {activeTab === 'profile' ? (
           <>
@@ -658,7 +658,7 @@ export default function Profile({ navigation }) {
             <View style={styles.sectionCard}>
               <View style={styles.sectionTitleContainer}>
                 <Text style={styles.sectionTitle}>Device Information</Text>
-                <TouchableOpacity
+      <TouchableOpacity
                   onPress={() => setIsEditingMac(!isEditingMac)}
                   style={styles.actionButton}
                 >
@@ -667,7 +667,7 @@ export default function Profile({ navigation }) {
                     size={20} 
                     color="#4682B4" 
                   />
-                </TouchableOpacity>
+      </TouchableOpacity>
               </View>
               
               {isEditingMac ? (
@@ -678,7 +678,7 @@ export default function Profile({ navigation }) {
                   <View style={styles.macInputContainer}>
                     {macParts.map((part, index) => (
                       <React.Fragment key={index}>
-                        <TextInput
+            <TextInput
                           ref={macInputRefs[index]}
                           style={styles.macInput}
                           value={part}
@@ -695,13 +695,13 @@ export default function Profile({ navigation }) {
                   </View>
                   
                   <View style={styles.buttonRow}>
-                    <TouchableOpacity 
+              <TouchableOpacity
                       style={[styles.button, styles.cancelButton]} 
                       onPress={() => setIsEditingMac(false)}
                     >
                       <Text style={styles.cancelButtonText}>Cancel</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity 
+              </TouchableOpacity>
+              <TouchableOpacity
                       style={[styles.button, styles.saveButton]} 
                       onPress={handleSaveMacAddress}
                     >
@@ -720,7 +720,7 @@ export default function Profile({ navigation }) {
             </View>
             
             {/* Sign Out Button */}
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.signOutButton}
               onPress={handleLogout}
             >

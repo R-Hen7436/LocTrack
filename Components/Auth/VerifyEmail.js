@@ -1,6 +1,16 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import { 
+  View, 
+  Text, 
+  StyleSheet, 
+  ActivityIndicator, 
+  KeyboardAvoidingView, 
+  Platform,
+  SafeAreaView
+} from 'react-native';
 import { getAuth, sendEmailVerification, signOut } from 'firebase/auth';
+import theme from '../../constants/theme';
+import { Button, Card } from '../UI';
 
 export default function VerifyEmail({ route, navigation }) {
   const { email } = route.params || {};
@@ -125,131 +135,136 @@ export default function VerifyEmail({ route, navigation }) {
   };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Verify Your Email</Text>
-      
-      <Text style={styles.message}>
-        We've sent a verification email to:
-        {'\n'}
-        <Text style={styles.emailText}>{currentEmail}</Text>
-      </Text>
-
-      <Text style={styles.instructions}>
-        Please check your email and click the verification link to access all features.
-        {'\n\n'}
-        Your email verification status is being checked automatically.
-      </Text>
-
-      <TouchableOpacity 
-        style={[styles.button, timeLeft > 0 && styles.buttonDisabled]} 
-        onPress={resendVerification}
-        disabled={timeLeft > 0 || sending}
+    <SafeAreaView style={styles.safeArea}>
+      <KeyboardAvoidingView 
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.keyboardAvoidingView}
       >
-        {sending ? (
-          <ActivityIndicator color="white" size="small" />
-        ) : (
-          <Text style={styles.buttonText}>
-            {timeLeft > 0 
-              ? `Resend email in ${timeLeft}s` 
-              : 'Resend verification email'
-            }
-          </Text>
-        )}
-      </TouchableOpacity>
+        <View style={styles.container}>
+          <View style={styles.headerContainer}>
+            <Text style={styles.title}>Verify email</Text>
+            <Text style={styles.subtitle}>Complete your account setup</Text>
+          </View>
+          
+          <Card style={styles.formCard}>
+            <View style={styles.formContainer}>
+              <Text style={styles.message}>
+                We've sent a verification email to:
+              </Text>
+              <Text style={styles.emailText}>{currentEmail}</Text>
 
-      <TouchableOpacity 
-        style={styles.refreshButton} 
-        onPress={checkVerification}
-        disabled={refreshing}
-      >
-        {refreshing ? (
-          <ActivityIndicator color="white" size="small" />
-        ) : (
-          <Text style={styles.buttonText}>Check verification status</Text>
-        )}
-      </TouchableOpacity>
+              <Text style={styles.instructions}>
+                Please check your email and click the verification link to access all features.
+                Your email verification status is being checked automatically.
+              </Text>
 
-      <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
-        <Text style={styles.buttonText}>Sign Out</Text>
-      </TouchableOpacity>
-    </View>
+              <Button
+                variant="primary"
+                label={timeLeft > 0 ? `Resend email in ${timeLeft}s` : 'Resend verification email'}
+                onPress={resendVerification}
+                isLoading={sending}
+                disabled={timeLeft > 0 || sending}
+                size="lg"
+                style={styles.resendButton}
+              />
+
+              <Button
+                variant="secondary"
+                label="Check verification status"
+                onPress={checkVerification}
+                isLoading={refreshing}
+                disabled={refreshing}
+                size="lg"
+                style={styles.checkButton}
+              />
+
+              <Button
+                variant="outline"
+                label="Sign Out"
+                onPress={handleSignOut}
+                size="lg"
+                style={styles.signOutButton}
+                textStyle={styles.signOutButtonText}
+              />
+            </View>
+          </Card>
+        </View>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: theme.colors.background,
+  },
+  keyboardAvoidingView: {
+    flex: 1,
+  },
   container: {
     flex: 1,
+    padding: 24,
     justifyContent: 'center',
-    padding: 20,
-    backgroundColor: '#fff',
+  },
+  headerContainer: {
+    marginBottom: 8,
+    alignItems: 'flex-start',
+    width: '100%',
   },
   title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 20,
-    textAlign: 'center',
-    color: '#333',
+    fontSize: 32,
+    fontWeight: '700',
+    color: theme.colors.text.primary, 
+    marginBottom: 2,
+  },
+  subtitle: {
+    ...theme.typography.bodyMedium,
+    color: theme.colors.text.secondary,
+    fontSize: 16,
+    marginBottom: 8,
+  },
+  formCard: {
+    padding: 24,
+    marginBottom: 24,
+  },
+  formContainer: {
+    width: '100%',
+    alignItems: 'center',
   },
   message: {
     fontSize: 16,
     textAlign: 'center',
     marginBottom: 10,
-    lineHeight: 24,
+    color: theme.colors.text.primary,
   },
   emailText: {
     fontWeight: 'bold',
-    color: '#007AFF',
+    fontSize: 18,
+    color: theme.colors.primary,
+    marginBottom: 20,
+    textAlign: 'center',
   },
   instructions: {
     fontSize: 16,
     textAlign: 'center',
     marginBottom: 30,
-    color: '#666',
+    color: theme.colors.text.secondary,
     lineHeight: 22,
   },
-  button: {
-    backgroundColor: '#007AFF',
-    padding: 15,
-    borderRadius: 10,
-    marginBottom: 15,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 2,
+  resendButton: {
+    width: '100%',
+    marginBottom: 16,
   },
-  buttonDisabled: {
-    backgroundColor: '#97C2F5',
+  checkButton: {
+    width: '100%',
+    marginBottom: 16,
   },
   signOutButton: {
-    backgroundColor: '#FF3B30',
-    padding: 15,
-    borderRadius: 10,
-    marginBottom: 15,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 2,
+    width: '100%',
+    marginTop: 8,
   },
-  buttonText: {
-    color: 'white',
-    textAlign: 'center',
-    fontWeight: 'bold',
-    fontSize: 16,
-  },
-  refreshButton: {
-    backgroundColor: '#4CD964',
-    padding: 15,
-    borderRadius: 10,
-    marginBottom: 15,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 2,
-  },
+  signOutButtonText: {
+    color: theme.colors.error,
+  }
 }); 

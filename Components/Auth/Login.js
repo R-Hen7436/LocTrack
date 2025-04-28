@@ -225,7 +225,7 @@ export default function Login({ navigation }) {
         <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
           <View style={styles.container}>
             <View style={styles.headerContainer}>
-              <Text style={styles.title}>Welcome Back</Text>
+              <Text style={styles.title}>Login</Text>
               <Text style={styles.subtitle}>Sign in to continue</Text>
             </View>
             
@@ -310,17 +310,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   headerContainer: {
-    marginBottom: 32,
-    alignItems: 'center',
+    marginBottom: 8,
+    alignItems: 'flex-start',
+    width: '100%',
   },
   title: {
-    ...theme.typography.h1,
+    fontSize: 32,
+    fontWeight: '700',
     color: theme.colors.text.primary,
-    marginBottom: 8,
+    marginBottom: 2,
   },
   subtitle: {
-    ...theme.typography.bodySmall,
+    ...theme.typography.bodyMedium,
     color: theme.colors.text.secondary,
+    fontSize: 16,
+    marginBottom: 8,
   },
   formCard: {
     padding: 24,
