@@ -442,98 +442,100 @@ const [gpsAccuracy, setGpsAccuracy] = useState(null);
 const [usersLocations, setUsersLocations] = useState({});
 const [shouldAutoFit, setShouldAutoFit] = useState(true);
 const [trackViewChanges, setTrackViewChanges] = useState(false);
-  const [realStepCount, setRealStepCount] = useState(0);
-  const insets = useSafeAreaInsets();
+const [realStepCount, setRealStepCount] = useState(0);
+const insets = useSafeAreaInsets();
+const [isInsideGeofence, setIsInsideGeofence] = useState(false); // Track if user is inside geofence
+const lastGeofenceStatusRef = useRef(null); // Store last geofence status to detect changes
 
-  const [stepCount, setStepCount] = useState(0);
-  const [stepsSinceLastGpsUpdate, setStepsSinceLastGpsUpdate] = useState(0);
-  const [stepCountHistory, setStepCountHistory] = useState([]);
-  const stepCounterInterval = useRef(null);
-  const lastStepSaveTimestamp = useRef(Date.now());
-  const [isPedometerAvailable, setIsPedometerAvailable] = useState('checking');
-  const pedometerSubscription = useRef(null);
-  const isStepCountingInitialized = useRef(false);
-  const lastPedometerStepsRef = useRef(0);
+const [stepCount, setStepCount] = useState(0);
+const [stepsSinceLastGpsUpdate, setStepsSinceLastGpsUpdate] = useState(0);
+const [stepCountHistory, setStepCountHistory] = useState([]);
+const stepCounterInterval = useRef(null);
+const lastStepSaveTimestamp = useRef(Date.now());
+const [isPedometerAvailable, setIsPedometerAvailable] = useState('checking');
+const pedometerSubscription = useRef(null);
+const isStepCountingInitialized = useRef(false);
+const lastPedometerStepsRef = useRef(0);
   
-  // Refs to hold the latest state values for use in callbacks
-  const stepCountRef = useRef(stepCount);
-  const stepsSinceLastGpsUpdateRef = useRef(stepsSinceLastGpsUpdate); // *** Reinstate Ref ***
-  const lastTrailPointStepsRef = useRef(null); // Reinstate ref for steps
-  const lastSmoothedCoordinateRef = useRef(null); // *** NEW: Ref for last smoothed point ***
-  const [estimatedIconPosition, setEstimatedIconPosition] = useState(null); // *** NEW: State for icon's estimated position ***
-  const [isUserMarkerMoving, setIsUserMarkerMoving] = useState(false); // Re-added state
-  const locationSubscriptionRef = useRef(null); // Add a ref for the location subscription
-  const kalmanFilterRef = useRef(null); // Add a ref for the Kalman filter
-  const [lastStepUpdateTime, setLastStepUpdateTime] = useState(Date.now());
-  const [isUserMoving, setIsUserMoving] = useState(false);
-  const [gpsLogData, setGpsLogData] = useState({
+// Refs to hold the latest state values for use in callbacks
+const stepCountRef = useRef(stepCount);
+const stepsSinceLastGpsUpdateRef = useRef(stepsSinceLastGpsUpdate); // *** Reinstate Ref ***
+const lastTrailPointStepsRef = useRef(null); // Reinstate ref for steps
+const lastSmoothedCoordinateRef = useRef(null); // *** NEW: Ref for last smoothed point ***
+const [estimatedIconPosition, setEstimatedIconPosition] = useState(null); // *** NEW: State for icon's estimated position ***
+const [isUserMarkerMoving, setIsUserMarkerMoving] = useState(false); // Re-added state
+const locationSubscriptionRef = useRef(null); // Add a ref for the location subscription
+const kalmanFilterRef = useRef(null); // Add a ref for the Kalman filter
+const [lastStepUpdateTime, setLastStepUpdateTime] = useState(Date.now());
+const [isUserMoving, setIsUserMoving] = useState(false);
+const [gpsLogData, setGpsLogData] = useState({
+  raw: [],
+  filtered: [],
+  stationary: {
     raw: [],
-    filtered: [],
-    stationary: {
-      raw: [],
-      filtered: []
-    },
-    walking: {
-      raw: [],
-      filtered: []
-    }
-  });
-  const [isLoggingGps, setIsLoggingGps] = useState(false);
-  // Replace state with ref for immediate updates
-  const gpsLogStepCountRef = useRef(0);
-  const gpsLogLastStepCountRef = useRef(0); // Track last total step count for differential calculation
-  const lastGpsLogUpdateTime = useRef(0);
+    filtered: []
+  },
+  walking: {
+    raw: [],
+    filtered: []
+  }
+});
+const [isLoggingGps, setIsLoggingGps] = useState(false);
+// Replace state with ref for immediate updates
+const gpsLogStepCountRef = useRef(0);
+const gpsLogLastStepCountRef = useRef(0); // Track last total step count for differential calculation
+const lastGpsLogUpdateTime = useRef(0);
 
-  // Inside your App component, add a state to track team members' location history
-  const [teamMemberHistories, setTeamMemberHistories] = useState({});
+// Inside your App component, add a state to track team members' location history
+const [teamMemberHistories, setTeamMemberHistories] = useState({});
 
-  // Keep refs synced with state
-  useEffect(() => { stepCountRef.current = stepCount; }, [stepCount]);
-  useEffect(() => { stepsSinceLastGpsUpdateRef.current = stepsSinceLastGpsUpdate; }, [stepsSinceLastGpsUpdate]); // *** Reinstate useEffect ***
-  // No longer need stepsSinceLastGpsUpdateRef here
+// Keep refs synced with state
+useEffect(() => { stepCountRef.current = stepCount; }, [stepCount]);
+useEffect(() => { stepsSinceLastGpsUpdateRef.current = stepsSinceLastGpsUpdate; }, [stepsSinceLastGpsUpdate]); // *** Reinstate useEffect ***
+// No longer need stepsSinceLastGpsUpdateRef here
 
-  // Make sure the locationHistory state is correctly initialized at the top of your component
-  const [locationHistory, setLocationHistory] = useState([]); // Initialize as empty array
+// Make sure the locationHistory state is correctly initialized at the top of your component
+const [locationHistory, setLocationHistory] = useState([]); // Initialize as empty array
 
-  // Add at the top with other state variables
-  const [isRemovingLocation, setIsRemovingLocation] = useState(false);
+// Add at the top with other state variables
+const [isRemovingLocation, setIsRemovingLocation] = useState(false);
 
-  // Add this state variable at the top of your component (in the App function)
-  const [debugMode, setDebugMode] = useState(false);
+// Add this state variable at the top of your component (in the App function)
+const [debugMode, setDebugMode] = useState(false);
 
-  // **** ADD REF FOR PREVIOUS LOCATIONS ****
-  const previousUsersLocationsRef = useRef({});
+// **** ADD REF FOR PREVIOUS LOCATIONS ****
+const previousUsersLocationsRef = useRef({});
 
-  // Add a function to save location history for team members
-  const saveTeamMemberLocationHistory = (userId, location) => {
-    if (!userId || !location || !location.Latitude || !location.Longitude) return;
+// Add a function to save location history for team members
+const saveTeamMemberLocationHistory = (userId, location) => {
+  if (!userId || !location || !location.Latitude || !location.Longitude) return;
+  
+  setTeamMemberHistories(prevHistories => {
+    const userHistory = prevHistories[userId] || [];
+    // Limit history to prevent memory issues (e.g., last 50 points)
+    const newHistory = [...userHistory, {
+      latitude: location.Latitude,
+      longitude: location.Longitude,
+      timestamp: new Date().toISOString()
+    }].slice(-50);
     
-    setTeamMemberHistories(prevHistories => {
-      const userHistory = prevHistories[userId] || [];
-      // Limit history to prevent memory issues (e.g., last 50 points)
-      const newHistory = [...userHistory, {
-        latitude: location.Latitude,
-        longitude: location.Longitude,
-        timestamp: new Date().toISOString()
-      }].slice(-50);
-      
-      return {
-        ...prevHistories,
-        [userId]: newHistory
-      };
-    });
-  };
+    return {
+      ...prevHistories,
+      [userId]: newHistory
+    };
+  });
+};
 
-  // Inside the listener for usersLocations, add this to update histories
-  useEffect(() => {
-    if (usersLocations) {
-      Object.entries(usersLocations).forEach(([userId, userData]) => {
-        if (userId !== auth.currentUser?.uid && userData.Latitude && userData.Longitude) {
-          saveTeamMemberLocationHistory(userId, userData);
-        }
-      });
-    }
-  }, [usersLocations]);
+// Inside the listener for usersLocations, add this to update histories
+useEffect(() => {
+  if (usersLocations) {
+    Object.entries(usersLocations).forEach(([userId, userData]) => {
+      if (userId !== auth.currentUser?.uid && userData.Latitude && userData.Longitude) {
+        saveTeamMemberLocationHistory(userId, userData);
+      }
+    });
+  }
+}, [usersLocations]);
 
 useEffect(() => {
   const initializeApp = async () => {
@@ -1152,6 +1154,52 @@ useEffect(() => {
             setCurrentLocation(currentGpsCoordinate); 
             setGpsAccuracy(accuracy); 
             setEstimatedIconPosition(iconPositionCoordinate); // Icon uses the smoothed coordinate
+
+            // Check if user is inside or outside geofence and log transitions
+            try {
+              if (teamGeofence && teamGeofence.length >= 3) {
+                // Check if user's location is inside the geofence
+                const newIsInside = isPointInsidePolygon(currentGpsCoordinate, teamGeofence);
+                
+                // If geofence status has changed or this is the first check
+                if (lastGeofenceStatusRef.current !== null && lastGeofenceStatusRef.current !== newIsInside) {
+                  // Get user profile data for logging
+                  const auth = getAuth();
+                  if (auth.currentUser) {
+                    const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+                    const profileSnapshot = await get(userProfileRef);
+                    
+                    if (profileSnapshot.exists()) {
+                      const profileData = profileSnapshot.val();
+                      const userName = profileData.firstName 
+                        ? `${profileData.firstName} ${profileData.lastName || ''}`
+                        : 'User';
+                      
+                      if (profileData.teamCode) {
+                        // Log the geofence entry/exit event
+                        logTeamActivity(
+                          profileData.teamCode,
+                          auth.currentUser.uid,
+                          userName.trim(),
+                          'geofence',
+                          newIsInside 
+                            ? `${userName.trim()} entered the geofenced area`
+                            : `${userName.trim()} exited the geofenced area`
+                        );
+                        
+                        console.log(`User ${newIsInside ? 'ENTERED' : 'EXITED'} geofenced area`);
+                      }
+                    }
+                  }
+                }
+                
+                // Update the state and ref
+                setIsInsideGeofence(newIsInside);
+                lastGeofenceStatusRef.current = newIsInside;
+              }
+            } catch (geofenceError) {
+              console.error('Error checking geofence status:', geofenceError);
+            }
 
             // Log GPS data if logging is enabled
             if (isLoggingGps) {
@@ -2866,6 +2914,23 @@ return (
                 <Ionicons name="footsteps" size={16} color="#666" />
                 <Text style={styles.stepIndicatorText}>{realStepCount}</Text>
               </View>
+              
+              {/* Geofence status indicator */}
+              {teamGeofence && teamGeofence.length >= 3 && (
+                <View style={[
+                  styles.geofenceIndicator,
+                  isInsideGeofence ? styles.insideGeofence : styles.outsideGeofence
+                ]}>
+                  <Ionicons 
+                    name={isInsideGeofence ? "shield-checkmark" : "shield-outline"} 
+                    size={16} 
+                    color={isInsideGeofence ? "#4CD964" : "#FF3B30"} 
+                  />
+                  <Text style={styles.geofenceIndicatorText}>
+                    {isInsideGeofence ? 'In Area' : 'Outside'}
+                  </Text>
+                </View>
+              )}
             </View>
           </View>
 
@@ -3584,6 +3649,30 @@ const styles = StyleSheet.create({
     backgroundColor: "#607D8B", // Blue-gray color
     marginBottom: 8,
     width: '100%',
+  },
+  geofenceIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+    borderRadius: 16,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginLeft: 8,
+  },
+  geofenceIndicatorText: {
+    fontSize: 12,
+    marginLeft: 4,
+    fontWeight: '500',
+  },
+  insideGeofence: {
+    backgroundColor: 'rgba(76, 217, 100, 0.2)',
+    borderWidth: 1,
+    borderColor: '#4CD964',
+  },
+  outsideGeofence: {
+    backgroundColor: 'rgba(255, 59, 48, 0.2)',
+    borderWidth: 1,
+    borderColor: '#FF3B30',
   },
 });
 

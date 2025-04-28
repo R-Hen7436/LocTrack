@@ -60,7 +60,7 @@ const getLogIcon = (logType) => {
     case 'location':
       return { name: 'location-outline', color: '#007AFF' };
     case 'geofence':
-      return { name: 'radio-outline', color: '#5856D6' };
+      return { name: 'shield-checkmark-outline', color: '#5AC8FA' };
     case 'error':
       return { name: 'warning-outline', color: '#FF3B30' };
     case 'permission':
@@ -391,6 +391,7 @@ export default function Logs({ navigation }) {
           {renderFilterButton('login', 'Login')}
           {renderFilterButton('logout', 'Logout')}
           {renderFilterButton('location', 'Location')}
+          {renderFilterButton('geofence', 'Geofence')}
           {renderFilterButton('userOnline', 'Online')}
           {renderFilterButton('userOffline', 'Offline')}
           {renderFilterButton('activity', 'Activity')}
