@@ -17,6 +17,35 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const { width } = Dimensions.get('window');
 const AVERAGE_STEP_LENGTH_METERS = 0.762; // Average step length in meters
 
+// Modern Step Counter Display
+const StepCounter = ({ value = 0, title, subtitle }) => {
+  return (
+    <View style={styles.stepCounterContainer}>
+      <View style={styles.stepCounterInner}>
+        <Text style={styles.stepCounterTitle}>{title}</Text>
+        <View style={styles.stepCountValueContainer}>
+          <Text style={styles.stepCounterValue}>{value.toLocaleString()}</Text>
+          <Text style={styles.stepCounterLabel}>steps</Text>
+        </View>
+        {subtitle && <Text style={styles.stepCounterSubtitle}>{subtitle}</Text>}
+      </View>
+    </View>
+  );
+};
+
+// Stat Card Component
+const StatCard = ({ icon, value, label, color }) => {
+  return (
+    <View style={styles.statCard}>
+      <View style={[styles.statIconContainer, { backgroundColor: `${color}20` }]}>
+        <Ionicons name={icon} size={22} color={color} />
+      </View>
+      <Text style={styles.statValue}>{value}</Text>
+      <Text style={styles.statLabel}>{label}</Text>
+    </View>
+  );
+};
+
 export default function StepTracker({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [totalSteps, setTotalSteps] = useState(0);
@@ -32,9 +61,9 @@ export default function StepTracker({ navigation }) {
   const autoRefreshInterval = useRef(null);
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [estimatedDistance, setEstimatedDistance] = useState(0); // Total distance
-  const [estimatedStepsPerUpdate, setEstimatedStepsPerUpdate] = useState(0); // NEW: Avg steps per saved interval
-  const [estimatedDistancePerUpdate, setEstimatedDistancePerUpdate] = useState(0); // NEW: Avg distance per saved interval
+  const [estimatedDistance, setEstimatedDistance] = useState(0);
+  const [estimatedStepsPerUpdate, setEstimatedStepsPerUpdate] = useState(0);
+  const [estimatedDistancePerUpdate, setEstimatedDistancePerUpdate] = useState(0);
 
   useEffect(() => {
     loadStepData();
@@ -189,6 +218,7 @@ export default function StepTracker({ navigation }) {
       }
       setEstimatedStepsPerUpdate(avgStepsPerInterval);
       setEstimatedDistancePerUpdate(avgDistancePerInterval);
+      
       // Keep old avg calculation for now, or remove if redundant
       const avgStepsPerIntervalNumerator = historyLength > 0 ? totalStepsFromHistory : currentTotalSteps; 
       setAvgStepsPerUpdate(historyLength > 0 ? Math.round(avgStepsPerIntervalNumerator / historyLength) : 0);
@@ -216,20 +246,6 @@ export default function StepTracker({ navigation }) {
     }
   }, []);
   
-  // Function to start tracking - no longer needs indoor mode parameter
-  const startTracking = async () => {
-    console.log('📊 STEP VIEWER: Starting step tracking via map');
-    
-    // Navigate to map screen to start tracking
-    navigation.navigate('Home');
-    
-    Alert.alert(
-      'Step Tracking',
-      'Go to the map screen to track your steps with GPS.',
-      [{ text: 'OK' }]
-    );
-  };
-  
   const syncWithMap = async () => {
     console.log('📊 STEP VIEWER: Sync with map button pressed');
     
@@ -254,22 +270,27 @@ export default function StepTracker({ navigation }) {
     }
   };
 
+  // Get the step count to display
+  const getDisplaySteps = () => {
+    return isPedometerUsed && realTimeStepCount > 0 ? realTimeStepCount : totalSteps;
+  };
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Step Tracker</Text>
         <View style={styles.headerButtons}>
           <TouchableOpacity 
-            style={styles.syncButton}
+            style={styles.iconButton}
             onPress={syncWithMap}
           >
-            <Ionicons name="map-outline" size={24} color="#4CAF50" />
+            <Ionicons name="map-outline" size={22} color="#4CAF50" />
           </TouchableOpacity>
           <TouchableOpacity 
-            style={styles.refreshButton}
+            style={styles.iconButton}
             onPress={loadStepData}
           >
-            <Ionicons name="refresh" size={24} color="#2196F3" />
+            <Ionicons name="refresh" size={22} color="#2196F3" />
           </TouchableOpacity>
         </View>
       </View>
@@ -280,62 +301,60 @@ export default function StepTracker({ navigation }) {
           <Text style={styles.loadingText}>Loading step data...</Text>
         </View>
       ) : (
-        <ScrollView contentContainerStyle={styles.scrollContent}>
-          <View style={styles.trackingCard}>
-            <Text style={styles.trackingTitle}>GPS Step Tracking</Text>
-            <Text style={styles.trackingDescription}>
-              The app tracks your steps using GPS location data for accurate measurement
-            </Text>
-            {isPedometerUsed && (
-              <Text style={styles.pedometerStatus}>
-                Using device pedometer for accurate step counting
-              </Text>
-            )}
-          </View>
+        <ScrollView 
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Main step counter */}
+          <StepCounter
+            value={getDisplaySteps()}
+            title="Total Steps"
+            subtitle={`${estimatedDistance.toFixed(2)} km total distance`}
+          />
 
-          <View style={styles.statsCard}>
-            <View style={styles.statItem}>
-              <Ionicons name="footsteps" size={24} color="#2196F3" />
-              {isPedometerUsed && realTimeStepCount > 0 ? (
-                <>
-                  <Text style={styles.statValue}>{realTimeStepCount}</Text>
-                  <Text style={styles.statLabel}>Pedometer Steps</Text>
-                </>
-              ) : (
-                <>
-                  <Text style={styles.statValue}>{totalSteps}</Text>
-                  <Text style={styles.statLabel}>Total Steps</Text>
-                </>
-              )}
-            </View>
-            
-            <View style={styles.statItem}>
-              <Ionicons name="walk-outline" size={24} color="#4CAF50" />
-              <Text style={styles.statValue}>{estimatedDistance.toFixed(2)}</Text>
-              <Text style={styles.statLabel}>Total Dist (km)</Text>
-            </View>
-            
-            <View style={styles.statItem}>
-              <Ionicons name="sync-circle-outline" size={24} color="#FF9800" />
-              <Text style={styles.statValue}>{totalUpdates}</Text>
-              <Text style={styles.statLabel}>Updates</Text>
-            </View>
+          {/* Statistics row */}
+          <Text style={styles.sectionTitle}>Statistics</Text>
+          <View style={styles.statsRow}>
+            <StatCard 
+              icon="sync-circle-outline" 
+              value={totalUpdates} 
+              label="Updates" 
+              color="#FF9800"
+            />
+            <StatCard 
+              icon="analytics-outline" 
+              value={estimatedStepsPerUpdate} 
+              label="Steps/Update" 
+              color="#9C27B0"
+            />
+            <StatCard 
+              icon="resize-outline" 
+              value={estimatedDistancePerUpdate.toFixed(2)} 
+              label="Dist/Update (m)" 
+              color="#795548"
+            />
           </View>
           
-          {/* Add a new row/card for per-update stats */}  
-          <View style={styles.statsCard}> 
-            {/* Est. Steps Per Update */}
-            <View style={styles.statItem}>
-                <Ionicons name="analytics-outline" size={24} color="#9C27B0" />
-                <Text style={styles.statValue}>{estimatedStepsPerUpdate}</Text>
-                <Text style={styles.statLabel}>Steps/Update</Text>
+          {/* Additional stats in card format */}
+          <View style={styles.additionalStatsCard}>
+            <View style={styles.additionalStatsHeader}>
+              <Ionicons name="stats-chart" size={20} color="#4CAF50" />
+              <Text style={styles.additionalStatsTitle}>Tracking Summary</Text>
             </View>
-
-            {/* Est. Distance Per Update */}    
-            <View style={styles.statItem}>
-                <Ionicons name="resize-outline" size={24} color="#795548" /> 
-                <Text style={styles.statValue}>{estimatedDistancePerUpdate.toFixed(2)}</Text>
-                <Text style={styles.statLabel}>Dist/Update (m)</Text>
+            
+            <View style={styles.statRow}>
+              <Text style={styles.statLabel}>Max steps in one update:</Text>
+              <Text style={styles.statValue}>{maxStepsPerUpdate}</Text>
+            </View>
+            
+            <View style={styles.statRow}>
+              <Text style={styles.statLabel}>Track using:</Text>
+              <Text style={styles.statValue}>{isPedometerUsed ? 'Device pedometer' : 'GPS location'}</Text>
+            </View>
+            
+            <View style={styles.statRow}>
+              <Text style={styles.statLabel}>Daily average:</Text>
+              <Text style={styles.statValue}>{Math.round(totalSteps / (totalUpdates || 1))} steps</Text>
             </View>
           </View>
           
@@ -359,26 +378,29 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 16,
     backgroundColor: 'white',
     borderBottomWidth: 1,
     borderBottomColor: '#EEEEEE',
+    elevation: 2,
   },
   title: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: 'bold',
     color: '#333',
   },
   headerButtons: {
     flexDirection: 'row',
   },
-  refreshButton: {
-    padding: 8,
-  },
-  syncButton: {
-    padding: 8,
-    marginRight: 8,
+  iconButton: {
+    height: 40,
+    width: 40,
+    borderRadius: 20,
+    backgroundColor: '#F5F5F5',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 10,
   },
   loadingContainer: {
     flex: 1,
@@ -391,69 +413,134 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   scrollContent: {
-    padding: 16,
+    padding: 20,
+    paddingBottom: 40,
   },
-  statsCard: {
-    flexDirection: 'row',
+  stepCounterContainer: {
     backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 16,
+    borderRadius: 16,
+    padding: 4,
+    marginBottom: 24,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 2,
-    marginBottom: 6,
+    shadowRadius: 8,
+    elevation: 4,
+    overflow: 'hidden',
   },
-  trackingCard: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 2,
-    marginBottom: 16,
-  },
-  trackingTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  trackingDescription: {
-    fontSize: 12,
-    color: '#666',
-    marginTop: 4,
-    maxWidth: width * 0.9,
-  },
-  pedometerStatus: {
-    fontSize: 11,
-    color: '#00796B',
-    marginTop: 4,
-    fontStyle: 'italic',
-  },
-  lastRefreshText: {
-    textAlign: 'right',
-    color: '#888',
-    fontSize: 12,
-    marginBottom: 16,
-    fontStyle: 'italic',
-  },
-  statItem: {
-    flex: 1,
+  stepCounterInner: {
+    padding: 20,
     alignItems: 'center',
     justifyContent: 'center',
+    borderRadius: 12,
+    borderWidth: 0,
+    backgroundColor: 'white',
+  },
+  stepCounterTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  stepCountValueContainer: {
+    alignItems: 'center',
+  },
+  stepCounterValue: {
+    fontSize: 54,
+    fontWeight: 'bold',
+    color: '#2196F3',
+    letterSpacing: -1,
+  },
+  stepCounterLabel: {
+    fontSize: 18,
+    fontWeight: '500',
+    color: '#2196F3',
+    opacity: 0.8,
+    marginTop: 0,
+  },
+  stepCounterSubtitle: {
+    fontSize: 14,
+    color: '#757575',
+    marginTop: 12,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#424242',
+    marginBottom: 16,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 24,
+  },
+  statCard: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 16,
+    width: '31%',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    elevation: 2,
+  },
+  statIconContainer: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
   },
   statValue: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: 'bold',
     color: '#333',
-    marginTop: 8,
+    marginVertical: 4,
   },
   statLabel: {
     fontSize: 12,
-    color: '#666',
-    marginTop: 4,
+    color: '#757575',
+    textAlign: 'center',
+  },
+  additionalStatsCard: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  additionalStatsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  additionalStatsTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginLeft: 8,
+  },
+  statRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  lastRefreshText: {
+    textAlign: 'center',
+    color: '#9E9E9E',
+    fontSize: 12,
+    marginTop: 8,
+    fontStyle: 'italic',
   }
 }); 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 
@@ -8,87 +8,105 @@ const BottomTabBar = ({ activeRoute }) => {
 
   return (
     <View style={styles.container}>
-      <TouchableOpacity 
-        style={[styles.tabItem, activeRoute === 'maps' && styles.activeTab]} 
-        onPress={() => navigation.navigate('LocTrack')}
-      >
-        <Ionicons 
-          name={activeRoute === 'maps' ? 'map' : 'map-outline'} 
-          size={24} 
-          color={activeRoute === 'maps' ? '#2196F3' : '#555'} 
-        />
-        <Text style={[styles.tabText, activeRoute === 'maps' && styles.activeTabText]}>Map</Text>
-      </TouchableOpacity>
+      <View style={styles.tabBarContainer}>
+        <TouchableOpacity 
+          style={[styles.tabItem, activeRoute === 'maps' && styles.activeTab]} 
+          onPress={() => navigation.navigate('LocTrack')}
+        >
+          <View style={activeRoute === 'maps' ? styles.iconBackground : null}>
+            <Ionicons 
+              name={activeRoute === 'maps' ? 'map' : 'map-outline'} 
+              size={24} 
+              color={activeRoute === 'maps' ? '#FFFFFF' : '#555'} 
+            />
+          </View>
+          <Text style={[styles.tabText, activeRoute === 'maps' && styles.activeTabText]}>Map</Text>
+        </TouchableOpacity>
 
-      <TouchableOpacity 
-        style={[styles.tabItem, activeRoute === 'steps' && styles.activeTab]} 
-        onPress={() => navigation.navigate('StepTracker')}
-      >
-        <Ionicons 
-          name={activeRoute === 'steps' ? 'footsteps' : 'footsteps-outline'} 
-          size={24} 
-          color={activeRoute === 'steps' ? '#8E44AD' : '#555'} 
-        />
-        <Text style={[styles.tabText, activeRoute === 'steps' && styles.activeTabText]}>Steps</Text>
-      </TouchableOpacity>
+        <TouchableOpacity 
+          style={[styles.tabItem, activeRoute === 'steps' && styles.activeTab]} 
+          onPress={() => navigation.navigate('StepTracker')}
+        >
+          <View style={activeRoute === 'steps' ? styles.iconBackground : null}>
+            <Ionicons 
+              name={activeRoute === 'steps' ? 'footsteps' : 'footsteps-outline'} 
+              size={24} 
+              color={activeRoute === 'steps' ? '#FFFFFF' : '#555'} 
+            />
+          </View>
+          <Text style={[styles.tabText, activeRoute === 'steps' && styles.activeTabText]}>Steps</Text>
+        </TouchableOpacity>
 
-      <TouchableOpacity 
-        style={[styles.tabItem, activeRoute === 'profile' && styles.activeTab]} 
-        onPress={() => navigation.navigate('Profile')}
-      >
-        <Ionicons 
-          name={activeRoute === 'profile' ? 'person' : 'person-outline'} 
-          size={24} 
-          color={activeRoute === 'profile' ? '#4CAF50' : '#555'} 
-        />
-        <Text style={[styles.tabText, activeRoute === 'profile' && styles.activeTabText]}>Profile</Text>
-      </TouchableOpacity>
+        <TouchableOpacity 
+          style={[styles.tabItem, activeRoute === 'profile' && styles.activeTab]} 
+          onPress={() => navigation.navigate('Profile')}
+        >
+          <View style={activeRoute === 'profile' ? styles.iconBackground : null}>
+            <Ionicons 
+              name={activeRoute === 'profile' ? 'person' : 'person-outline'} 
+              size={24} 
+              color={activeRoute === 'profile' ? '#FFFFFF' : '#555'} 
+            />
+          </View>
+          <Text style={[styles.tabText, activeRoute === 'profile' && styles.activeTabText]}>Profile</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
+    position: 'absolute',
+    bottom: 20,
+    left: 20,
+    right: 20,
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  tabBarContainer: {
     flexDirection: 'row',
     backgroundColor: '#FFFFFF',
-    borderTopWidth: 1,
-    borderTopColor: '#E0E0E0',
+    borderRadius: 30,
     height: 60,
-    paddingBottom: 5,
+    width: '100%',
     justifyContent: 'space-around',
     alignItems: 'center',
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    zIndex: 10,
+    paddingHorizontal: 15,
     shadowColor: "#000",
     shadowOffset: {
       width: 0,
-      height: -3,
+      height: 4,
     },
-    shadowOpacity: 0.1,
-    shadowRadius: 4.65,
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
     elevation: 8,
   },
   tabItem: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 5,
+    paddingVertical: 8,
+  },
+  iconBackground: {
+    backgroundColor: '#766AC8',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 4,
   },
   activeTab: {
-    borderTopWidth: 3,
-    borderTopColor: '#2196F3',
-    paddingTop: 2,
+    transform: [{translateY: -2}],
   },
   tabText: {
     fontSize: 12,
     color: '#555',
-    marginTop: 2,
+    marginTop: 0,
   },
   activeTabText: {
-    color: '#2196F3',
+    color: '#766AC8',
     fontWeight: '600',
   }
 });
