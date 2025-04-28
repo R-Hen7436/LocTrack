@@ -2332,14 +2332,58 @@ const toggleGpsLogging = () => {
 
 return (
     <SafeAreaView style={[styles.container, { paddingTop: 0 }]}>
+      {/* Ensure this block is removed */}
+      {/* 
       <View style={[styles.topLeftIndicators, { top: insets.top + 10 }]}>
-    {gpsAccuracy !== null && <GPSStrengthIndicator accuracy={gpsAccuracy} />}
-
+        {gpsAccuracy !== null && <GPSStrengthIndicator accuracy={gpsAccuracy} />}
         <View style={styles.stepIndicator}>
           <Ionicons name="footsteps" size={16} color="#666" />
           <Text style={styles.stepIndicatorText}>{realStepCount}</Text>
         </View>
       </View>
+      */}
+
+      {/* GPS Logging Button / Notch Area - Moved to top center */}
+      <TouchableOpacity 
+        style={[styles.gpsLogButtonBase, isLoggingGps ? styles.gpsLogButtonActiveNotch : styles.gpsLogButtonInactive, { top: insets.top + 10 }]} 
+        onPress={toggleGpsLogging}
+      >
+        {isLoggingGps ? (
+          <View style={styles.notchContentContainer}>
+            <Text style={styles.notchText}>
+              Recording: {gpsLogData.raw.length} pts
+            </Text>
+            <View style={styles.notchStatusSeparator} />
+            <Text style={styles.notchText}>
+              {isUserMoving ? '🚶 Walking' : '🧍 Stationary'}
+            </Text>
+          </View>
+        ) : (
+          <>
+            <MaterialIcons 
+              name="data-usage" 
+              size={20} 
+              color="white" 
+            />
+            <Text style={styles.gpsLogButtonText}>
+              Start GPS Log
+            </Text>
+          </>
+        )}
+      </TouchableOpacity>
+
+      {/* Export Button - Positioned below the log button/notch */}
+      {gpsLogData.raw.length > 0 && (
+        <TouchableOpacity 
+          style={[styles.exportGpsButton, { top: insets.top + (isLoggingGps ? 55 : 65) }]} // Adjust top based on notch/button height
+          onPress={exportGpsLogData}
+        >
+          <MaterialIcons name="save-alt" size={20} color="white" />
+          <Text style={styles.exportGpsButtonText}>
+            Export Data
+          </Text>
+        </TouchableOpacity>
+      )}
 
     <MapView 
       ref={mapRef} 
@@ -2606,156 +2650,24 @@ return (
           }} />
         </Marker>
       ))}
-      
-      {/* GPS Data Logging Buttons */}
-      <TouchableOpacity 
-        style={{
-          position: 'absolute',
-          top: insets.top + 120,
-          left: 20,
-          backgroundColor: isLoggingGps ? '#ff6347' : '#4682b4',
-          borderRadius: 30,
-          paddingVertical: 10,
-          paddingHorizontal: 15,
-          flexDirection: 'row',
-          alignItems: 'center',
-          elevation: 5,
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.3,
-          shadowRadius: 3,
-        }}
-        onPress={toggleGpsLogging}
-      >
-        <MaterialIcons 
-          name={isLoggingGps ? "stop-circle" : "data-usage"} 
-          size={24} 
-          color="white" 
-        />
-        <Text style={{ color: 'white', marginLeft: 5, fontWeight: 'bold' }}>
-          {isLoggingGps ? "Stop Logging" : "Start GPS Log"}
-        </Text>
-      </TouchableOpacity>
-      
-      {(isLoggingGps || gpsLogData.raw.length > 0) && (
-        <TouchableOpacity 
-          style={{
-            position: 'absolute',
-            top: insets.top + 180,
-            left: 20,
-            backgroundColor: '#32cd32',
-            borderRadius: 30,
-            paddingVertical: 10,
-            paddingHorizontal: 15,
-            flexDirection: 'row',
-            alignItems: 'center',
-            elevation: 5,
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: 0.3,
-            shadowRadius: 3,
-          }}
-          onPress={exportGpsLogData}
-        >
-          <MaterialIcons name="save-alt" size={24} color="white" />
-          <Text style={{ color: 'white', marginLeft: 5, fontWeight: 'bold' }}>
-            Export GPS Data
-          </Text>
-        </TouchableOpacity>
-      )}
-      
-      {/* Logging status indicator */}
-      {isLoggingGps && (
-        <View style={{
-          position: 'absolute',
-          top: insets.top + 60,
-          left: 10,
-          right: 10,
-          backgroundColor: 'rgba(0, 0, 0, 0.7)',
-          borderRadius: 10,
-          padding: 8,
-          flexDirection: 'row',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}>
-          <Text style={{ color: 'white', fontWeight: 'bold' }}>
-            Recording GPS Data: {gpsLogData.raw.length} points
-          </Text>
-          <Text style={{ color: 'white', fontWeight: 'bold' }}>
-            {isUserMoving ? '🚶 Walking' : '🧍 Stationary'}
-          </Text>
-        </View>
-      )}
-      
-      {/* Debug Button - Only visible during development */}
-      <TouchableOpacity
-        style={{
-          position: 'absolute',
-          bottom: 250,
-          right: 20,
-          backgroundColor: 'rgba(0,0,0,0.7)',
-          borderRadius: 30,
-          padding: 10,
-          elevation: 5,
-        }}
-        onPress={() => {
-          console.log(`🧪 DEBUG: LocationHistory has ${locationHistory.length} points`);
-          if (locationHistory.length > 0) {
-            console.log(`🧪 First Point: Lat=${locationHistory[0].latitude.toFixed(8)}, Lon=${locationHistory[0].longitude.toFixed(8)}`);
-            console.log(`🧪 Last Point: Lat=${locationHistory[locationHistory.length-1].latitude.toFixed(8)}, Lon=${locationHistory[locationHistory.length-1].longitude.toFixed(8)}`);
-          }
-          
-          // Show alert with locationHistory info
-          Alert.alert(
-            "LocationHistory Debug",
-            `Points: ${locationHistory.length}\n` +
-            (locationHistory.length > 0 ? 
-              `First: ${locationHistory[0].latitude.toFixed(8)}, ${locationHistory[0].longitude.toFixed(8)}\n` +
-              `Last: ${locationHistory[locationHistory.length-1].latitude.toFixed(8)}, ${locationHistory[locationHistory.length-1].longitude.toFixed(8)}` : 
-              "No points yet")
-          );
-        }}
-      >
-        <Text style={{ color: 'white', fontWeight: 'bold' }}>INFO</Text>
-      </TouchableOpacity>
-      
-      {/* Debug Mode Toggle Button */}
-      <TouchableOpacity
-        style={{
-          position: 'absolute',
-          bottom: 250,
-          right: 80, // Position to the left of the INFO button
-          backgroundColor: debugMode ? 'rgba(255,0,0,0.7)' : 'rgba(0,0,0,0.7)',
-          borderRadius: 30,
-          padding: 10,
-          elevation: 5,
-        }}
-        onPress={() => {
-          const newDebugMode = !debugMode;
-          setDebugMode(newDebugMode);
-          console.log(`🐞 DEBUG MODE: ${newDebugMode ? 'ON' : 'OFF'}`);
-          
-          // Show alert
-          Alert.alert(
-            "Debug Mode",
-            `Debug Mode is now ${newDebugMode ? 'ON' : 'OFF'}\n` +
-            (newDebugMode ? 
-              "All location updates will be added to history regardless of movement." : 
-              "Normal filtering applied.")
-          );
-        }}
-      >
-        <Text style={{ color: 'white', fontWeight: 'bold' }}>
-          {debugMode ? 'DEBUG ON' : 'DEBUG OFF'}
-        </Text>
-      </TouchableOpacity>
     </MapView>
 
     <View style={styles.toolbarContainer}>
       {userRole !== 'member' ? (
         <>
-          <View style={styles.pointsIndicator}>
-            <Text style={styles.pointsText}>Number of Geofenced Points: {points.length}</Text>
+          {/* Wrap indicators in a row */}
+          <View style={styles.indicatorRow}>
+            <View style={styles.pointsIndicator}>
+              <Text style={styles.pointsText}>Number of Geofenced Points: {points.length}</Text>
+            </View>
+            {/* Move indicators here */}
+            <View style={styles.bottomIndicatorsContainer}>
+              {gpsAccuracy !== null && <GPSStrengthIndicator accuracy={gpsAccuracy} />}
+              <View style={styles.stepIndicator}>
+                <Ionicons name="footsteps" size={16} color="#666" />
+                <Text style={styles.stepIndicatorText}>{realStepCount}</Text>
+              </View>
+            </View>
           </View>
 
           <View style={styles.buttonContainer}>
@@ -2971,6 +2883,16 @@ return (
         </>
       ) : (
         <>
+          {/* Add indicators for members here */}
+          <View style={styles.indicatorRow}>
+             <View style={styles.bottomIndicatorsContainer}>
+              {gpsAccuracy !== null && <GPSStrengthIndicator accuracy={gpsAccuracy} />}
+              <View style={styles.stepIndicator}>
+                <Ionicons name="footsteps" size={16} color="#666" />
+                <Text style={styles.stepIndicatorText}>{realStepCount}</Text>
+              </View>
+            </View>
+          </View>
           <View style={styles.memberMessage}>
             <Text style={styles.memberText}>Member View - Location tracking active</Text>
           </View>
@@ -3293,14 +3215,6 @@ const styles = StyleSheet.create({
     marginTop: 5, // Reduced margin
     width: '100%',
   },
-  topLeftIndicators: {
-    position: 'absolute',
-    left: 15,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    zIndex: 10,
-  },
   stepIndicator: {
     backgroundColor: 'rgba(255, 255, 255, 0.9)',
     paddingHorizontal: 8,
@@ -3363,6 +3277,108 @@ const styles = StyleSheet.create({
     color: 'white',
     marginLeft: 5,
     fontWeight: 'bold',
+  },
+  indicatorRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between', // Space out points indicator and the other two
+    alignItems: 'center',
+    marginBottom: 10, // Add some space below the indicators
+    width: '100%', // Ensure it takes full width
+  },
+  bottomIndicatorsContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10, // Space between GPS and Steps indicator
+    justifyContent: 'flex-end', // Align indicators to the right if pointsIndicator is not there
+  },
+  // Adjust pointsIndicator margin if needed (removed marginBottom)
+  pointsIndicator: {
+    backgroundColor: 'rgba(33, 150, 243, 0.1)',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    // marginBottom: 10, // Removed margin, handled by indicatorRow
+    alignSelf: 'flex-start', // Keep it aligned left
+  },
+  // Styles for the new top-center GPS Log button/notch
+  gpsLogButtonBase: {
+    position: 'absolute',
+    left: '50%', // Center horizontally
+    transform: [{ translateX: -100 }], // Adjust translateX to half of the width for centering
+    zIndex: 1001, // Ensure it's above the map
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 25,
+    paddingVertical: 8,
+    paddingHorizontal: 15,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+  },
+  gpsLogButtonInactive: {
+    width: 200, // Fixed width for centering
+    backgroundColor: '#4682b4',
+    gap: 8,
+  },
+  gpsLogButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 14,
+  },
+  gpsLogButtonActiveNotch: {
+    width: 250, // Wider for notch style
+    transform: [{ translateX: -125 }], // Adjust translateX for wider width
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+    paddingVertical: 6, // Slightly less padding
+    justifyContent: 'space-around', // Space out content
+  },
+  notchContentContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+  },
+  notchText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
+    flexShrink: 1, // Allow text to shrink if needed
+    marginHorizontal: 5, // Add some horizontal margin
+  },
+  notchStatusSeparator: {
+    width: 1,
+    height: '60%',
+    backgroundColor: 'rgba(255, 255, 255, 0.5)',
+    marginHorizontal: 8,
+  },
+  exportGpsButton: {
+    position: 'absolute',
+    left: '50%',
+    transform: [{ translateX: -75 }], // Half of width 150
+    width: 150, // Fixed width for export button
+    backgroundColor: '#32cd32',
+    borderRadius: 20,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.25,
+    shadowRadius: 2,
+    zIndex: 1000, // Below the main log button
+    gap: 5,
+  },
+  exportGpsButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 13,
   },
 });
 
