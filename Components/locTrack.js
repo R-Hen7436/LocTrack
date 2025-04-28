@@ -18,6 +18,8 @@ import { Pedometer } from 'expo-sensors';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { MaterialIcons } from '@expo/vector-icons';
+// **** ADD FIREBASE SERVER TIMESTAMP ****
+import { serverTimestamp } from "firebase/database"; 
 
 /**
  * Simple implementation of a Kalman filter for 2D location data
@@ -498,6 +500,9 @@ const [trackViewChanges, setTrackViewChanges] = useState(false);
 
   // Add this state variable at the top of your component (in the App function)
   const [debugMode, setDebugMode] = useState(false);
+
+  // **** ADD REF FOR PREVIOUS LOCATIONS ****
+  const previousUsersLocationsRef = useRef({});
 
   // Add a function to save location history for team members
   const saveTeamMemberLocationHistory = (userId, location) => {
@@ -1600,7 +1605,66 @@ useEffect(() => {
               // Log after fetchUserProfiles completes and *before* setting state
               console.log(`Setting ${Object.keys(finalFormattedLocations).length} user locations (including offline users)`);
               console.log('usersLocations state content (inside .then):', JSON.stringify(finalFormattedLocations, null, 2)); // <-- Log the correct object
+              
+              // **** COMPARE WITH PREVIOUS STATE AND LOG CHANGES ****
+              const previousLocations = previousUsersLocationsRef.current;
+              const currentUid = auth.currentUser?.uid;
+              // Use this one variable for the team code
+              const teamCodeForLogging = finalFormattedLocations[currentUid]?.teamCode; 
+              
+              // Check if we have a team code before proceeding
+              if (teamCodeForLogging) { 
+                Object.keys(finalFormattedLocations).forEach(userId => {
+                  if (userId === currentUid) return; // Don't log changes for the current user
+                  
+                  const currentUserData = finalFormattedLocations[userId];
+                  const previousUserData = previousLocations[userId];
+                  
+                  const currentStatus = currentUserData.presence?.status;
+                  const previousStatus = previousUserData?.presence?.status;
+                  const userName = currentUserData.name || userId;
+                  
+                  // Check for status changes (online/offline)
+                  if (currentStatus !== previousStatus) {
+                    if (currentStatus === 'online' && previousStatus !== 'online') {
+                      // Log user online event
+                      logTeamActivity(
+                        teamCodeForLogging, // Use the variable defined outside the loop
+                        userId,
+                        userName,
+                        'userOnline',
+                        `${userName} came online.`
+                      );
+                    } else if (currentStatus === 'offline' && previousStatus === 'online') {
+                      // Log user offline event
+                      logTeamActivity(
+                        teamCodeForLogging, // Use the variable defined outside the loop
+                        userId,
+                        userName,
+                        'userOffline',
+                        `${userName} went offline.`
+                      );
+                    } else if (!previousStatus && currentStatus === 'online') {
+                      // User appeared online (first time seen or came back)
+                       logTeamActivity(
+                        teamCodeForLogging, // Use the variable defined outside the loop
+                        userId,
+                        userName,
+                        'userOnline',
+                        `${userName} appeared online.`
+                      );
+                    }
+                    // Add other specific change logging here if needed (e.g., location update)
+                  }
+                });
+              }
+              // **** END COMPARISON ****
+
               setUsersLocations(finalFormattedLocations); // <-- Set state with the correct object
+              
+              // **** UPDATE PREVIOUS STATE REF ****
+              previousUsersLocationsRef.current = finalFormattedLocations;
+              
             }).catch(error => {
                 console.error("Error in fetchUserProfiles promise chain:", error);
             });
@@ -2330,6 +2394,65 @@ const toggleGpsLogging = () => {
   });
 };
 
+// **** ADD ACTIVITY LOGGING FUNCTION ****
+const logTeamActivity = async (teamCode, userId, userName, eventType, message) => {
+  if (!teamCode || !userId || !eventType) return;
+  
+  try {
+    const logRef = ref(db, `teams/${teamCode}/activityLog`);
+    const newLogEntryRef = push(logRef); // Get a unique key
+    
+    const logEntry = {
+      timestamp: serverTimestamp(), // Use server time for accuracy
+      userId: userId,
+      userName: userName || 'Unknown User',
+      eventType: eventType, // e.g., 'userOnline', 'userOffline'
+      message: message || `User ${userName || userId} status changed.`
+    };
+    
+    await set(newLogEntryRef, logEntry).catch(logError => { // Add specific catch for the set operation
+      console.error(`ACTIVITY LOG ERROR: Firebase set failed for event '${eventType}' user ${userId}:`, logError);
+    });
+    console.log(`ACTIVITY LOG: Event '${eventType}' for user ${userName || userId} logged to team ${teamCode}.`);
+  } catch (error) {
+    console.error(`ACTIVITY LOG ERROR: Failed to log event '${eventType}' for user ${userId}:`, error);
+  }
+};
+
+useEffect(() => {
+  const loadTeamGeofence = async () => {
+    if (!auth.currentUser || userRole !== 'member') return;
+    
+    try {
+      const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+      const profileSnapshot = await get(userProfileRef);
+      const teamCode = profileSnapshot.val()?.teamCode;
+      
+      if (teamCode) {
+        // Use team-specific geofence path instead of the general one
+        const geofenceRef = ref(db, `teams/${teamCode}/geofence/coordinates`);
+        const geofenceSnapshot = await get(geofenceRef);
+        
+        if (geofenceSnapshot.exists()) {
+          console.log(`Loaded team-specific geofence for team ${teamCode}`);
+          setTeamGeofence(geofenceSnapshot.val());
+        } else {
+          console.log(`No geofence found for team ${teamCode}`);
+          setTeamGeofence([]);
+        }
+      } else {
+        console.log("User does not have a team code, cannot load geofence");
+        setTeamGeofence([]);
+      }
+    } catch (error) {
+      console.error("Error loading team geofence:", error);
+      setTeamGeofence([]);
+    }
+  };
+
+  loadTeamGeofence();
+}, [userRole]);
+
 return (
     <SafeAreaView style={[styles.container, { paddingTop: 0 }]}>
       {/* Ensure this block is removed */}
@@ -2671,14 +2794,15 @@ return (
           </View>
 
           <View style={styles.buttonContainer}>
-              <TouchableOpacity 
-                style={[
-                  styles.button,
-                  styles.buttonSecondary, 
-                  (isFetchingLocation || isRemovingLocation) && styles.disabledButton,
-                  currentLocation && styles.buttonActive
-                ]}
-                onPress={async () => {
+            
+            <TouchableOpacity 
+              style={[
+                styles.button,
+                styles.buttonSecondary, 
+                (isFetchingLocation || isRemovingLocation) && styles.disabledButton,
+                currentLocation && styles.buttonActive
+              ]}
+              onPress={async () => {
                   if (isFetchingLocation || isRemovingLocation) return; // Prevent double-clicks
                   
                   if (currentLocation) {
@@ -3379,6 +3503,11 @@ const styles = StyleSheet.create({
     color: 'white',
     fontWeight: 'bold',
     fontSize: 13,
+  },
+  logsButton: {
+    backgroundColor: "#607D8B", // Blue-gray color
+    marginBottom: 8,
+    width: '100%',
   },
 });
 

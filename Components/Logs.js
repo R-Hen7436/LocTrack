@@ -8,6 +8,37 @@ import Navbar from './Navbar';
 const formatTimestamp = (timestamp) => {
   if (!timestamp) return 'Unknown';
   
+  // Handle Firebase server timestamps which might be objects
+  if (typeof timestamp === 'object' && timestamp !== null) {
+    // For server timestamps
+    if (timestamp.seconds) {
+      const date = new Date(timestamp.seconds * 1000);
+      return date.toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true
+      });
+    }
+    
+    // If it's a different kind of object with a toDate() method (Firestore Timestamp)
+    if (typeof timestamp.toDate === 'function') {
+      const date = timestamp.toDate();
+      return date.toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true
+      });
+    }
+  }
+  
   const date = new Date(timestamp);
   return date.toLocaleString('en-US', {
     month: 'short',
@@ -36,6 +67,12 @@ const getLogIcon = (logType) => {
       return { name: 'key-outline', color: '#FF9500' };
     case 'system':
       return { name: 'cog-outline', color: '#8E8E93' };
+    case 'userOnline':
+      return { name: 'person-add-outline', color: '#4CD964' };
+    case 'userOffline':
+      return { name: 'person-remove-outline', color: '#FF9500' };
+    case 'activity':
+      return { name: 'pulse-outline', color: '#007AFF' };
     default:
       return { name: 'information-circle-outline', color: '#8E8E93' };
   }
@@ -86,10 +123,88 @@ export default function Logs({ navigation }) {
       
       // Different queries based on role
       if (userData.role === 'owner' || userData.role === 'admin') {
-        // Load team logs
+        // Load team logs & activity logs
         if (userData.teamCode) {
-          // Use simple ref without orderByChild to avoid indexing error
-          logsRef = ref(db, `logs/teams/${userData.teamCode}`);
+          try {
+            // First try to fetch from the activityLog path where our new logs are stored
+            const activityLogRef = ref(db, `teams/${userData.teamCode}/activityLog`);
+            const activitySnapshot = await get(activityLogRef);
+            
+            if (activitySnapshot.exists()) {
+              let activityLogs = [];
+              activitySnapshot.forEach((childSnapshot) => {
+                const log = {
+                  id: childSnapshot.key,
+                  type: childSnapshot.val().eventType || 'activity',
+                  message: childSnapshot.val().message,
+                  timestamp: childSnapshot.val().timestamp,
+                  userId: childSnapshot.val().userId,
+                  userDisplayName: childSnapshot.val().userName,
+                  details: null
+                };
+                // Apply filter
+                if (filter === 'all' || log.type === filter) {
+                  activityLogs.push(log);
+                }
+              });
+              
+              // If we have activity logs, use them
+              if (activityLogs.length > 0) {
+                // Client-side sorting (newest first)
+                activityLogs.sort((a, b) => {
+                  // Handle server timestamps which might be objects with .seconds property
+                  const getTime = (timestamp) => {
+                    if (timestamp && typeof timestamp === 'object' && timestamp.seconds) {
+                      return timestamp.seconds * 1000;
+                    }
+                    return timestamp || 0;
+                  };
+                  return getTime(b.timestamp) - getTime(a.timestamp);
+                });
+                
+                // Apply pagination logic
+                if (isLoadMore && lastLoadedTimestamp) {
+                  // Find the index of the last loaded log
+                  const lastIndex = activityLogs.findIndex(log => log.timestamp === lastLoadedTimestamp);
+                  if (lastIndex !== -1 && lastIndex + 1 < activityLogs.length) {
+                    // Get the next batch after the last loaded log
+                    activityLogs = activityLogs.slice(lastIndex + 1, lastIndex + 1 + limit);
+                  } else {
+                    setNoMoreLogs(true);
+                    activityLogs = [];
+                  }
+                } else {
+                  activityLogs = activityLogs.slice(0, limit);
+                }
+                
+                if (activityLogs.length < limit) {
+                  setNoMoreLogs(true);
+                }
+                
+                if (isLoadMore) {
+                  setLogs(prevLogs => [...prevLogs, ...activityLogs]);
+                } else {
+                  setLogs(activityLogs);
+                }
+                
+                if (activityLogs.length > 0) {
+                  const oldestLog = activityLogs[activityLogs.length - 1];
+                  setLastLoadedTimestamp(oldestLog.timestamp);
+                }
+                
+                setLoading(false);
+                setLoadingMore(false);
+                return; // Exit early since we've handled the logs
+              }
+            }
+            
+            // If no activity logs found, fall back to traditional logs
+            logsRef = ref(db, `logs/teams/${userData.teamCode}`);
+          } catch (error) {
+            console.error('Error loading activity logs:', error);
+            // Fall back to traditional logs
+            logsRef = ref(db, `logs/teams/${userData.teamCode}`);
+          }
         }
       } else {
         // Regular user only sees their own logs
@@ -274,9 +389,12 @@ export default function Logs({ navigation }) {
         <View style={styles.filterContainer}>
           {renderFilterButton('all', 'All')}
           {renderFilterButton('login', 'Login')}
+          {renderFilterButton('logout', 'Logout')}
           {renderFilterButton('location', 'Location')}
-          {renderFilterButton('geofence', 'Geofence')}
-          {renderFilterButton('error', 'Errors')}
+          {renderFilterButton('userOnline', 'Online')}
+          {renderFilterButton('userOffline', 'Offline')}
+          {renderFilterButton('activity', 'Activity')}
+          {renderFilterButton('system', 'System')}
         </View>
         
         {loading ? (
