@@ -2841,8 +2841,8 @@ return (
                     {
                       latitude: currentLocation.latitude,
                       longitude: currentLocation.longitude,
-                      latitudeDelta: 0.01, // Adjust zoom level as needed
-                      longitudeDelta: 0.01,
+                      latitudeDelta: 0.001, // Zoom in much closer
+                      longitudeDelta: 0.001, // Zoom in much closer
                     },
                     1000 // Animation duration in ms
                   );
@@ -2983,8 +2983,8 @@ return (
                     {
                       latitude: currentLocation.latitude,
                       longitude: currentLocation.longitude,
-                      latitudeDelta: 0.01, // Adjust zoom level as needed
-                      longitudeDelta: 0.01,
+                      latitudeDelta: 0.001, // Zoom in much closer
+                      longitudeDelta: 0.001, // Zoom in much closer
                     },
                     1000 // Animation duration in ms
                   );
@@ -3036,7 +3036,7 @@ const styles = StyleSheet.create({
     right: 20,
     backgroundColor: 'rgba(255, 255, 255, 0.95)',
     borderRadius: 20,
-    padding: 15,
+    padding: 10, // Reduced padding
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
@@ -3063,7 +3063,7 @@ const styles = StyleSheet.create({
   button: {
     flex: 1,
     backgroundColor: "#2196F3",
-    paddingVertical: 12,
+    paddingVertical: 8, // Reduced vertical padding
     paddingHorizontal: 20,
     borderRadius: 10,
     alignItems: 'center',
@@ -3080,7 +3080,7 @@ const styles = StyleSheet.create({
   buttonText: {
     color: "#FFFFFF",
     fontWeight: "600",
-    fontSize: 16,
+    fontSize: 14, // Reduced font size
   },
   logoutButton: {
     position: 'absolute',
@@ -3223,12 +3223,12 @@ const styles = StyleSheet.create({
     backgroundColor: "#2196F3",
   },
   memberCenterButton: {
-    marginTop: 10,
+    marginTop: 5, // Reduced margin
     width: '100%',
   },
   resetButton: {
     backgroundColor: "#FF5722",
-    marginTop: 10,
+    marginTop: 5, // Reduced margin
     width: '100%',
   },
   currentUserMarkerContainer: {
@@ -3290,7 +3290,7 @@ const styles = StyleSheet.create({
   },
   stepTrackerButton: {
     backgroundColor: "#8E44AD",
-    marginTop: 10,
+    marginTop: 5, // Reduced margin
     width: '100%',
   },
   topLeftIndicators: {
@@ -3336,7 +3336,7 @@ const styles = StyleSheet.create({
   },
   resetTestingButton: {
     backgroundColor: "#FF5722", // Orange color to indicate a testing/dev feature
-    marginTop: 10,
+    marginTop: 5, // Reduced margin
     width: '100%',
     borderStyle: 'dashed',
     borderWidth: 1,
