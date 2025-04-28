@@ -152,11 +152,63 @@ export default function UserManagement({ navigation }) {
       const db = getDatabase();
       const locationsRef = ref(db, 'UsersCurrentLocation');
       
-      return onValue(locationsRef, (snapshot) => {
+      return onValue(locationsRef, async (snapshot) => {
         if (snapshot.exists()) {
           const locationsData = snapshot.val();
           console.log('User locations updated:', Object.keys(locationsData).length);
-          setMembersLocations(locationsData);
+          
+          // Get current user's team code
+          const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+          const userSnapshot = await get(userProfileRef);
+          
+          if (userSnapshot.exists()) {
+            const userData = userSnapshot.val();
+            const userTeamCode = userData.teamCode;
+            console.log(`Current user team code: ${userTeamCode}`);
+            
+            // Only include members from the same team
+            const filteredLocations = {};
+            
+            // First determine which users are in the same team
+            for (const userId in locationsData) {
+              if (userId === auth.currentUser.uid) continue; // Skip current user
+              
+              try {
+                const memberProfileRef = ref(db, `users/${userId}/profile`);
+                const memberSnapshot = await get(memberProfileRef);
+                
+                if (memberSnapshot.exists()) {
+                  const memberData = memberSnapshot.val();
+                  const memberTeamCode = memberData.teamCode;
+                  
+                  // Only include users with matching team code
+                  if (memberTeamCode === userTeamCode) {
+                    // Get presence status for this user
+                    const presenceRef = ref(db, `users/${userId}/presence`);
+                    const presenceSnapshot = await get(presenceRef);
+                    const presenceData = presenceSnapshot.exists() ? presenceSnapshot.val() : { status: 'offline' };
+                    
+                    // Always include location data for team members regardless of presence status
+                    filteredLocations[userId] = {
+                      ...locationsData[userId],
+                      presence: presenceData // Include presence data
+                    };
+                    
+                    console.log(`Added user ${userId} to visible members (team ${memberTeamCode}), status: ${presenceData.status}`);
+                  } else {
+                    console.log(`Skipped user ${userId} - different team (${memberTeamCode} vs ${userTeamCode})`);
+                  }
+                }
+              } catch (error) {
+                console.error(`Error fetching profile for user ${userId}:`, error);
+              }
+            }
+            
+            console.log(`Filtered locations: ${Object.keys(filteredLocations).length} team members found`);
+            setMembersLocations(filteredLocations);
+          } else {
+            console.error("Current user profile not found");
+          }
         }
       });
     } catch (error) {
@@ -245,7 +297,7 @@ export default function UserManagement({ navigation }) {
               const members = [];
               
               // Process each user
-              Object.keys(users).forEach(userId => {
+              for (const userId of Object.keys(users)) {
                 const user = users[userId];
                 
                 // Only include members of this team who are not the owner
@@ -253,13 +305,26 @@ export default function UserManagement({ navigation }) {
                     user.profile.teamCode === userData.teamCode && 
                     userId !== auth.currentUser.uid) {
                   
+                  // Get presence data for this user
+                  let presenceData = { status: 'offline', lastSeen: null };
+                  if (user.presence) {
+                    presenceData = user.presence;
+                  } else {
+                    // If presence is not in the user object, try to get it directly
+                    const presenceRef = ref(db, `users/${userId}/presence`);
+                    const presenceSnapshot = await get(presenceRef);
+                    if (presenceSnapshot.exists()) {
+                      presenceData = presenceSnapshot.val();
+                    }
+                  }
+                  
                   members.push({
                     id: userId,
                     ...user.profile,
-                    presence: user.presence || { status: 'offline', lastSeen: null }
+                    presence: presenceData
                   });
                 }
-              });
+              }
               
               return members;
             }
@@ -346,6 +411,14 @@ export default function UserManagement({ navigation }) {
     const memberLocation = membersLocations[item.id] || {};
     const memberStats = userStats[item.id] || { totalDistance: 0 };
     
+    // Log information about the member's location
+    console.log(`Rendering member ${item.id} (${memberName}): 
+      Has location data: ${memberLocation.Latitude ? 'YES' : 'NO'}
+      Presence status: ${item.presence?.status || 'unknown'}`);
+    
+    // Check if member is online based on presence status only, not location data
+    const isOnline = item.presence?.status === 'online';
+    
     return (
       <View style={styles.memberItem}>
         <View style={styles.memberInfo}>
@@ -365,7 +438,7 @@ export default function UserManagement({ navigation }) {
             
             {/* Location coordinates */}
             <View style={styles.locationContainer}>
-              <Ionicons name="location" size={14} color="#007AFF" />
+              <Ionicons name="location" size={14} color={memberLocation.Latitude ? "#007AFF" : "#8E8E93"} />
               <Text style={styles.locationText}>
                 {memberLocation.Latitude ? 
                   `Lat: ${formatCoordinate(memberLocation.Latitude)}, Lng: ${formatCoordinate(memberLocation.Longitude)}` :
@@ -394,12 +467,12 @@ export default function UserManagement({ navigation }) {
               <View 
                 style={[
                   styles.statusDot, 
-                  { backgroundColor: item.presence?.status === 'online' ? '#4CD964' : '#8E8E93' }
+                  { backgroundColor: isOnline ? '#4CD964' : '#8E8E93' }
                 ]} 
               />
               <Text style={styles.statusText}>
-                {formatStatus(item.presence?.status)}
-                {item.presence?.status !== 'online' && item.presence?.lastSeen && 
+                {isOnline ? 'Online' : 'Offline'}
+                {!isOnline && item.presence?.lastSeen && 
                   ` · ${formatLastSeen(item.presence.lastSeen)}`}
               </Text>
             </View>

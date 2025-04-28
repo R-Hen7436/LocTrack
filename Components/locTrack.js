@@ -274,13 +274,45 @@ const CustomMarker = ({ coordinate, photoURL, name, labelPosition = 'bottom', ma
     right: { position: 'absolute', right: -80, top: -8 },
   }[labelPosition] || { marginTop: 4 };
   
+  // Enhanced offline styling
   const offlineStyle = !isOnline ? {
-    opacity: 0.7,
+    opacity: 0.6, // Reduce opacity further
     borderStyle: 'dashed',
+    borderWidth: 2,
+    borderColor: '#8E8E93', // Gray color for offline
+    backgroundColor: '#E5E5EA', // Light gray background
   } : {};
+   
+  // For the marker fallback, add grayscale effect when offline
+  const fallbackStyle = [
+    styles.markerFallback, 
+    markerColor && { backgroundColor: isOnline ? markerColor : '#8E8E93' }, // Use gray for offline
+    offlineStyle
+  ];
+  
+  // Enhanced offline label styling
+  const labelStyle = {
+    backgroundColor: isOnline ? 
+      'rgba(255, 255, 255, 0.9)' : 
+      'rgba(220, 220, 220, 0.8)', // Grayer background for offline
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: isOnline ? '#E0E0E0' : '#AAAAAA', // Darker border for offline
+  };
   
   const markerContent = React.useMemo(() => (
     <View style={styles.markerContainer}>
+      {/* Label positioning */}
+      {labelPosition === 'top' && (
+        <View style={[styles.markerLabelContainer, labelPositionStyle, labelStyle]}>
+          <Text style={styles.markerLabel}>{name}</Text>
+          {!isOnline && <Text style={styles.offlineIndicator}>Offline</Text>}
+        </View>
+      )}
+      
       {photoURL ? (
         <Image
           source={{ uri: photoURL }}
@@ -291,11 +323,7 @@ const CustomMarker = ({ coordinate, photoURL, name, labelPosition = 'bottom', ma
           ]}
         />
       ) : (
-        <View style={[
-          styles.markerFallback, 
-          markerColor && { backgroundColor: markerColor },
-          offlineStyle
-        ]}>
+        <View style={fallbackStyle}>
           {nameInitial ? (
             <Text style={styles.markerInitial}>{nameInitial}</Text>
           ) : (
@@ -303,25 +331,22 @@ const CustomMarker = ({ coordinate, photoURL, name, labelPosition = 'bottom', ma
           )}
         </View>
       )}
-      {name && typeof name === 'string' && name.trim() !== '' && (
-        <View style={[
-          styles.markerLabelContainer, 
-          labelPositionStyle,
-          { backgroundColor: markerColor ? `${markerColor}DD` : 'rgba(255, 255, 255, 0.9)' },
-          // *** REMOVED: Conditional offline styles from container ***
-          // !isOnline && { borderStyle: 'dashed', opacity: 0.8 }
-        ]}>
-          <Text style={[
-            styles.markerLabel, 
-            { color: markerColor ? '#FFFFFF' : '#333333', fontWeight: '700' }
-            // Style text color based on online status if needed here instead
-          ]}>
-            {name} {!isOnline && '(offline)'} { /* Text indicates offline status */}
-          </Text>
+      
+      {/* Status indicator dot */}
+      <View style={[
+        styles.statusDot,
+        { backgroundColor: isOnline ? '#4CD964' : '#FF3B30' }
+      ]} />
+      
+      {/* Label for bottom/left/right positions */}
+      {labelPosition !== 'top' && (
+        <View style={[styles.markerLabelContainer, labelPositionStyle, labelStyle]}>
+          <Text style={styles.markerLabel}>{name}</Text>
+          {!isOnline && <Text style={styles.offlineIndicator}>Offline</Text>}
         </View>
       )}
     </View>
-  ), [photoURL, name, nameInitial, labelPosition, markerColor, isOnline, offlineStyle, labelPositionStyle]);
+  ), [photoURL, name, labelPosition, markerColor, isOnline]);
   
   return (
     <Marker 
@@ -458,6 +483,9 @@ const [trackViewChanges, setTrackViewChanges] = useState(false);
   const gpsLogLastStepCountRef = useRef(0); // Track last total step count for differential calculation
   const lastGpsLogUpdateTime = useRef(0);
 
+  // Inside your App component, add a state to track team members' location history
+  const [teamMemberHistories, setTeamMemberHistories] = useState({});
+
   // Keep refs synced with state
   useEffect(() => { stepCountRef.current = stepCount; }, [stepCount]);
   useEffect(() => { stepsSinceLastGpsUpdateRef.current = stepsSinceLastGpsUpdate; }, [stepsSinceLastGpsUpdate]); // *** Reinstate useEffect ***
@@ -471,6 +499,37 @@ const [trackViewChanges, setTrackViewChanges] = useState(false);
 
   // Add this state variable at the top of your component (in the App function)
   const [debugMode, setDebugMode] = useState(false);
+
+  // Add a function to save location history for team members
+  const saveTeamMemberLocationHistory = (userId, location) => {
+    if (!userId || !location || !location.Latitude || !location.Longitude) return;
+    
+    setTeamMemberHistories(prevHistories => {
+      const userHistory = prevHistories[userId] || [];
+      // Limit history to prevent memory issues (e.g., last 50 points)
+      const newHistory = [...userHistory, {
+        latitude: location.Latitude,
+        longitude: location.Longitude,
+        timestamp: new Date().toISOString()
+      }].slice(-50);
+      
+      return {
+        ...prevHistories,
+        [userId]: newHistory
+      };
+    });
+  };
+
+  // Inside the listener for usersLocations, add this to update histories
+  useEffect(() => {
+    if (usersLocations) {
+      Object.entries(usersLocations).forEach(([userId, userData]) => {
+        if (userId !== auth.currentUser?.uid && userData.Latitude && userData.Longitude) {
+          saveTeamMemberLocationHistory(userId, userData);
+        }
+      });
+    }
+  }, [usersLocations]);
 
 useEffect(() => {
   const initializeApp = async () => {
@@ -652,14 +711,24 @@ useEffect(() => {
       const teamCode = profileSnapshot.val()?.teamCode;
       
       if (teamCode) {
-        const geofenceRef = ref(db, "geofence/coordinates");
+        // Use team-specific geofence path instead of the general one
+        const geofenceRef = ref(db, `teams/${teamCode}/geofence/coordinates`);
         const geofenceSnapshot = await get(geofenceRef);
+        
         if (geofenceSnapshot.exists()) {
+          console.log(`Loaded team-specific geofence for team ${teamCode}`);
           setTeamGeofence(geofenceSnapshot.val());
+        } else {
+          console.log(`No geofence found for team ${teamCode}`);
+          setTeamGeofence([]);
         }
+      } else {
+        console.log("User does not have a team code, cannot load geofence");
+        setTeamGeofence([]);
       }
     } catch (error) {
       console.error("Error loading team geofence:", error);
+      setTeamGeofence([]);
     }
   };
 
@@ -768,123 +837,114 @@ const distanceFromPointToLine = (point, lineStart, lineEnd) => {
 
 const toggleCurrentLocation = async () => {
   try {
-    // Separate code paths for adding vs removing
-    if (currentLocation) {
-      console.log("Removing current location - explicit path");
-      setIsRemovingLocation(true);
-      
-      // Clear location tracking subscription first
-      if (locationSubscriptionRef.current) {
-        try {
-          locationSubscriptionRef.current.remove();
-        } catch (e) {
-          console.error("Error removing location subscription:", e);
-        }
-        locationSubscriptionRef.current = null;
-      }
-      
-      // Clear all location-related state
-      setCurrentLocation(null);
-      setGpsAccuracy(null);
-      setLocationHistory([]); 
-      setEstimatedIconPosition(null);
-      
-      const db = getDatabase();
-      const userLocationRef = ref(db, `UsersCurrentLocation/${auth.currentUser?.uid}`);
-      
-      if (auth.currentUser?.uid) {
-        // Update Firebase asynchronously but don't await it
-        update(userLocationRef, { 
-          isActive: false,
-          lastSeen: new Date().toISOString(),
-        }).catch(err => console.error("Error updating location status:", err));
-      }
-      
-      setIsRemovingLocation(false);
-      return;
-    }
-    
+    console.log("Toggling current location tracking...");
     setIsFetchingLocation(true);
     
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Denied', 'Location permission is required to share your location.');
+    // Check if location is already available
+    let locationData = currentLocation;
+    
+    // If no location is available, try to get one
+    if (!locationData) {
+      console.log("No current location available, requesting location...");
+      
+      // First check if location services are enabled
+      const locationServicesEnabled = await Location.hasServicesEnabledAsync();
+      if (!locationServicesEnabled) {
+        Alert.alert('Location Services Disabled', 'Please enable location services in your device settings to use this feature.');
+        setIsFetchingLocation(false);
+        return;
+      }
+      
+      // Check for location permissions
+      const { status } = await Location.getForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        const { status: newStatus } = await Location.requestForegroundPermissionsAsync();
+        if (newStatus !== 'granted') {
+          Alert.alert('Permission Denied', 'Location permission is required to share your location.');
+          setIsFetchingLocation(false);
+          return;
+        }
+      }
+      
+      // Try to get location
+      try {
+        const location = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+          maximumAge: 10000 // Accept locations up to 10 seconds old
+        });
+        
+        if (location && location.coords) {
+          const { latitude, longitude, accuracy } = location.coords;
+          locationData = { latitude, longitude };
+          setCurrentLocation(locationData);
+          setGpsAccuracy(accuracy);
+          
+          console.log("Successfully obtained current location:", locationData);
+        } else {
+          console.error("Failed to get current location");
+          Alert.alert('Location Error', 'Unable to get your current location. Please try again later.');
+          setIsFetchingLocation(false);
+          return;
+        }
+      } catch (locationError) {
+        console.error("Error getting current location:", locationError);
+        Alert.alert('Location Error', 'Failed to get your location. Please ensure location services are enabled and try again.');
+        setIsFetchingLocation(false);
+        return;
+      }
+    }
+    
+    const auth = getAuth();
+    if (!auth.currentUser) {
+      console.error("No user signed in.");
       setIsFetchingLocation(false);
       return;
     }
-
-    // Get initial low-accuracy location quickly
-    try {
-      const fastLocation = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Low,
-        maximumAge: 10000 // Accept a cached position up to 10 seconds old
-      });
-      
-      if (fastLocation && fastLocation.coords) {
-        const { latitude, longitude } = fastLocation.coords;
-        setCurrentLocation({ latitude, longitude });
-        setGpsAccuracy(fastLocation.coords.accuracy);
-        
-        // Quick initial map focus on user
-        if (mapRef.current) {
-          mapRef.current.animateToRegion({
-            latitude,
-            longitude,
-            latitudeDelta: 0.01,
-            longitudeDelta: 0.01,
-          }, 500);
-        }
-      }
-    } catch (error) {
-      console.warn("Fast location fetch failed, continuing with high accuracy only:", error);
-    }
-
-    // Then get high accuracy location (but don't block UI)
-    Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.High
-    }).then(location => {
-      const { latitude, longitude } = location.coords;
-      setCurrentLocation({ latitude, longitude });
-      setGpsAccuracy(location.coords.accuracy);
-    }).catch(error => {
-      console.error("High accuracy location failed:", error);
-    });
-
-    const db = getDatabase();
-    const userPresenceRef = ref(db, `users/${auth.currentUser.uid}/presence`);
+    
     const userLocationRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
-
+    const userPresenceRef = ref(db, `users/${auth.currentUser.uid}/presence`);
+    
+    // Get user profile data to include with location
     const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
     const profileSnapshot = await get(userProfileRef);
-    const profileData = profileSnapshot.exists() ? profileSnapshot.val() : {};
+    let profileData = {};
+    
+    if (profileSnapshot.exists()) {
+      profileData = profileSnapshot.val();
+    }
 
     // Update Firebase in background
     set(userLocationRef, { 
-      Latitude: currentLocation?.latitude || 0, 
-      Longitude: currentLocation?.longitude || 0,
-      Accuracy: currentLocation ? gpsAccuracy : 0,
+      Latitude: locationData.latitude || 0, 
+      Longitude: locationData.longitude || 0,
+      Accuracy: gpsAccuracy || 0,
       Timestamp: new Date().toISOString(),
       isActive: true,
       lastSeen: new Date().toISOString(),
       ...profileData
     }).catch(err => console.error("Error updating initial location:", err));
 
+    // Update presence status
     const presenceData = {
       status: 'online',
       lastSeen: new Date().toISOString(),
       deviceInfo: Platform.OS
     };
+    
     set(userPresenceRef, presenceData)
       .catch(err => console.error("Error updating presence:", err));
 
+    // Set up onDisconnect handlers for both location and presence
     const connectedRef = ref(db, '.info/connected');
     onValue(connectedRef, (snap) => {
       if (snap.val() === true) {
+        // When user disconnects, update presence status
         onDisconnect(userPresenceRef).update({
           status: 'offline',
           lastSeen: new Date().toISOString()
         });
 
+        // When user disconnects, update location active status
         onDisconnect(userLocationRef).update({
           isActive: false,
           lastSeen: new Date().toISOString()
@@ -1337,16 +1397,17 @@ const fitAllMarkers = (forceUpdate = false) => {
       }
       
       if (usersLocations) {
-        Object.entries(usersLocations).filter(([userId, userData]) => {
-          if (!userData || !userData.Latitude || !userData.Longitude) return false;
+        // Filter by team code
+        Object.entries(usersLocations).filter(([userId, user]) => {
+          if (!user || !user.Latitude || !user.Longitude) return false;
           if (userId === auth.currentUser?.uid) return false;
           
           const currentUserProfile = usersLocations[auth.currentUser?.uid];
-          return userData.teamCode === currentUserProfile?.teamCode;
-        }).forEach(([_, userData]) => {
+          return user.teamCode === currentUserProfile?.teamCode;
+        }).forEach(([_, user]) => {
           allCoordinates.push({
-            latitude: userData.Latitude,
-            longitude: userData.Longitude
+            latitude: user.Latitude,
+            longitude: user.Longitude
           });
         });
       }
@@ -1418,101 +1479,157 @@ useEffect(() => {
 }, []);
 
 useEffect(() => {
-  const loadAllUserLocations = async () => {
-    try {
-      console.log("Loading user locations...");
-      const locationsRef = ref(db, "UsersCurrentLocation");
+    console.log(">>> useEffect for loadAllUserLocations is RUNNING <<<"); // <-- ADD THIS LOG
+    const loadAllUserLocations = async () => {
+      try {
+        console.log(">>> loadAllUserLocations function has started <<<");
       
-      const unsubscribe = onValue(locationsRef, (snapshot) => {
-        if (snapshot.exists()) {
-          const locationsData = snapshot.val();
-          
-          const formattedLocations = {};
-          
-          const fetchUserProfiles = async () => {
-            for (const [userId, userData] of Object.entries(locationsData)) {
-              if (userData && userData.Latitude && userData.Longitude) {
+        // First get the current user's team code
+        const currentUserProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+        const currentUserSnapshot = await get(currentUserProfileRef);
+      
+        if (!currentUserSnapshot.exists()) {
+          console.log("Current user profile not found");
+          return;
+        }
+      
+        const currentUserProfile = currentUserSnapshot.val();
+        const currentUserTeamCode = currentUserProfile.teamCode;
+        const currentUserRole = currentUserProfile.role;
+      
+        console.log(`Current user team code: ${currentUserTeamCode}, role: ${currentUserRole}`);
+      
+        // Now load all user locations
+        const locationsRef = ref(db, "UsersCurrentLocation");
+      
+        const unsubscribe = onValue(locationsRef, (snapshot) => {
+          if (snapshot.exists()) {
+            const locationsData = snapshot.val();
+            
+            const formattedLocations = {};
+            
+            // Always include current user's location
+            if (locationsData[auth.currentUser.uid]) {
+              formattedLocations[auth.currentUser.uid] = {
+                ...locationsData[auth.currentUser.uid],
+                teamCode: currentUserTeamCode,
+                role: currentUserRole
+              };
+            }
+            
+            const fetchUserProfiles = async () => {
+              console.log(`Processing ${Object.keys(locationsData).length} user locations...`);
+              
+              // *** IMPORTANT: Use a local variable inside fetchUserProfiles ***
+              const localFormattedLocations = {};
+
+              // Always include current user if available in the main snapshot
+              if (locationsData[auth.currentUser.uid]) {
+                localFormattedLocations[auth.currentUser.uid] = {
+                  ...locationsData[auth.currentUser.uid],
+                  // Make sure we have essential profile data for current user too
+                  teamCode: currentUserTeamCode,
+                  role: currentUserRole,
+                  firstName: currentUserProfile.firstName || '',
+                  lastName: currentUserProfile.lastName || '',
+                  photoURL: currentUserProfile.photoURL || '',
+                  name: formatUserName(currentUserProfile),
+                  presence: { status: 'online' } // Assume current user is online initially
+                };
+              }
+              
+              // Collect other user profiles and presence
+              // ... (rest of the profile/presence fetching logic remains the same) ...
+              // ... but modify it to add users to localFormattedLocations ...
+              
+              for (const [userId, userData] of Object.entries(locationsData)) {
+                if (userId === auth.currentUser.uid) continue;
+                if (!userData.Latitude || !userData.Longitude) {
+                  console.log(`DBG fetchUserProfiles: Skipping ${userId} - No Lat/Lon`);
+                  continue;
+                }
+
+                console.log(`DBG fetchUserProfiles: Processing User ID: ${userId}`); // Log User ID
+
                 try {
                   const userProfileRef = ref(db, `users/${userId}/profile`);
                   const profileSnapshot = await get(userProfileRef);
-                  
-                  if (profileSnapshot.exists()) {
-                    const profileData = profileSnapshot.val();
-                    
-                    let displayName = '';
-                    if (profileData.firstName && profileData.firstName.trim() !== '') {
-                      displayName = profileData.firstName;
-                      if (profileData.lastName && profileData.lastName.trim() !== '') {
-                        displayName += ' ' + profileData.lastName;
+                  const profileData = profileSnapshot.exists() ? profileSnapshot.val() : null;
+                  console.log(`DBG fetchUserProfiles: Profile for ${userId}:`, profileData ? JSON.stringify(profileData) : 'null'); // Log Profile Data
+
+                  const presenceRef = ref(db, `users/${userId}/presence`);
+                  const presenceSnapshot = await get(presenceRef);
+                  const presenceData = presenceSnapshot.exists() ? presenceSnapshot.val() : { status: 'offline' };
+                  console.log(`DBG fetchUserProfiles: Presence for ${userId}:`, JSON.stringify(presenceData)); // Log Presence Data
+
+                  if (profileData) {
+                      const isSameTeam = profileData.teamCode === currentUserTeamCode;
+                      const isAdminViewingAdmin = (currentUserRole === 'admin' && profileData.role === 'admin');
+                      
+                      console.log(`DBG fetchUserProfiles: Checks for ${userId} - isSameTeam: ${isSameTeam} (UserTeam: ${profileData.teamCode}, CurrentUserTeam: ${currentUserTeamCode}), isAdminViewingAdmin: ${isAdminViewingAdmin}`); // Log Checks
+                      
+                      if (isSameTeam || isAdminViewingAdmin) {
+                          console.log(`DBG fetchUserProfiles: *** Adding ${userId} to localFormattedLocations ***`); // Log Add Decision
+                          
+                          // *** Add to localFormattedLocations ***
+                          localFormattedLocations[userId] = {
+                            ...userData,
+                            firstName: profileData.firstName || '',
+                            lastName: profileData.lastName || '',
+                            photoURL: profileData.photoURL || '',
+                            role: profileData.role || '',
+                            teamCode: profileData.teamCode || '',
+                            name: formatUserName(profileData),
+                            presence: presenceData
+                          };
                       }
-                    } else if (profileData.lastName && profileData.lastName.trim() !== '') {
-                      displayName = profileData.lastName;
-                    }
-                    
-                    formattedLocations[userId] = {
-                      ...userData,
-                      firstName: profileData.firstName || '',
-                      lastName: profileData.lastName || '',
-                      photoURL: profileData.photoURL || '',
-                      role: profileData.role || '',
-                      teamCode: profileData.teamCode || '',
-                      name: formatUserName(profileData)
-                    };
                   } else {
-                    formattedLocations[userId] = {
-                      ...userData,
-                      firstName: '',
-                      lastName: '',
-                      photoURL: '',
-                      role: '',
-                      teamCode: '',
-                      name: ''
-                    };
+                    console.warn(`Profile not found for user ${userId}`);
                   }
                 } catch (error) {
-                  console.error(`Error fetching profile for user ${userId}`);
-                  formattedLocations[userId] = {
-                    ...userData,
-                    firstName: '',
-                    lastName: '',
-                    photoURL: '',
-                    role: '',
-                    teamCode: '',
-                    name: ''
-                  };
+                  console.error(`Error processing user ${userId}:`, error);
                 }
               }
-            }
+              
+              console.log(`DBG fetchUserProfiles: Final localFormattedLocations before return:`, JSON.stringify(localFormattedLocations, null, 2)); // Log Final Object
+              // *** Return the populated local object ***
+              return localFormattedLocations;
+            };
             
-            setUsersLocations(formattedLocations);
-          };
-          
-          fetchUserProfiles();
-        } else {
-          console.log("No user locations found in database");
-          setUsersLocations({});
-        }
-      });
-      
-      return unsubscribe;
-    } catch (error) {
-      console.error("Error loading user locations:", error);
-    }
-  };
+            // Now use the returned value in .then()
+            fetchUserProfiles().then((finalFormattedLocations) => { // <-- Receive the returned object
+              // Log after fetchUserProfiles completes and *before* setting state
+              console.log(`Setting ${Object.keys(finalFormattedLocations).length} user locations (including offline users)`);
+              console.log('usersLocations state content (inside .then):', JSON.stringify(finalFormattedLocations, null, 2)); // <-- Log the correct object
+              setUsersLocations(finalFormattedLocations); // <-- Set state with the correct object
+            }).catch(error => {
+                console.error("Error in fetchUserProfiles promise chain:", error);
+            });
+          } else {
+            console.log("No user locations found in database");
+            setUsersLocations({});
+          }
+        });
+        
+        return unsubscribe;
+      } catch (error) {
+        console.error("Error loading user locations:", error);
+      }
+    };
   
     const unsubscribe = loadAllUserLocations();
     return () => {
       if (typeof unsubscribe === 'function') {
         unsubscribe();
       } else {
-         Promise.resolve(unsubscribe).then(unsub => {
-            if (typeof unsub === 'function') {
-               unsub();
-            }
-         });
+        Promise.resolve(unsubscribe).then(unsub => {
+          if (typeof unsub === 'function') {
+            unsub();
+          }
+        });
       }
     };
-  }, [db]);
+  }, []); // <--- CHANGED DEPENDENCY ARRAY TO []
 
 const getUniqueColor = (str) => {
   let hash = 0;
@@ -2292,7 +2409,7 @@ return (
     >
       {userRole === 'member' ? (
         <>
-          {/* Ensure teamGeofence is an array before accessing length */}
+          {/* Render geofence - MEMBERS view their team's geofence */}
           {Array.isArray(teamGeofence) && teamGeofence.length >= 3 && (
             <Polygon 
               coordinates={teamGeofence} 
@@ -2395,6 +2512,15 @@ return (
           })}
         </>
       )}
+      {/* Render geofence - OWNERS view their defined geofence */}
+      {userRole === 'owner' && points.length >= 3 && (
+        <Polygon 
+          coordinates={points} 
+          fillColor="rgba(255,0,0,0.2)" 
+          strokeColor="red" 
+          strokeWidth={2} 
+        />
+      )}
       {/* Consolidated Current User Marker */}
       {estimatedIconPosition ? (
         <CurrentUserMarker
@@ -2418,48 +2544,50 @@ return (
           const currentUserData = currentUid ? usersLocations[currentUid] : null;
           const currentUserTeamCode = currentUserData?.teamCode;
 
-          // Check 1: Basic data validity
+          // Check 1: Basic data validity - Allow users with location data regardless of online status
           if (!userData || !userData.Latitude || !userData.Longitude) return false;
+          
           // Check 2: Exclude current user
           if (currentUid && userId === currentUid) return false;
           
-          // Check 3: Admin visibility logic (keep existing)
+          // Check 3: Admin visibility logic (special case for admins)
           if (userData.role === 'admin' || userData.isAdmin) {
-            // Check if current user is also admin
+            // Only admins can see other admins
             if (!currentUserData?.isAdmin && currentUserData?.role !== 'admin') {
               return false; // Non-admin cannot see admin markers
             }
           }
 
-          // Check 4: Team visibility - *** ADDED/MODIFIED ***
-          if (currentUserTeamCode) { // Only apply team filter if current user has a team code
+          // Check 4: Team visibility - STRICTLY filter by team code
+          // If current user has a team code, only show users with matching team code
+          if (currentUserTeamCode) {
              if (userData.teamCode !== currentUserTeamCode) {
-                // console.log(`Filtering out ${userId} (${userData.teamCode}) - Different team from ${currentUserTeamCode}`);
                 return false; // Filter out users from different teams
-             } 
-          } else {
-             // If current user somehow has NO team code, maybe filter everyone else?
-             // Or maybe only show admins? For now, let them pass if current user has no team.
-             // Depending on requirements, could return false here for non-admins.
+             }
           }
           
-          // Passed all filters
+          // Passed all filters - show all team members regardless of online status
           return true;
         })
-        .map(([userId, userData]) => (
-          <CustomMarker
-            key={userId} 
-            coordinate={{
-              latitude: userData.Latitude,
-              longitude: userData.Longitude
-            }}
-            photoURL={userData.photoURL}
-            name={formatUserName(userData)}
-            labelPosition={'bottom'} // *** Force bottom position for testing ***
-            markerColor={getUniqueColor(userId)}
-            isOnline={userData.isActive !== false}
-          />
-        ))
+        .map(([userId, userData]) => {
+          // Determine online status from presence data
+          const isOnline = userData.presence?.status === 'online';
+          
+          return (
+            <CustomMarker
+              key={userId} 
+              coordinate={{
+                latitude: userData.Latitude,
+                longitude: userData.Longitude
+              }}
+              photoURL={userData.photoURL}
+              name={formatUserName(userData)}
+              labelPosition={markerPositions[userId] || 'bottom'}
+              markerColor={getUniqueColor(userId)}
+              isOnline={isOnline} // Use presence status
+            />
+          );
+        })
       }
       {/* *** Add the Polyline for the trail *** */}
       {/* Ensure locationHistory is an array before accessing length */}
@@ -2476,6 +2604,32 @@ return (
           zIndex={100} // Make sure it's above other elements
         />
       )}
+      
+      {/* Team Member Polylines */}
+      {Object.entries(teamMemberHistories).map(([userId, history]) => {
+        if (history && history.length >= 2) {
+          // Use the unique color for this user to match their marker
+          const userColor = getUniqueColor(userId);
+          const userData = usersLocations[userId] || {};
+          // *** Determine isOnline status for this specific user ***
+          const isUserOnline = userData.presence?.status === 'online';
+
+          return (
+            <React.Fragment key={`history-${userId}`}>
+              <Polyline
+                coordinates={history}
+                strokeColor={userColor}
+                strokeWidth={4}
+                lineCap="round"
+                lineJoin="round"
+                zIndex={90} // Below current user's polyline
+                strokeDashPattern={isUserOnline ? null : [5, 5]} // <-- Use the derived status here
+              />
+            </React.Fragment>
+          );
+        }
+        return null;
+      })}
       
       {/* *** Add a marker for each history point for debugging purposes *** */}
       {Array.isArray(locationHistory) && locationHistory.map((point, index) => (
@@ -3077,26 +3231,31 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   markerLabelContainer: {
-    // Keep styles from last attempt (no alignSelf, minWidth)
-    marginTop: 4, 
-    paddingHorizontal: 10, 
-    paddingVertical: 5,
     backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    borderRadius: 12, 
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
-    elevation: 3,
-    minWidth: 60, 
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    alignItems: 'center',
   },
   markerLabel: {
     color: '#333333',
-    fontSize: 14,
     fontWeight: '600',
-    textAlign: 'center', 
+    fontSize: 12,
+  },
+  offlineIndicator: {
+    color: '#FF3B30',
+    fontSize: 10,
+    fontWeight: '500',
+  },
+  statusDot: {
+    position: 'absolute',
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#FFFFFF',
+    bottom: 0,
+    right: 0,
   },
   memberMessage: {
     padding: 15,
