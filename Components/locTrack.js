@@ -270,9 +270,9 @@ const CustomMarker = ({ coordinate, photoURL, name, labelPosition = 'bottom', ma
   const labelPositionStyle = {
     top: { marginTop: -46, marginBottom: 4 },
     bottom: { marginTop: 4 },
-    left: { position: 'absolute', left: -80, top: -8 },
-    right: { position: 'absolute', right: -80, top: -8 },
-  }[labelPosition] || { marginTop: 4 };
+    left: { position: 'absolute', left: -80, top: -8 }, // Keep original styles
+    right: { position: 'absolute', right: -80, top: -8 }, // Keep original styles
+  }[labelPosition] || { marginTop: 4 }; // Use original labelPosition
   
   // Enhanced offline styling
   const offlineStyle = !isOnline ? {
@@ -306,7 +306,7 @@ const CustomMarker = ({ coordinate, photoURL, name, labelPosition = 'bottom', ma
   const markerContent = React.useMemo(() => (
     <View style={styles.markerContainer}>
       {/* Label positioning */}
-      {labelPosition === 'top' && (
+      {labelPosition === 'top' && ( // Use original labelPosition
         <View style={[styles.markerLabelContainer, labelPositionStyle, labelStyle]}>
           <Text style={styles.markerLabel}>{name}</Text>
           {!isOnline && <Text style={styles.offlineIndicator}>Offline</Text>}
@@ -339,14 +339,14 @@ const CustomMarker = ({ coordinate, photoURL, name, labelPosition = 'bottom', ma
       ]} />
       
       {/* Label for bottom/left/right positions */}
-      {labelPosition !== 'top' && (
+      {labelPosition !== 'top' && ( // Use original labelPosition
         <View style={[styles.markerLabelContainer, labelPositionStyle, labelStyle]}>
           <Text style={styles.markerLabel}>{name}</Text>
           {!isOnline && <Text style={styles.offlineIndicator}>Offline</Text>}
         </View>
       )}
     </View>
-  ), [photoURL, name, labelPosition, markerColor, isOnline]);
+  ), [photoURL, name, labelPosition, markerColor, isOnline, labelStyle, labelPositionStyle]); // Revert dependencies
   
   return (
     <Marker 
@@ -439,7 +439,6 @@ const [teamGeofence, setTeamGeofence] = useState([]);
 const [gpsAccuracy, setGpsAccuracy] = useState(null);
 const [usersLocations, setUsersLocations] = useState({});
 const [shouldAutoFit, setShouldAutoFit] = useState(true);
-const [markerPositions, setMarkerPositions] = useState({});
 const [trackViewChanges, setTrackViewChanges] = useState(false);
   const [realStepCount, setRealStepCount] = useState(0);
   const insets = useSafeAreaInsets();
@@ -1659,59 +1658,10 @@ const getUniqueColor = (str) => {
   return colors[index];
 };
 
-const calculateMarkerLabelPositions = (locations) => {
-  const positionMap = {};
-  const locationGroups = {};
-  
-  Object.entries(locations).forEach(([userId, userData]) => {
-    if (!userData || !userData.Latitude || !userData.Longitude) return;
-    
-    const coord = { latitude: userData.Latitude, longitude: userData.Longitude };
-    let foundGroup = false;
-    
-    Object.keys(locationGroups).forEach(groupId => {
-      const groupCoord = locationGroups[groupId];
-        if (calculateDistance(coord, groupCoord) < 30) {
-        if (!locationGroups[groupId].members) {
-          locationGroups[groupId].members = [];
-        }
-        locationGroups[groupId].members.push(userId);
-        foundGroup = true;
-      }
-    });
-    
-    if (!foundGroup) {
-      locationGroups[userId] = {
-        latitude: coord.latitude,
-        longitude: coord.longitude,
-        members: [userId]
-      };
-    }
-  });
-  
-  Object.values(locationGroups).forEach(group => {
-    if (!group.members || group.members.length <= 1) {
-      if (group.members && group.members.length === 1) {
-        positionMap[group.members[0]] = 'bottom';
-      }
-    } else {
-      const positionOptions = ['top', 'right', 'bottom', 'left'];
-      group.members.forEach((userId, index) => {
-        const position = positionOptions[index % positionOptions.length];
-        if (userId) {
-          positionMap[userId] = position;
-        }
-      });
-    }
-  });
-  
-  return positionMap;
-};
-
 useEffect(() => {
   if (Object.keys(usersLocations).length > 0) {
-    const positions = calculateMarkerLabelPositions(usersLocations);
-    setMarkerPositions(positions);
+    // REMOVE: const positions = calculateMarkerLabelPositions(usersLocations);
+    // REMOVE: setMarkerPositions(positions);
   }
 }, [usersLocations]);
 
@@ -2573,6 +2523,9 @@ return (
           // Determine online status from presence data
           const isOnline = userData.presence?.status === 'online';
           
+          // REMOVE: Force offline users to always have bottom label position
+          // const labelPos = isOnline ? (markerPositions[userId] || 'bottom') : 'bottom';
+          
           return (
             <CustomMarker
               key={userId} 
@@ -2582,7 +2535,7 @@ return (
               }}
               photoURL={userData.photoURL}
               name={formatUserName(userData)}
-              labelPosition={markerPositions[userId] || 'bottom'}
+              labelPosition='bottom' // ALWAYS use 'bottom'
               markerColor={getUniqueColor(userId)}
               isOnline={isOnline} // Use presence status
             />
