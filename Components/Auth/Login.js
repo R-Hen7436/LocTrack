@@ -1,12 +1,25 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, ActivityIndicator, Alert } from 'react-native';
+import { 
+  View, 
+  Text, 
+  StyleSheet, 
+  ActivityIndicator, 
+  Alert,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  SafeAreaView,
+  TouchableWithoutFeedback,
+  Keyboard
+} from 'react-native';
 import { getAuth, signInWithEmailAndPassword, sendEmailVerification, updateProfile } from 'firebase/auth';
-import { Ionicons } from '@expo/vector-icons';
 import { getDatabase, ref, get, set } from 'firebase/database';
 import InvitationHandler, { checkForInvitation, acceptInvitation, checkPendingInvitations } from './InvitationHandler';
 import { logAudit } from '../../utils/auditUtils';
 import { AUDIT_ACTIONS } from '../../constants/auditActions';
 import { formatUserDisplayName } from '../firebaseConfig';
+import theme from '../../constants/theme';
+import { Button, Card, Input } from '../UI';
 
 export default function Login({ navigation }) {
   const [email, setEmail] = useState('');
@@ -19,6 +32,17 @@ export default function Login({ navigation }) {
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
+    // Validate inputs
+    if (!email.trim()) {
+      setError('Please enter your email');
+      return;
+    }
+    
+    if (!password.trim()) {
+      setError('Please enter your password');
+      return;
+    }
+
     setError('');
     setLoading(true);
 
@@ -34,7 +58,7 @@ export default function Login({ navigation }) {
       const userProfileRef = ref(db, `users/${userCredential.user.uid}/profile`);
       const snapshot = await get(userProfileRef);
       
-      console.log('Auth display name:', userCredential.user.displayName);
+      console.log("User logged in:", userCredential.user.uid, userCredential.user.email);
       
       if (snapshot.exists()) {
         const userData = snapshot.val();
@@ -127,7 +151,7 @@ export default function Login({ navigation }) {
       setLoading(false);
       
     } catch (error) {
-      let errorMessage = 'Login failed. Please check your email and password.';
+      let errorMessage = 'Login failed. Please check your credentials.';
       if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password') {
         errorMessage = 'Invalid email or password.';
       } else if (error.code === 'auth/too-many-requests') {
@@ -193,158 +217,152 @@ export default function Login({ navigation }) {
   };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Login</Text>
-      
-      <TextInput
-        style={styles.input}
-        placeholder="Email"
-        value={email}
-        onChangeText={setEmail}
-        autoCapitalize="none"
-        keyboardType="email-address"
-      />
-      
-      <View style={styles.passwordContainer}>
-        <TextInput
-          style={styles.passwordInput}
-          placeholder="Password"
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry={!showPassword}
-        />
-        <TouchableOpacity 
-          style={styles.eyeIcon} 
-          onPress={() => setShowPassword(!showPassword)}
-        >
-          <Ionicons 
-            name={showPassword ? "eye-off" : "eye"} 
-            size={24} 
-            color="gray" 
-          />
-        </TouchableOpacity>
-      </View>
-      
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-      
-      <View style={styles.linkContainer}>
-        <TouchableOpacity onPress={() => navigation.navigate('ForgotPassword')}>  
-          <Text style={styles.link2}>Forgot Password?</Text>
-        </TouchableOpacity>
-      </View>
-
-      <TouchableOpacity 
-        style={[styles.button, loading && styles.buttonDisabled]} 
-        onPress={handleLogin}
-        disabled={loading}
+    <SafeAreaView style={styles.safeArea}>
+      <KeyboardAvoidingView 
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.keyboardAvoidingView}
       >
-        {loading ? (
-          <ActivityIndicator color="#FFFFFF" />
-        ) : (
-          <Text style={styles.buttonText}>Login</Text>
-        )}
-      </TouchableOpacity>
-    
-      <TouchableOpacity onPress={() => navigation.navigate('Register')}>
-        <Text style={styles.link}>Don't have an account? Register</Text>
-      </TouchableOpacity>
-
-      <Modal
-        visible={invitation !== null}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setInvitation(null)}
-      >
-        <View style={styles.modalContainer}>
-          {invitation && (
-            <InvitationHandler
-              invitation={invitation}
-              onAccept={handleAcceptInvitation}
-              onDecline={handleDeclineInvitation}
-            />
-          )}
-        </View>
-      </Modal>
-    </View>
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+          <View style={styles.container}>
+            <View style={styles.headerContainer}>
+              <Text style={styles.title}>Welcome Back</Text>
+              <Text style={styles.subtitle}>Sign in to continue</Text>
+            </View>
+            
+            <Card style={styles.formCard}>
+              <View style={styles.formContainer}>
+                <Input
+                  label="Email"
+                  value={email}
+                  onChangeText={setEmail}
+                  placeholder="Enter your email"
+                  keyboardType="email-address"
+                  errorText={error && email.length === 0 ? 'Email is required' : ''}
+                  floatingLabel={true}
+                />
+                
+                <Input
+                  label="Password"
+                  rightIcon={showPassword ? "eye-off-outline" : "eye-outline"}
+                  onRightIconPress={() => setShowPassword(!showPassword)}
+                  value={password}
+                  onChangeText={setPassword}
+                  placeholder="Enter your password"
+                  secureTextEntry={!showPassword}
+                  errorText={error && password.length === 0 ? 'Password is required' : ''}
+                  floatingLabel={true}
+                />
+                
+                {error && !error.includes('required') ? (
+                  <Text style={styles.errorText}>{error}</Text>
+                ) : null}
+                
+                <View style={styles.forgotPasswordContainer}>
+                  <Button 
+                    variant="text" 
+                    label="Forgot Password?" 
+                    onPress={() => navigation.navigate('ForgotPassword')}
+                    size="sm"
+                  />
+                </View>
+                
+                <Button
+                  variant="primary"
+                  label="Sign In"
+                  onPress={handleLogin}
+                  isLoading={loading}
+                  disabled={loading}
+                  size="lg"
+                  style={styles.loginButton}
+                />
+                
+                <View style={styles.registerContainer}>
+                  <Text style={styles.registerText}>Don't have an account? </Text>
+                  <Button 
+                    variant="text" 
+                    label="Sign-up" 
+                    onPress={() => navigation.navigate('Register')}
+                    size="sm"
+                    style={styles.registerButton}
+                    textStyle={styles.registerButtonText}
+                  />
+                </View>
+              </View>
+            </Card>
+          </View>
+        </TouchableWithoutFeedback>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: theme.colors.background,
+  },
+  keyboardAvoidingView: {
+    flex: 1,
+  },
   container: {
     flex: 1,
+    padding: 24,
     justifyContent: 'center',
-    padding: 20,
+  },
+  headerContainer: {
+    marginBottom: 32,
+    alignItems: 'center',
   },
   title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 20,
+    ...theme.typography.h1,
+    color: theme.colors.text.primary,
+    marginBottom: 8,
+  },
+  subtitle: {
+    ...theme.typography.bodySmall,
+    color: theme.colors.text.secondary,
+  },
+  formCard: {
+    padding: 24,
+    marginBottom: 24,
+  },
+  formContainer: {
+    width: '100%',
+  },
+  forgotPasswordContainer: {
+    alignSelf: 'flex-end',
+    marginBottom: 16,
+    marginTop: -8,
+  },
+  loginButton: {
+    marginTop: 8,
+    marginBottom: 16,
+  },
+  errorText: {
+    color: theme.colors.error,
+    ...theme.typography.bodySmall,
+    marginBottom: 16,
     textAlign: 'center',
   },
-  input: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    padding: 12,
-    marginBottom: 20,
-    borderRadius: 5,
-    height: 48,
-  },
-  button: {
-    backgroundColor: '#007AFF',
-    padding: 15,
-    borderRadius: 5,
-    marginBottom: 10,
-    marginTop: 10,
-  },
-  buttonText: {
-    color: 'white',
-    textAlign: 'center',
-    fontWeight: 'bold',
-  },
-  link: {
-    color: 'blue',
-    textAlign: 'center',
-    marginTop: 10,
-  },
-  error: {
-    color: 'red',
-    marginBottom: 10,
-    textAlign: 'center',
-  },
-  link2: {
-    color: '#007AFF',
-    textAlign: 'right',
-  },
-  passwordContainer: {
+  registerContainer: {
     flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 5,
-    marginBottom: 20,
-    height: 48,
-  },
-  passwordInput: {
-    flex: 1,
-    padding: 12,
-  },
-  eyeIcon: {
-    padding: 12,
-  },
-  buttonDisabled: {
-    opacity: 0.7,
-  },
-  modalContainer: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
     justifyContent: 'center',
-    padding: 20,
+    alignItems: 'center',
+    marginTop: 16,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(0,0,0,0.05)',
   },
-  linkContainer: {
-    alignItems: 'flex-end',
-    marginBottom: 5,
+  registerText: {
+    color: '#333333',
+    fontSize: 14,
+    fontWeight: '400',
   },
-  linkDisabled: {
-    opacity: 0.5,
+  registerButton: {
+    marginLeft: -8,
   },
+  registerButtonText: {
+    fontWeight: '600',
+    color: theme.colors.primary,
+  }
 }); 

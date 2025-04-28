@@ -1,9 +1,29 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useIsFocused } from '@react-navigation/native';
 import { getAuth } from 'firebase/auth';
 import { getDatabase, ref, get } from 'firebase/database';
+import theme from '../constants/theme';
+
+const NavItem = ({ icon, label, isActive, onPress }) => (
+  <TouchableOpacity 
+    style={styles.navItem} 
+    onPress={onPress}
+    activeOpacity={0.7}
+  >
+    <View style={[styles.iconContainer, isActive && styles.activeIconContainer]}>
+      <Ionicons 
+        name={isActive ? icon : `${icon}-outline`} 
+        size={22} 
+        color={isActive ? theme.colors.primary : theme.colors.text.secondary} 
+      />
+    </View>
+    <Text style={[styles.navText, isActive && styles.activeNavText]}>
+      {label}
+    </Text>
+  </TouchableOpacity>
+);
 
 export default function Navbar({ activePage }) {
   const navigation = useNavigation();
@@ -51,7 +71,7 @@ export default function Navbar({ activePage }) {
     if (loading) {
       return (
         <View style={styles.navbar}>
-          <ActivityIndicator size="small" color="#FFFFFF" />
+          <ActivityIndicator size="small" color={theme.colors.primary} />
         </View>
       );
     }
@@ -60,37 +80,33 @@ export default function Navbar({ activePage }) {
       // Admin navbar
       return (
         <View style={styles.navbar}>
-          <TouchableOpacity 
-            style={[styles.navItem, activePage === 'admin' && styles.activeNavItem]}
-            onPress={() => navigation.navigate('AdminDashboard')}
-          >
-            <Ionicons name="people-outline" size={24} color="white" />
-            <Text style={styles.navText}>Users</Text>
-          </TouchableOpacity>
+          <NavItem 
+            icon="people" 
+            label="Users" 
+            isActive={activePage === 'admin'} 
+            onPress={() => navigation.navigate('AdminDashboard')} 
+          />
           
-          <TouchableOpacity 
-            style={[styles.navItem, activePage === 'keys' && styles.activeNavItem]}
-            onPress={() => navigation.navigate('ProductKeyManager')}
-          >
-            <Ionicons name="key-outline" size={24} color="white" />
-            <Text style={styles.navText}>Keys</Text>
-          </TouchableOpacity>
+          <NavItem 
+            icon="key" 
+            label="Keys" 
+            isActive={activePage === 'keys'} 
+            onPress={() => navigation.navigate('ProductKeyManager')} 
+          />
           
-          <TouchableOpacity 
-            style={[styles.navItem, activePage === 'requests' && styles.activeNavItem]}
-            onPress={() => navigation.navigate('GeofenceRequests')}
-          >
-            <Ionicons name="notifications-outline" size={24} color="white" />
-            <Text style={styles.navText}>Requests</Text>
-          </TouchableOpacity>
+          <NavItem 
+            icon="notifications" 
+            label="Requests" 
+            isActive={activePage === 'requests'} 
+            onPress={() => navigation.navigate('GeofenceRequests')} 
+          />
           
-          <TouchableOpacity 
-            style={[styles.navItem, activePage === 'profile' && styles.activeNavItem]}
-            onPress={() => navigation.navigate('Profile')}
-          >
-            <Ionicons name="person-outline" size={24} color="white" />
-            <Text style={styles.navText}>Profile</Text>
-          </TouchableOpacity>
+          <NavItem 
+            icon="person" 
+            label="Profile" 
+            isActive={activePage === 'profile'} 
+            onPress={() => navigation.navigate('Profile')} 
+          />
         </View>
       );
     }
@@ -100,50 +116,40 @@ export default function Navbar({ activePage }) {
       // Owner Navbar: IoTs, Maps, User Management, Logs, Profile
       return (
         <View style={styles.navbar}>
-          {/* IoTs Tab */}
-          <TouchableOpacity
-            style={[styles.navItem, activePage === 'dashboard' && styles.activeNavItem]}
-            onPress={() => navigation.navigate('Dashboard')}
-          >
-            <Ionicons name="grid-outline" size={24} color="white" />
-            <Text style={styles.navText}>IoTs</Text>
-          </TouchableOpacity>
-  
-          {/* Maps Tab */}
-          <TouchableOpacity
-            style={[styles.navItem, activePage === 'maps' && styles.activeNavItem]}
-            onPress={() => navigation.navigate('LocTrack')}
-          >
-            <Ionicons name="map-outline" size={24} color="white" />
-            <Text style={styles.navText}>Maps</Text>
-          </TouchableOpacity>
-  
-          {/* User Management Tab */}
-          <TouchableOpacity
-            style={[styles.navItem, activePage === 'userManagement' && styles.activeNavItem]}
-            onPress={() => navigation.navigate('UserManagement')}
-          >
-            <Ionicons name="people-circle-outline" size={24} color="white" />
-            <Text style={styles.navText}>Manage</Text>
-          </TouchableOpacity>
-  
-          {/* Logs Tab */}
-          <TouchableOpacity
-            style={[styles.navItem, activePage === 'logs' && styles.activeNavItem]}
-            onPress={() => navigation.navigate('Logs')}
-          >
-            <Ionicons name="receipt-outline" size={24} color="white" />
-            <Text style={styles.navText}>Logs</Text>
-          </TouchableOpacity>
-  
-          {/* Profile Tab */}
-          <TouchableOpacity
-            style={[styles.navItem, activePage === 'profile' && styles.activeNavItem]}
-            onPress={() => navigation.navigate('Profile')}
-          >
-            <Ionicons name="person-outline" size={24} color="white" />
-            <Text style={styles.navText}>Profile</Text>
-          </TouchableOpacity>
+          <NavItem 
+            icon="grid" 
+            label="IoTs" 
+            isActive={activePage === 'dashboard'} 
+            onPress={() => navigation.navigate('Dashboard')} 
+          />
+          
+          <NavItem 
+            icon="map" 
+            label="Maps" 
+            isActive={activePage === 'maps'} 
+            onPress={() => navigation.navigate('LocTrack')} 
+          />
+          
+          <NavItem 
+            icon="people-circle" 
+            label="Manage" 
+            isActive={activePage === 'userManagement'} 
+            onPress={() => navigation.navigate('UserManagement')} 
+          />
+          
+          <NavItem 
+            icon="receipt" 
+            label="Logs" 
+            isActive={activePage === 'logs'} 
+            onPress={() => navigation.navigate('Logs')} 
+          />
+          
+          <NavItem 
+            icon="person" 
+            label="Profile" 
+            isActive={activePage === 'profile'} 
+            onPress={() => navigation.navigate('Profile')} 
+          />
         </View>
       );
     }
@@ -151,32 +157,29 @@ export default function Navbar({ activePage }) {
     // Regular user navbar
     return (
       <View style={styles.navbar}>
-        <TouchableOpacity 
-          style={[styles.navItem, activePage === 'dashboard' && styles.activeNavItem]}
-          onPress={() => navigation.navigate('Dashboard')}
-        >
-          <Ionicons name="grid-outline" size={24} color="white" />
-          <Text style={styles.navText}>IoTs</Text>
-        </TouchableOpacity>
+        <NavItem 
+          icon="grid" 
+          label="IoTs" 
+          isActive={activePage === 'dashboard'} 
+          onPress={() => navigation.navigate('Dashboard')} 
+        />
         
-        <TouchableOpacity 
-          style={[styles.navItem, activePage === 'maps' && styles.activeNavItem]}
-          onPress={() => navigation.navigate('LocTrack')}
-        >
-          <Ionicons name="map-outline" size={24} color="white" />
-          <Text style={styles.navText}>Maps</Text>
-        </TouchableOpacity>
+        <NavItem 
+          icon="map" 
+          label="Maps" 
+          isActive={activePage === 'maps'} 
+          onPress={() => navigation.navigate('LocTrack')} 
+        />
         
-        <TouchableOpacity 
-          style={[styles.navItem, activePage === 'profile' && styles.activeNavItem]}
-          onPress={() => navigation.navigate('Profile')}
-        >
-          <Ionicons name="person-outline" size={24} color="white" />
-          <Text style={styles.navText}>Profile</Text>
-        </TouchableOpacity>
+        <NavItem 
+          icon="person" 
+          label="Profile" 
+          isActive={activePage === 'profile'} 
+          onPress={() => navigation.navigate('Profile')} 
+        />
       </View>
     );
-  }, [isAdmin, isOwner, activePage, loading]);
+  }, [isAdmin, isOwner, activePage, loading, navigation]);
 
   return navbarContent;
 }
@@ -190,39 +193,55 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     alignItems: 'center',
-    backgroundColor: '#2196F3',
-    height: 80,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: -2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 5,
-    paddingHorizontal: 10,
-    zIndex: 1000,
+    backgroundColor: Platform.OS === 'ios' 
+      ? 'rgba(255, 255, 255, 0.92)' 
+      : 'rgba(255, 255, 255, 0.97)',
+    height: 100,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingBottom: Platform.OS === 'ios' ? 25 : 15,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(235, 235, 235, 0.5)',
+    ...Platform.select({
+      ios: {
+        shadowColor: theme.colors.shadow,
+        shadowOffset: { width: 0, height: -3 },
+        shadowOpacity: 0.1,
+        shadowRadius: 6,
+      },
+      android: {
+        elevation: 8,
+      },
+    }),
+    zIndex: 10,
   },
   navItem: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 6,
-    borderRadius: 15,
-    height: '70%',
-    marginHorizontal: 4,
-    flex: 1,
-    maxWidth: 70,
+    paddingVertical: 12,
+  },
+  iconContainer: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  activeIconContainer: {
+    backgroundColor: `${theme.colors.primaryLight}40`,
+    width: 44,
+    height: 44,
+    borderRadius: 14,
   },
   navText: {
-    color: '#FFFFFF',
     fontSize: 12,
     fontWeight: '500',
-    textAlign: 'center',
+    color: theme.colors.text.secondary,
     marginTop: 4,
   },
-  activeNavItem: {
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+  activeNavText: {
+    color: theme.colors.primary,
+    fontWeight: '600',
   },
 }); 

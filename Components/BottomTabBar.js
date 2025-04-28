@@ -1,7 +1,61 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Animated } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Animated, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
+import theme from '../constants/theme';
+
+const TabBarIcon = ({ iconName, isFilled, color, size = 24 }) => (
+  <Ionicons 
+    name={isFilled ? iconName : `${iconName}-outline`} 
+    size={size} 
+    color={color} 
+  />
+);
+
+const TabItem = ({ label, iconName, isActive, onPress }) => {
+  // Using scale animation for active tab
+  const animatedScale = React.useRef(new Animated.Value(isActive ? 1.1 : 1)).current;
+  
+  React.useEffect(() => {
+    Animated.spring(animatedScale, {
+      toValue: isActive ? 1.1 : 1,
+      friction: 7,
+      tension: 40,
+      useNativeDriver: true,
+    }).start();
+  }, [isActive, animatedScale]);
+
+  return (
+    <TouchableOpacity 
+      style={styles.tabItem} 
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
+      <Animated.View 
+        style={[
+          styles.tabItemContainer,
+          isActive && styles.activeTabItemContainer,
+          { transform: [{ scale: animatedScale }] }
+        ]}
+      >
+        <TabBarIcon 
+          iconName={iconName} 
+          isFilled={isActive} 
+          color={isActive ? theme.colors.primary : theme.colors.text.secondary} 
+          size={isActive ? 24 : 22} 
+        />
+      </Animated.View>
+      <Text 
+        style={[
+          styles.tabText, 
+          isActive && styles.activeTabText
+        ]}
+      >
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+};
 
 const BottomTabBar = ({ activeRoute }) => {
   const navigation = useNavigation();
@@ -9,47 +63,26 @@ const BottomTabBar = ({ activeRoute }) => {
   return (
     <View style={styles.container}>
       <View style={styles.tabBarContainer}>
-        <TouchableOpacity 
-          style={[styles.tabItem, activeRoute === 'maps' && styles.activeTab]} 
+        <TabItem 
+          label="Map"
+          iconName="map"
+          isActive={activeRoute === 'maps'}
           onPress={() => navigation.navigate('LocTrack')}
-        >
-          <View style={activeRoute === 'maps' ? styles.iconBackground : null}>
-            <Ionicons 
-              name={activeRoute === 'maps' ? 'map' : 'map-outline'} 
-              size={24} 
-              color={activeRoute === 'maps' ? '#FFFFFF' : '#555'} 
-            />
-          </View>
-          <Text style={[styles.tabText, activeRoute === 'maps' && styles.activeTabText]}>Map</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={[styles.tabItem, activeRoute === 'steps' && styles.activeTab]} 
+        />
+        
+        <TabItem 
+          label="Steps"
+          iconName="footsteps"
+          isActive={activeRoute === 'steps'}
           onPress={() => navigation.navigate('StepTracker')}
-        >
-          <View style={activeRoute === 'steps' ? styles.iconBackground : null}>
-            <Ionicons 
-              name={activeRoute === 'steps' ? 'footsteps' : 'footsteps-outline'} 
-              size={24} 
-              color={activeRoute === 'steps' ? '#FFFFFF' : '#555'} 
-            />
-          </View>
-          <Text style={[styles.tabText, activeRoute === 'steps' && styles.activeTabText]}>Steps</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={[styles.tabItem, activeRoute === 'profile' && styles.activeTab]} 
+        />
+        
+        <TabItem 
+          label="Profile"
+          iconName="person"
+          isActive={activeRoute === 'profile'}
           onPress={() => navigation.navigate('Profile')}
-        >
-          <View style={activeRoute === 'profile' ? styles.iconBackground : null}>
-            <Ionicons 
-              name={activeRoute === 'profile' ? 'person' : 'person-outline'} 
-              size={24} 
-              color={activeRoute === 'profile' ? '#FFFFFF' : '#555'} 
-            />
-          </View>
-          <Text style={[styles.tabText, activeRoute === 'profile' && styles.activeTabText]}>Profile</Text>
-        </TouchableOpacity>
+        />
       </View>
     </View>
   );
@@ -59,28 +92,35 @@ const styles = StyleSheet.create({
   container: {
     position: 'absolute',
     bottom: 20,
-    left: 20,
-    right: 20,
+    left: 15,
+    right: 15,
     alignItems: 'center',
     zIndex: 10,
   },
   tabBarContainer: {
     flexDirection: 'row',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 30,
-    height: 60,
+    backgroundColor: Platform.OS === 'ios' 
+      ? 'rgba(255, 255, 255, 0.9)' 
+      : 'rgba(255, 255, 255, 0.95)',
+    borderRadius: 28,
+    height: 64,
     width: '100%',
     justifyContent: 'space-around',
     alignItems: 'center',
-    paddingHorizontal: 15,
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.15,
-    shadowRadius: 10,
-    elevation: 8,
+    paddingHorizontal: 16,
+    ...Platform.select({
+      ios: {
+        shadowColor: theme.colors.shadow,
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.15,
+        shadowRadius: 12,
+      },
+      android: {
+        elevation: 8,
+      },
+    }),
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.5)',
   },
   tabItem: {
     flex: 1,
@@ -88,25 +128,25 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 8,
   },
-  iconBackground: {
-    backgroundColor: '#766AC8',
+  tabItemContainer: {
     width: 40,
     height: 40,
-    borderRadius: 20,
-    justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 4,
+    justifyContent: 'center',
+    marginBottom: 3,
   },
-  activeTab: {
-    transform: [{translateY: -2}],
+  activeTabItemContainer: {
+    backgroundColor: `${theme.colors.primaryLight}55`, // Adding transparency
+    borderRadius: 14,
   },
   tabText: {
-    fontSize: 12,
-    color: '#555',
-    marginTop: 0,
+    fontSize: 11,
+    color: theme.colors.text.secondary,
+    fontWeight: '500',
+    marginTop: 2,
   },
   activeTabText: {
-    color: '#766AC8',
+    color: theme.colors.primary,
     fontWeight: '600',
   }
 });

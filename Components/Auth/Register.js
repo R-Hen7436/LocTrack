@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Image } from 'react-native';
 import { getAuth, createUserWithEmailAndPassword, sendEmailVerification, updateProfile } from 'firebase/auth';
 import { getDatabase, ref, set, get } from 'firebase/database';
 import { Ionicons } from '@expo/vector-icons';
@@ -226,7 +226,17 @@ export default function Register({ navigation }) {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>Register</Text>
+      <View style={styles.headerContainer}>
+        <Image
+          source={require('../../assets/icon.png')}
+          style={styles.logo}
+          resizeMode="contain"
+        />
+        <Text style={styles.title}>Create Account</Text>
+        <Text style={styles.subtitle}>
+          Join our secure location tracking platform
+        </Text>
+      </View>
       
       <TextInput
         style={styles.input}
@@ -371,6 +381,11 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     textAlign: 'center',
   },
+  subtitle: {
+    fontSize: 16,
+    color: '#999',
+    textAlign: 'center',
+  },
   input: {
     borderWidth: 1,
     borderColor: '#ddd',
@@ -477,5 +492,14 @@ const styles = StyleSheet.create({
   selectedText: {
     color: 'black',
     fontWeight: 'bold',
+  },
+  headerContainer: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  logo: {
+    width: 100,
+    height: 100,
+    marginBottom: 10,
   },
 }); 

@@ -125,3 +125,24 @@ const styles = StyleSheet.create({
   },
 });
 
+// Main components
+export { default as BottomTabBar } from './BottomTabBar';
+export { default as Navbar } from './Navbar';
+export { default as StepTracker } from './StepTracker';
+export { default as Logs } from './Logs';
+export { default as UserManagement } from './UserManagement';
+export { default as LocTrack } from './locTrack';
+export { default as GeofencingUtils } from './GeofencingUtils';
+
+// Auth components
+export { default as Login } from './Auth/Login';
+export { default as Register } from './Auth/Register';
+export { default as ForgotPassword } from './Auth/ForgotPassword';
+export { default as VerifyEmail } from './Auth/VerifyEmail';
+export { default as ChangePassword } from './Auth/ChangePassword';
+export { default as InvitationScreen } from './Auth/InvitationScreen';
+export { default as OwnerInitialization } from './Auth/OwnerInitialization';
+
+// UI components
+export * from './UI';
+

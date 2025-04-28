@@ -1,23 +1,22 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView, Image, Modal, TextInput, ActivityIndicator, SafeAreaView, KeyboardAvoidingView, Platform, Keyboard, TouchableWithoutFeedback } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView, Image, Modal, TextInput, ActivityIndicator, SafeAreaView, Platform } from 'react-native';
 import { getAuth, signOut, updateProfile } from 'firebase/auth';
-import { ref, get, set, remove, onValue } from 'firebase/database';
+import { ref, get, set, onValue } from 'firebase/database';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import Navbar from '../Navbar';
 import { auth, db, storage } from '../firebaseConfig';
-import EditProfile from './EditProfile';
 import { useFocusEffect } from '@react-navigation/native';
 import { getDatabase } from 'firebase/database';
 import { Clipboard } from 'react-native';
 import { logAudit } from '../../utils/auditUtils';
 import { AUDIT_ACTIONS } from '../../constants/auditActions';
 import ActivityLog from './ActivityLog';
-import { createUserWithTempPassword } from '../../utils/userUtils';
+import theme from '../../constants/theme';
+import { Button, Card, Input } from '../UI';
 
-// Add this helper function at the top level, before the component definition
-// Format name function to safely handle empty or null fields
+// Helper function for formatting names
 const formatName = (firstName, middleName, lastName) => {
   const parts = [];
   if (firstName && firstName.trim()) parts.push(firstName.trim());
@@ -27,7 +26,7 @@ const formatName = (firstName, middleName, lastName) => {
   return parts.length > 0 ? parts.join(' ') : 'User';
 }
 
-// Add a helper function to safely get initials
+// Helper function for getting initials
 const getInitials = (firstName, lastName) => {
   let initials = '';
   if (firstName && firstName.trim()) {
@@ -39,77 +38,202 @@ const getInitials = (firstName, lastName) => {
   return initials || '?';
 };
 
-// Add delay function to ensure auth is initialized
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-const formatLastSeen = (timestamp) => {
-  if (!timestamp) return 'Never';
-  
-  const lastSeen = new Date(timestamp);
-  const now = new Date();
-  const diffMinutes = Math.floor((now - lastSeen) / (1000 * 60));
-  
-  if (diffMinutes < 1) return 'Just now';
-  if (diffMinutes < 60) return `${diffMinutes}m ago`;
-  
-  const diffHours = Math.floor(diffMinutes / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
-  
-  const diffDays = Math.floor(diffHours / 24);
-  if (diffDays < 7) return `${diffDays}d ago`;
-  
-  return lastSeen.toLocaleDateString();
-};
-
-// Add status formatting function before the component definition
+// Helper for formatting status
 const formatStatus = (status) => {
   if (!status) return 'Offline';
   return status.charAt(0).toUpperCase() + status.slice(1);
 };
 
-// Add MAC address formatter
+// Helper for formatting MAC address
 const formatMacAddress = (parts) => {
   return parts.map(part => part.toUpperCase()).join(':');
 };
 
-// Add MAC address validator
+// Helper for validating MAC address
 const isValidMacAddress = (parts) => {
   const regex = /^[0-9A-Fa-f]{2}$/;
   return parts.every(part => regex.test(part)) && parts.length === 6;
 };
 
+// InfoRow component
+const InfoRow = ({ label, value, icon, copyable = false }) => {
+  const handleCopy = () => {
+    if (value && copyable) {
+      Clipboard.setString(value.toString());
+      Alert.alert('Copied', `${label} copied to clipboard`);
+    }
+  };
+
+  return (
+    <View style={styles.infoRow}>
+      <View style={styles.infoLabelContainer}>
+        {icon && <Ionicons name={icon} size={18} color="#666" style={styles.infoIcon} />}
+        <Text style={styles.infoLabel}>{label}</Text>
+      </View>
+      <View style={styles.infoValueContainer}>
+        <Text style={styles.infoValue}>{value || 'Not set'}</Text>
+        {copyable && value && (
+          <TouchableOpacity onPress={handleCopy} style={styles.copyButton}>
+            <Ionicons name="copy-outline" size={18} color="#007AFF" />
+          </TouchableOpacity>
+        )}
+      </View>
+    </View>
+  );
+};
+
+// InviteTeamMemberButton component
+const InviteTeamMemberButton = ({ teamCode, onInviteSent }) => {
+  const [email, setEmail] = useState('');
+  const [showModal, setShowModal] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSendInvite = async () => {
+    if (!email || !email.trim()) {
+      setError('Please enter an email address');
+      return;
+    }
+
+    // Email validation regex
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) {
+      setError('Please enter a valid email address');
+      return;
+    }
+
+    setSending(true);
+    setError('');
+
+    try {
+      // Create an invitation record in the database
+      const database = getDatabase();
+      const invitationId = `${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+      await set(ref(database, `invitations/${invitationId}`), {
+        teamCode: teamCode,
+        email: email.trim().toLowerCase(),
+        sentAt: new Date().toISOString(),
+        status: 'pending',
+      });
+
+      // Log the invitation
+      await logAudit(AUDIT_ACTIONS.SEND_INVITATION, {
+        teamCode: teamCode,
+        recipientEmail: email.trim().toLowerCase(),
+        invitationId,
+      });
+
+      // Success
+      setSending(false);
+      setEmail('');
+      setShowModal(false);
+      
+      if (onInviteSent) {
+        onInviteSent();
+      }
+      
+      Alert.alert(
+        'Invitation Sent',
+        `An invitation has been sent to ${email.trim().toLowerCase()} to join your team.`
+      );
+    } catch (error) {
+      console.error('Error sending invitation:', error);
+      setError('Failed to send invitation. Please try again.');
+      setSending(false);
+    }
+  };
+
+  return (
+    <>
+      <Button
+        variant="outline"
+        label="Invite Team Member"
+        leftIcon="person-add-outline"
+        onPress={() => setShowModal(true)}
+        style={styles.inviteButton}
+      />
+
+      <Modal
+        visible={showModal}
+        transparent={true}
+        animationType="slide"
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Invite Team Member</Text>
+              <TouchableOpacity onPress={() => setShowModal(false)}>
+                <Ionicons name="close" size={24} color="#666" />
+              </TouchableOpacity>
+            </View>
+            
+            <Text style={styles.modalSubtitle}>
+              Enter the email address of the person you want to invite to your team.
+            </Text>
+            
+            <Input
+              label="Email Address"
+              leftIcon="mail-outline"
+              value={email}
+              onChangeText={setEmail}
+              keyboardType="email-address"
+              errorText={error}
+              placeholder="colleague@example.com"
+            />
+            
+            <View style={styles.modalButtons}>
+              <Button
+                variant="outline"
+                label="Cancel"
+                onPress={() => setShowModal(false)}
+                style={styles.modalCancelButton}
+              />
+              <Button
+                variant="primary"
+                label="Send Invitation"
+                onPress={handleSendInvite}
+                isLoading={sending}
+                disabled={sending}
+                style={styles.modalSendButton}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </>
+  );
+};
+
 export default function Profile({ navigation }) {
   const [userProfile, setUserProfile] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [userStatus, setUserStatus] = useState('offline'); // Add state for user status
+  const [userStatus, setUserStatus] = useState('offline');
   const [isEditingMac, setIsEditingMac] = useState(false);
   const [macParts, setMacParts] = useState(['', '', '', '', '', '']);
+  const [activeTab, setActiveTab] = useState('profile'); // 'profile' or 'activity'
   const macInputRefs = Array(6).fill(0).map(() => React.createRef());
 
-  useEffect(() => {
-    console.log("Profile component mounted");
-    console.log("Auth state:", auth?.currentUser?.uid);
-  }, []);
+  // Add this to hide the navigation header
+  React.useLayoutEffect(() => {
+    navigation.setOptions({
+      headerShown: false, // Hide the default navigation header
+    });
+  }, [navigation]);
 
+  // Load user profile on component focus
   useFocusEffect(
     React.useCallback(() => {
-      console.log("Focus effect triggered");
       if (auth?.currentUser?.uid) {
-        console.log("Loading profile for user:", auth.currentUser.uid);
-        loadUserProfile(); // Simplified - just load profile
+        loadUserProfile();
       } else {
-        console.error("No current user in auth");
         setLoading(false);
       }
       
-      // Return cleanup function
-      return () => {
-        console.log("Focus effect cleanup");
-      };
-    }, [auth.currentUser?.uid]) // REMOVED: userProfile?.teamCode dependency
+      return () => {};
+    }, [auth.currentUser?.uid])
   );
 
-  // Add a new effect to monitor the user's presence status
+  // Monitor user presence status
   useEffect(() => {
     let presenceUnsubscribe = null;
     
@@ -141,47 +265,40 @@ export default function Profile({ navigation }) {
     };
   }, []);
 
-  React.useLayoutEffect(() => {
-    navigation.setOptions({
-      headerRight: () => (
-        <TouchableOpacity
-          onPress={async () => {
+  // Logout handler
+  const handleLogout = async () => {
+    Alert.alert(
+      "Log Out",
+      "Are you sure you want to log out?",
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Log Out", 
+          style: "destructive",
+          onPress: async () => {
             try {
               await signOut(auth);
             } catch (error) {
               console.error('Error logging out:', error);
               Alert.alert('Error', 'Failed to log out');
             }
-          }}
-          style={{ marginRight: 15 }}
-        >
-          <Ionicons name="log-out-outline" size={24} color="#FF3B30" />
-        </TouchableOpacity>
-      ),
-    });
-  }, [navigation]);
+          }
+        }
+      ]
+    );
+  };
 
-  // Load profile with retry logic
-  const loadUserProfile = async (retryCount = 0) => {
+  // Load profile function
+  const loadUserProfile = async () => {
     try {
       setLoading(true);
       
-      // Check if auth is initialized
       if (!auth || !auth.currentUser) {
-        console.log("Auth not ready, waiting...");
-        if (retryCount < 3) {
-          // Wait 1 second and retry
-          await delay(1000);
-          return loadUserProfile(retryCount + 1);
-        } else {
-          console.error("Failed to get auth after retries");
-          setLoading(false);
-          return;
-        }
+        setLoading(false);
+        return;
       }
       
       console.log("Loading profile for user ID:", auth.currentUser.uid);
-      console.log("Current display name from Auth:", auth.currentUser.displayName);
       
       const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
       const snapshot = await get(userProfileRef);
@@ -199,127 +316,111 @@ export default function Profile({ navigation }) {
           authLastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : '';
         }
         
-        // Ensure all required fields exist with fallbacks
-        const cleanedProfile = {
-          firstName: profileData.firstName || authFirstName || '',
-          lastName: profileData.lastName || authLastName || '',
-          middleName: profileData.middleName || '',
-          email: profileData.email || auth.currentUser.email || '',
-          photoURL: profileData.photoURL || auth.currentUser.photoURL || '',
-          role: profileData.role || 'member',
-          teamCode: profileData.teamCode || '',
-          isOwner: profileData.isOwner || profileData.role === 'owner', // Ensure role consistency
-          ...profileData // keep any other fields
-        };
-        
-        console.log('Cleaned profile data:', cleanedProfile);
-        setUserProfile(cleanedProfile);
-        
-        // Ensure role and isOwner are consistent
-        if (cleanedProfile.role === 'owner' && !cleanedProfile.isOwner) {
-          console.log('Fixing inconsistent owner role...');
-          await set(userProfileRef, {
-            ...cleanedProfile,
-            isOwner: true
-          });
+        // Load existing MAC address
+        let macAddress = profileData.macAddress || null;
+        if (macAddress) {
+          const parts = macAddress.split(':');
+          if (parts.length === 6) {
+            setMacParts(parts);
+          }
         }
+        
+        setUserProfile({
+          ...profileData,
+          // Fill in any missing fields from auth if needed
+          firstName: profileData.firstName || authFirstName,
+          lastName: profileData.lastName || authLastName,
+          email: profileData.email || auth.currentUser.email,
+          uid: auth.currentUser.uid,
+          photoURL: profileData.photoURL || auth.currentUser.photoURL,
+        });
       } else {
-        console.log("No profile data found, creating default profile");
-        console.log("Auth display name:", auth.currentUser.displayName);
+        console.log('No profile data found, creating from auth data');
         
-        // Parse display name for better name extraction
-        let firstName = '';
-        let lastName = '';
-        if (auth.currentUser.displayName) {
-          const nameParts = auth.currentUser.displayName.split(' ');
-          firstName = nameParts[0] || '';
-          lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : '';
-        }
+        // Create a basic profile from auth data
+        const nameParts = auth.currentUser.displayName ? auth.currentUser.displayName.split(' ') : [];
+        const firstName = nameParts[0] || '';
+        const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : '';
         
-        // Create default profile from auth data
-        const defaultProfile = {
-          firstName: firstName,
-          lastName: lastName,
-          middleName: '',
-          email: auth.currentUser.email || '',
-          photoURL: auth.currentUser.photoURL || '',
-          role: 'member',
-          teamCode: '',
-          createdAt: new Date().toISOString()
+        const basicProfile = {
+          firstName,
+          lastName,
+          email: auth.currentUser.email,
+          uid: auth.currentUser.uid,
+          photoURL: auth.currentUser.photoURL,
+          createdAt: new Date().toISOString(),
         };
         
-        console.log('Created default profile:', defaultProfile);
-        setUserProfile(defaultProfile);
-        
-        // Save the default profile
-        try {
-          await set(userProfileRef, defaultProfile);
-          console.log("Created default profile for user");
-        } catch (error) {
-          console.error("Error creating default profile:", error);
-        }
+        // Save this basic profile
+        await set(userProfileRef, basicProfile);
+        setUserProfile(basicProfile);
       }
       
       setLoading(false);
     } catch (error) {
-      console.error('Error loading profile:', error);
+      console.error('Error loading user profile:', error);
       setLoading(false);
+      Alert.alert('Error', 'Failed to load profile data');
     }
   };
 
+  // Image picker function
   const pickImage = async () => {
     try {
-      // Request permission
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission needed', 'Please grant permission to access your photos.');
+      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permissionResult.granted) {
+        Alert.alert('Permission Denied', 'Permission to access camera roll is required');
         return;
       }
 
-      // Launch image picker
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
         aspect: [1, 1],
-        quality: 0.5,
+        quality: 0.8,
       });
 
-      if (!result.canceled && result.assets && result.assets[0]) {
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        console.log('Image selected:', result.assets[0].uri);
         await uploadImage(result.assets[0].uri);
       }
     } catch (error) {
       console.error('Error picking image:', error);
-      Alert.alert('Error', 'Failed to pick image. Please try again.');
+      Alert.alert('Error', 'Failed to pick image');
     }
   };
 
+  // Upload image function
   const uploadImage = async (uri) => {
     try {
+      if (!auth?.currentUser?.uid) {
+        throw new Error('User not authenticated');
+      }
+      
+      setLoading(true);
+      
+      // Convert URI to blob
       const response = await fetch(uri);
       const blob = await response.blob();
       
-      // Use the storage instance from firebaseConfig
-      const imageRef = storageRef(storage, `profile_pictures/${auth.currentUser.uid}`);
-      console.log('Uploading to:', imageRef.fullPath);
+      // Upload to Firebase Storage
+      const userImageRef = storageRef(storage, `profile_images/${auth.currentUser.uid}`);
+      await uploadBytes(userImageRef, blob);
       
-      // Upload image to Firebase Storage
-      const uploadResult = await uploadBytes(imageRef, blob);
-      console.log('Upload successful:', uploadResult);
+      // Get the download URL
+      const downloadURL = await getDownloadURL(userImageRef);
       
-      // Get download URL
-      const downloadURL = await getDownloadURL(imageRef);
-      console.log('Download URL:', downloadURL);
-      
-      // Update auth profile
+      // Update user profile in Authentication
       await updateProfile(auth.currentUser, {
         photoURL: downloadURL
       });
       
-      // Update database profile
+      // Update user profile in Database
       const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
       await set(userProfileRef, {
         ...userProfile,
-        photoURL: downloadURL
+        photoURL: downloadURL,
+        updatedAt: new Date().toISOString()
       });
       
       // Update local state
@@ -328,712 +429,415 @@ export default function Profile({ navigation }) {
         photoURL: downloadURL
       }));
       
-      Alert.alert('Success', 'Profile picture updated successfully');
+      setLoading(false);
+      
     } catch (error) {
       console.error('Error uploading image:', error);
-      Alert.alert('Error', 'Failed to upload image. Please try again.');
+      setLoading(false);
+      Alert.alert('Error', 'Failed to upload image');
     }
   };
 
+  // MAC address handlers
   const handleMacPartChange = (text, index) => {
-    // Remove non-hex characters
-    const cleaned = text.replace(/[^0-9A-Fa-f]/g, '');
+    // Only allow hex characters
+    const hexOnly = text.replace(/[^0-9A-Fa-f]/g, '').substring(0, 2);
     
-    if (cleaned.length <= 2) {
-      const newParts = [...macParts];
-      newParts[index] = cleaned;
-      setMacParts(newParts);
+    // Update the MAC parts array
+    const newParts = [...macParts];
+    newParts[index] = hexOnly;
+    setMacParts(newParts);
       
-      // Auto-advance to next input if 2 characters entered
-      if (cleaned.length === 2 && index < 5) {
-        macInputRefs[index + 1].current.focus();
-      }
+    // Auto-focus next input if this one is filled
+    if (hexOnly.length === 2 && index < 5) {
+      macInputRefs[index + 1].current?.focus();
     }
   };
 
   const handleMacKeyPress = (e, index) => {
+    // Handle backspace key - move to previous input when empty
     if (e.nativeEvent.key === 'Backspace' && macParts[index] === '' && index > 0) {
-      // Move to previous input on backspace if current input is empty
-      macInputRefs[index - 1].current.focus();
+      macInputRefs[index - 1].current?.focus();
     }
   };
 
   const handleSaveMacAddress = async () => {
-    if (!isValidMacAddress(macParts)) {
-      Alert.alert('Invalid MAC Address', 'Please enter a valid MAC address in all fields');
-      return;
-    }
-
     try {
-      const formattedMac = formatMacAddress(macParts);
+      // Validate MAC address format
+      if (!isValidMacAddress(macParts)) {
+        Alert.alert('Invalid MAC Address', 'Please enter a valid MAC address (6 hex pairs)');
+        return;
+      }
+
+      setLoading(true);
+      
+      // Format the MAC address
+      const macAddress = formatMacAddress(macParts);
+      
+      // Update the profile in the database
       const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
       await set(userProfileRef, {
         ...userProfile,
-        MacAddress: formattedMac
+        macAddress,
+        updatedAt: new Date().toISOString()
       });
 
+      // Update local state
       setUserProfile(prev => ({
         ...prev,
-        MacAddress: formattedMac
+        macAddress
       }));
+      
       setIsEditingMac(false);
-      Alert.alert('Success', 'MAC address updated successfully');
+      setLoading(false);
+      
+      Alert.alert('Success', 'MAC address has been updated');
+      
     } catch (error) {
-      console.error('Error updating MAC address:', error);
-      Alert.alert('Error', 'Failed to update MAC address');
+      console.error('Error saving MAC address:', error);
+      setLoading(false);
+      Alert.alert('Error', 'Failed to save MAC address');
     }
   };
 
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#4682B4" />
+        <Text style={styles.loadingText}>Loading profile...</Text>
+      </View>
+    );
+  }
+
   return (
-    <View style={styles.container}>
-      <SafeAreaView style={styles.safeArea}>
-        {loading ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color="#007AFF" />
-            <Text style={styles.loadingText}>Loading profile...</Text>
-          </View>
-        ) : (
-          <ScrollView contentContainerStyle={styles.scrollContainer}>
-            {/* Profile Card */}
-            <View style={styles.card}>
-              <View style={styles.profileHeader}>
-                <TouchableOpacity onPress={pickImage} style={styles.profileImageContainer}>
-                  {userProfile?.photoURL ? (
-                    <Image source={{ uri: userProfile.photoURL }} style={styles.profileImage} />
-                  ) : (
-                    <View style={styles.profileImageFallback}>
-                      <Text style={styles.profileImageFallbackText}>
-                        {getInitials(userProfile?.firstName || '', userProfile?.lastName || '')}
-                      </Text>
-                    </View>
-                  )}
-                </TouchableOpacity>
-                <View style={styles.profileInfo}>
-                  <Text style={styles.userName}>
-                    {formatName(
-                      userProfile?.firstName || '', 
-                      userProfile?.middleName || '', 
-                      userProfile?.lastName || ''
-                    )}
-                  </Text>
-                  <Text style={styles.userRole}>
-                    {userProfile?.role ? userProfile.role.charAt(0).toUpperCase() + userProfile.role.slice(1) : 'User'}
-                  </Text>
-                  
-                  <View style={styles.statusIndicator}>
-                    <View 
-                      style={[
-                        styles.statusDot, 
-                        { backgroundColor: userStatus === 'online' ? '#4CD964' : '#8E8E93' }
-                      ]} 
-                    />
-                    <Text style={styles.statusText}>{formatStatus(userStatus)}</Text>
-                  </View>
-                  
-                  <TouchableOpacity 
-                    style={styles.editButton} 
-                    onPress={() => navigation.navigate('EditProfile', { userProfile })}
-                  >
-                    <Text style={styles.editButtonText}>Edit Profile</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
-
-            {/* Personal Information */}
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Personal Information</Text>
-              <View style={styles.infoItem}>
-                <Text style={styles.infoLabel}>Email</Text>
-                <Text style={styles.infoValue}>{userProfile?.email || 'Not provided'}</Text>
-              </View>
-              <View style={styles.infoItem}>
-                <Text style={styles.infoLabel}>Role</Text>
-                <Text style={styles.infoValue}>
-                  {userProfile?.role 
-                    ? userProfile.role.charAt(0).toUpperCase() + userProfile.role.slice(1) 
-                    : 'Not specified'}
-                </Text>
-              </View>
-              <View style={styles.infoItem}>
-                <Text style={styles.infoLabel}>MAC Address</Text>
-                {isEditingMac ? (
-                  <View style={styles.macAddressEditContainer}>
-                    <View style={styles.macInputWrapper}>
-                      {macParts.map((part, index) => (
-                        <React.Fragment key={index}>
-                          <TextInput
-                            ref={macInputRefs[index]}
-                            style={styles.macAddressPartInput}
-                            value={part}
-                            onChangeText={(text) => handleMacPartChange(text, index)}
-                            onKeyPress={(e) => handleMacKeyPress(e, index)}
-                            placeholder="XX"
-                            placeholderTextColor="#999"
-                            autoCapitalize="characters"
-                            maxLength={2}
-                            selectTextOnFocus={true}
-                          />
-                          {index < 5 && <Text style={styles.macAddressColon}>:</Text>}
-                        </React.Fragment>
-                      ))}
-                    </View>
-                    <View style={styles.macAddressActions}>
-                      <TouchableOpacity
-                        style={[styles.macAddressButton, styles.macAddressCancelButton]}
-                        onPress={() => {
-                          setIsEditingMac(false);
-                          if (userProfile?.MacAddress) {
-                            const parts = userProfile.MacAddress.split(':');
-                            setMacParts(parts);
-                          } else {
-                            setMacParts(['', '', '', '', '', '']);
-                          }
-                        }}
-                      >
-                        <Ionicons name="close" size={20} color="#FF3B30" />
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[styles.macAddressButton, styles.macAddressSaveButton]}
-                        onPress={handleSaveMacAddress}
-                      >
-                        <Ionicons name="checkmark" size={20} color="#34C759" />
-                      </TouchableOpacity>
-                    </View>
-                    <Text style={styles.macAddressHint}>Enter MAC address in hexadecimal format</Text>
-                  </View>
-                ) : (
-                  <TouchableOpacity
-                    style={styles.macAddressDisplay}
-                    onPress={() => {
-                      if (userProfile?.MacAddress) {
-                        const parts = userProfile.MacAddress.split(':');
-                        setMacParts(parts);
-                      }
-                      setIsEditingMac(true);
-                    }}
-                  >
-                    <Text style={[
-                      styles.infoValue,
-                      !userProfile?.MacAddress && styles.macAddressPlaceholder
-                    ]}>
-                      {userProfile?.MacAddress || 'Set MAC Address'}
-                    </Text>
-                    <Ionicons name="pencil" size={16} color="#007AFF" style={styles.editIcon} />
-                  </TouchableOpacity>
-                )}
-              </View>
-              <TouchableOpacity 
-                style={styles.locationHistoryButton}
-                onPress={() => navigation.navigate('locationLogs')}
-              >
-                <Ionicons name="location-outline" size={20} color="#007AFF" />
-                <Text style={styles.locationHistoryButtonText}>View Location History</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Activity Log */}
-            <ActivityLog />
-
-            {/* Team Section - Only for owners */}
-            {userProfile?.role === 'owner' && (
-              <>
-                <View style={styles.card}>
-                  <Text style={styles.cardTitle}>Team Information</Text>
-                  <View style={styles.teamCodeContainer}>
-                    <View>
-                      <Text style={styles.infoLabel}>Team Code</Text>
-                      <Text style={styles.teamCodeDescription}>Share this code to invite team members</Text>
-                    </View>
-                    <View style={styles.codeBox}>
-                      <Text style={styles.teamCode}>{userProfile.teamCode || 'No team code found'}</Text>
-                      <TouchableOpacity 
-                        onPress={() => {
-                          if (userProfile.teamCode) {
-                            Clipboard.setString(userProfile.teamCode);
-                            Alert.alert('Copied', 'Team code copied to clipboard');
-                          }
-                        }}
-                        disabled={!userProfile.teamCode}
-                        style={styles.copyButton}
-                      >
-                        <Ionicons name="copy-outline" size={20} color="#007AFF" />
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                </View>
-              </>
-            )}
-          </ScrollView>
-        )}
-      </SafeAreaView>
-      <Navbar activePage="profile" />
-    </View>
-  );
-}
-
-const InfoRow = ({ label, value }) => (
-  <View style={styles.infoRow}>
-    <Text style={styles.label}>{label}</Text>
-    <Text style={styles.value}>{value || 'Not provided'}</Text>
-  </View>
-);
-
-const InviteTeamMemberButton = ({ teamCode, onInviteSent }) => {
-  const [modalVisible, setModalVisible] = useState(false);
-  const [email, setEmail] = useState('');
-  const [isInviting, setIsInviting] = useState(false);
-  const inputRef = React.useRef(null);
-
-  useEffect(() => {
-    if (modalVisible && inputRef.current) {
-      setTimeout(() => {
-        inputRef.current.focus();
-      }, 300);
-    }
-  }, [modalVisible]);
-
-  const handleSendInvite = async () => {
-    if (!email || !email.trim()) {
-      Alert.alert('Error', 'Please enter an email address');
-      return;
-    }
-
-    Keyboard.dismiss();
-    setIsInviting(true);
-    
-    try {
-      if (!auth.currentUser) {
-        throw new Error("You must be logged in to send invitations");
-      }
+    <SafeAreaView style={styles.container}>
+      {/* Update header to match Logs and UserManagement style */}
+      <View style={styles.headerContainer}>
+        <Text style={styles.header}>My Profile</Text>
+        <TouchableOpacity 
+          style={styles.refreshButton}
+          onPress={loadUserProfile}
+        >
+          <Ionicons name="refresh" size={20} color="#007AFF" />
+        </TouchableOpacity>
+      </View>
       
-      // Generate a safer invitation ID that doesn't use encodeURIComponent
-      // Replace @ and . with _ to avoid Firebase path issues
-      const safeEmail = email.trim().replace(/[@.]/g, '_');
-      const uniqueInviteId = `${safeEmail}_${Date.now()}`;
-      const invitationRef = ref(db, `invitations/${uniqueInviteId}`);
-      
-      // Get owner profile for name
-      const ownerProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
-      const ownerSnapshot = await get(ownerProfileRef);
-      const ownerData = ownerSnapshot.exists() ? ownerSnapshot.val() : {};
-      
-      const ownerName = formatName(
-        ownerData.firstName || '', 
-        ownerData.middleName || '', 
-        ownerData.lastName || ''
-      );
-      
-      // Create user with temporary password
-      const result = await createUserWithTempPassword(
-        email.trim(),
-        teamCode,
-        ownerName,
-        auth.currentUser.uid,
-        uniqueInviteId // Pass the unique ID to avoid conflicts
-      );
-      
-      if (result.success) {
-        await logAudit(
-          AUDIT_ACTIONS.MEMBER_INVITED, 
-          { inviteeEmail: email.trim() },
-          auth.currentUser.uid
-        );
-
-        const successMessage = `Invitation created successfully for ${email.trim()}!\n\nTemporary password: ${result.password}\n\nPlease share these credentials with the user manually.`;
-
-        Alert.alert(
-          'Success',
-          successMessage,
-          [{ text: 'OK', onPress: () => {
-            setEmail('');
-            setModalVisible(false);
-            if (onInviteSent) onInviteSent();
-          }}]
-        );
-      } else {
-        throw new Error(result.error || 'Failed to create user and send invitation');
-      }
-    } catch (error) {
-      console.error('Error sending invitation:', error);
-      Alert.alert('Error', 'Failed to send invitation: ' + error.message);
-    } finally {
-      setIsInviting(false);
-    }
-  };
-  
-  return (
-    <>
-      <TouchableOpacity
-        style={styles.inviteButton}
-        onPress={() => setModalVisible(true)}
+      <ScrollView 
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
       >
-        <Ionicons name="person-add" size={20} color="#FFFFFF" />
-        <Text style={styles.inviteButtonText}>Invite Team Member</Text>
-      </TouchableOpacity>
-      
-      <Modal
-        visible={modalVisible}
-        transparent={true}
-        animationType="none"
-      >
-        <View style={{
-          flex: 1,
-          backgroundColor: 'rgba(0,0,0,0.5)',
-        }}>
-          <View style={{
-            position: 'absolute',
-            top: 100,
-            left: 20,
-            right: 20,
-            backgroundColor: 'white',
-            borderRadius: 15,
-            padding: 20,
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: 0.3,
-            shadowRadius: 4,
-            elevation: 5,
-          }}>
-            <Text style={{
-              fontSize: 18,
-              fontWeight: 'bold',
-              marginBottom: 15,
-              textAlign: 'center',
-              color: '#000'
-            }}>Invite Team Member</Text>
+        {/* Profile Card (NOT a header) */}
+        <View style={styles.profileCard}>
+          <View style={styles.profileHeader}>
+            <TouchableOpacity onPress={pickImage} style={styles.profileImageContainer}>
+              {userProfile?.photoURL ? (
+                <Image 
+                  source={{ uri: userProfile.photoURL }} 
+                  style={styles.profileImage}
+                />
+              ) : (
+                <View style={styles.profileImagePlaceholder}>
+                  <Text style={styles.profileImagePlaceholderText}>
+                    {getInitials(userProfile?.firstName, userProfile?.lastName)}
+                  </Text>
+                </View>
+              )}
+              <View style={styles.cameraIconContainer}>
+                <Ionicons name="camera" size={16} color="#FFFFFF" />
+              </View>
+            </TouchableOpacity>
             
-            <TextInput
-              ref={inputRef}
-              style={{
-                borderWidth: 1,
-                borderColor: '#ccc',
-                borderRadius: 10,
-                padding: 15,
-                fontSize: 16,
-                color: '#000',
-                backgroundColor: '#fff',
-                marginBottom: 20
-              }}
-              placeholder="Enter email address"
-              placeholderTextColor="#888"
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              autoCompleteType="email"
-              textContentType="emailAddress"
-              clearButtonMode="while-editing"
-            />
-            
-            <View style={{
-              flexDirection: 'row',
-              justifyContent: 'space-between'
-            }}>
-              <TouchableOpacity
-                style={{
-                  flex: 1,
-                  marginRight: 10,
-                  backgroundColor: '#f2f2f2',
-                  padding: 15,
-                  borderRadius: 10,
-                  alignItems: 'center'
-                }}
-                onPress={() => {
-                  Keyboard.dismiss();
-                  setModalVisible(false);
-                }}
-              >
-                <Text style={{
-                  color: '#666',
-                  fontWeight: 'bold',
-                  fontSize: 16
-                }}>Cancel</Text>
-              </TouchableOpacity>
+            <View style={styles.profileInfo}>
+              <Text style={styles.profileName}>
+                {formatName(userProfile?.firstName, userProfile?.middleName, userProfile?.lastName)}
+              </Text>
+              <Text style={styles.profileEmail}>{userProfile?.email}</Text>
               
-              <TouchableOpacity
-                style={{
-                  flex: 1,
-                  backgroundColor: '#007AFF',
-                  padding: 15,
-                  borderRadius: 10,
-                  alignItems: 'center'
-                }}
-                onPress={handleSendInvite}
-                disabled={isInviting}
-              >
-                {isInviting ? (
-                  <ActivityIndicator size="small" color="#FFF" />
-                ) : (
-                  <Text style={{
-                    color: '#FFF',
-                    fontWeight: 'bold',
-                    fontSize: 16
-                  }}>Invite</Text>
-                )}
-              </TouchableOpacity>
+              <View style={styles.statusRow}>
+                <View style={[
+                  styles.statusDot, 
+                  userStatus === 'online' ? styles.statusOnline : 
+                  userStatus === 'away' ? styles.statusAway : 
+                  styles.statusOffline
+                ]} />
+                <Text style={styles.statusText}>{formatStatus(userStatus)}</Text>
+              </View>
             </View>
             
-            <TouchableOpacity
-              style={{
-                position: 'absolute',
-                top: 10,
-                right: 10,
-                padding: 5
-              }}
-              onPress={() => {
-                Keyboard.dismiss();
-                setModalVisible(false);
-              }}
+            <TouchableOpacity 
+              style={styles.editButton} 
+              onPress={() => navigation.navigate('EditProfile', { userProfile })}
             >
-              <Ionicons name="close" size={24} color="#666" />
+              <Ionicons name="pencil-outline" size={18} color="#4682B4" />
             </TouchableOpacity>
           </View>
         </View>
-      </Modal>
-    </>
+        
+        {/* Tabs */}
+        <View style={styles.tabContainer}>
+          <TouchableOpacity
+            style={[styles.tab, activeTab === 'profile' && styles.activeTab]}
+            onPress={() => setActiveTab('profile')}
+          >
+            <Ionicons 
+              name="person" 
+              size={20} 
+              color={activeTab === 'profile' ? "#4682B4" : "#666666"} 
+            />
+            <Text style={[
+              styles.tabText, 
+              activeTab === 'profile' && styles.activeTabText
+            ]}>
+              Profile
+            </Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity
+            style={[styles.tab, activeTab === 'activity' && styles.activeTab]}
+            onPress={() => setActiveTab('activity')}
+          >
+            <Ionicons 
+              name="time" 
+              size={20} 
+              color={activeTab === 'activity' ? "#4682B4" : "#666666"} 
+            />
+            <Text style={[
+              styles.tabText, 
+              activeTab === 'activity' && styles.activeTabText
+            ]}>
+              Activity
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {activeTab === 'profile' ? (
+          <>
+            {/* Account Information */}
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Account Information</Text>
+              
+              <InfoRow 
+                label="Email" 
+                value={userProfile?.email} 
+                icon="mail-outline"
+                copyable
+              />
+              
+              <InfoRow 
+                label="Role" 
+                value={userProfile?.role === 'owner' ? 'Team Owner' : 'Team Member'}
+                icon="people-outline"
+              />
+              
+              {userProfile?.role === 'owner' && userProfile?.teamCode && (
+                <InfoRow 
+                  label="Team Code" 
+                  value={userProfile.teamCode}
+                  icon="key-outline"
+                  copyable
+                />
+              )}
+              
+              <InfoRow 
+                label="Account Created" 
+                value={userProfile?.createdAt ? new Date(userProfile.createdAt).toLocaleDateString() : 'Unknown'}
+                icon="calendar-outline"
+              />
+              
+              {userProfile?.lastLogin && (
+                <InfoRow 
+                  label="Last Login" 
+                  value={new Date(userProfile.lastLogin).toLocaleString()}
+                  icon="log-in-outline"
+                />
+              )}
+            </View>
+            
+            {/* Device Information */}
+            <View style={styles.sectionCard}>
+              <View style={styles.sectionTitleContainer}>
+                <Text style={styles.sectionTitle}>Device Information</Text>
+                <TouchableOpacity
+                  onPress={() => setIsEditingMac(!isEditingMac)}
+                  style={styles.actionButton}
+                >
+                  <Ionicons 
+                    name={isEditingMac ? "close-outline" : "pencil-outline"} 
+                    size={20} 
+                    color="#4682B4" 
+                  />
+                </TouchableOpacity>
+              </View>
+              
+              {isEditingMac ? (
+                <>
+                  <Text style={styles.macAddressLabel}>
+                    Enter your device's MAC address:
+                  </Text>
+                  <View style={styles.macInputContainer}>
+                    {macParts.map((part, index) => (
+                      <React.Fragment key={index}>
+                        <TextInput
+                          ref={macInputRefs[index]}
+                          style={styles.macInput}
+                          value={part}
+                          onChangeText={(text) => handleMacPartChange(text, index)}
+                          onKeyPress={(e) => handleMacKeyPress(e, index)}
+                          maxLength={2}
+                          autoCapitalize="characters"
+                          keyboardType="ascii-capable"
+                          selectionColor="#4682B4"
+                        />
+                        {index < 5 && <Text style={styles.macSeparator}>:</Text>}
+                      </React.Fragment>
+                    ))}
+                  </View>
+                  
+                  <View style={styles.buttonRow}>
+                    <TouchableOpacity 
+                      style={[styles.button, styles.cancelButton]} 
+                      onPress={() => setIsEditingMac(false)}
+                    >
+                      <Text style={styles.cancelButtonText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity 
+                      style={[styles.button, styles.saveButton]} 
+                      onPress={handleSaveMacAddress}
+                    >
+                      <Text style={styles.saveButtonText}>Save</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              ) : (
+                <InfoRow 
+                  label="MAC Address" 
+                  value={userProfile?.macAddress || 'Not set'}
+                  icon="wifi-outline"
+                  copyable={!!userProfile?.macAddress}
+                />
+              )}
+            </View>
+            
+            {/* Sign Out Button */}
+            <TouchableOpacity 
+              style={styles.signOutButton}
+              onPress={handleLogout}
+            >
+              <Ionicons name="log-out-outline" size={20} color="#4682B4" />
+              <Text style={styles.signOutButtonText}>Sign Out</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <ActivityLog userId={auth.currentUser.uid} />
+        )}
+      </ScrollView>
+      
+      <View style={styles.navbarContainer}>
+        <Navbar activePage="profile" />
+      </View>
+    </SafeAreaView>
   );
-};
+}
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F0F2F5',
   },
-  safeArea: {
-    flex: 1,
-  },
-  scrollContainer: {
-    flexGrow: 1,
+  headerContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     padding: 16,
-    paddingBottom: 120, // Extra padding for the navbar
+    paddingBottom: 8,
   },
-  loadingContainer: {
-    flex: 1,
+  header: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#000',
+  },
+  refreshButton: {
+    padding: 8,
+    width: 36,
+    height: 36,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
   },
-  loadingText: {
-    marginTop: 15,
-    fontSize: 16,
-    color: '#666',
-    textAlign: 'center',
+  scrollView: {
+    flex: 1,
   },
-  card: {
+  scrollContent: {
+    padding: 16,
+    paddingBottom: 140, // Extra padding for navbar
+  },
+  profileCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 16,
     marginBottom: 16,
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
     elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
   },
   profileHeader: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   profileImageContainer: {
+    position: 'relative',
+    marginRight: 16,
+  },
+  profileImage: {
     width: 80,
     height: 80,
     borderRadius: 40,
-    marginRight: 15,
-    overflow: 'hidden',
   },
-  profileImage: {
-    width: '100%',
-    height: '100%',
+  profileImagePlaceholder: {
+    width: 80,
+    height: 80,
     borderRadius: 40,
-  },
-  profileImageFallback: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 40,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: '#007AFF',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  profileImageFallbackText: {
-    fontSize: 24,
-    fontWeight: '600',
-    color: '#007AFF',
+  profileImagePlaceholderText: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+  },
+  cameraIconContainer: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    backgroundColor: '#007AFF',
+    borderRadius: 12,
+    width: 24,
+    height: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
   },
   profileInfo: {
     flex: 1,
   },
-  userName: {
+  profileName: {
     fontSize: 18,
-    fontWeight: '600',
-    color: '#000',
-    marginBottom: 4,
-  },
-  userRole: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 10,
-  },
-  editButton: {
-    backgroundColor: '#007AFF',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 6,
-    alignSelf: 'flex-start',
-  },
-  editButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  cardTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#000',
-    marginBottom: 12,
-  },
-  infoItem: {
-    flexDirection: 'column',
-    alignItems: 'flex-start',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E5E5',
-  },
-  infoLabel: {
-    fontSize: 16,
-    color: '#666',
-    marginBottom: 4,
-  },
-  infoValue: {
-    fontSize: 16,
-    color: '#000',
-    fontWeight: '500',
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  cardHeaderButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  cardHeaderButtonText: {
-    fontSize: 14,
-    color: '#007AFF',
-    fontWeight: '500',
-  },
-  teamCodeContainer: {
-    marginBottom: 16,
-  },
-  teamCodeDescription: {
-    fontSize: 14,
-    color: '#888888',
-    marginTop: 4,
-  },
-  codeBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#F5F5F5',
-    padding: 12,
-    borderRadius: 8,
-    marginTop: 8,
-  },
-  teamCode: {
-    fontSize: 18,
-    color: '#007AFF',
     fontWeight: 'bold',
-    letterSpacing: 1,
-  },
-  copyButton: {
-    padding: 8,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: '#E5E5E5',
-    marginVertical: 16,
-  },
-  inviteButton: {
-    backgroundColor: '#007AFF',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 12,
-    borderRadius: 10,
-    gap: 8,
-  },
-  inviteButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '500',
-  },
-  memberItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E5E5',
-  },
-  memberInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  memberAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    marginRight: 10,
-  },
-  memberAvatarFallback: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#F0F0F0',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 10,
-  },
-  memberAvatarText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#007AFF',
-  },
-  memberTextInfo: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  memberName: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#000',
+    color: '#333333',
     marginBottom: 2,
   },
-  memberEmail: {
+  profileEmail: {
     fontSize: 14,
-    color: '#666',
-    marginBottom: 2,
+    color: '#666666',
+    marginBottom: 6,
   },
-  memberStatusBadge: {
+  statusRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F5F5F5',
-    borderRadius: 10,
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    marginLeft: 10,
-  },
-  statusIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
   },
   statusDot: {
     width: 8,
@@ -1041,246 +845,272 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     marginRight: 6,
   },
-  statusText: {
-    fontSize: 14,
-    color: '#666',
+  statusOnline: {
+    backgroundColor: '#4682B4',
   },
-  memberStatus: {
+  statusAway: {
+    backgroundColor: '#FFCC00',
+  },
+  statusOffline: {
+    backgroundColor: '#8E8E93',
+  },
+  statusText: {
     fontSize: 12,
     color: '#666666',
   },
-  memberActions: {
+  editButton: {
+    backgroundColor: '#F0F0F0',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  tabContainer: {
     flexDirection: 'row',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    marginBottom: 16,
+    overflow: 'hidden',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
   },
-  memberAction: {
-    padding: 8,
-    marginLeft: 8,
-  },
-  viewMoreButton: {
-    backgroundColor: '#F5F5F5',
-    padding: 12,
-    borderRadius: 10,
-    marginTop: 10,
+  tab: {
+    flex: 1,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 8,
+    paddingVertical: 12,
   },
-  viewMoreText: {
+  activeTab: {
+    backgroundColor: 'rgba(70, 130, 180, 0.1)',
+  },
+  tabText: {
     fontSize: 14,
+    color: '#666666',
+    marginLeft: 6,
+  },
+  activeTabText: {
     color: '#007AFF',
-    fontWeight: '500',
+    fontWeight: 'bold',
   },
-  emptyTeamContainer: {
-    padding: 20,
-    alignItems: 'center',
-  },
-  emptyTeamText: {
-    color: '#666',
-    marginBottom: 20,
-    fontStyle: 'italic',
-  },
-  // Modal styles
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'flex-end',
-  },
-  modalContent: {
+  sectionCard: {
     backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 20,
-    width: '100%',
-    paddingBottom: Platform.OS === 'ios' ? 40 : 20
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
   },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#000000',
-    marginBottom: 20,
-    textAlign: 'center',
-  },
-  emailInput: {
-    borderWidth: 1,
-    borderColor: '#E5E5E5',
-    borderRadius: 10,
-    padding: 12,
+  sectionTitle: {
     fontSize: 16,
-    marginBottom: 20,
-    backgroundColor: '#F9F9F9'
+    fontWeight: 'bold',
+    color: '#333333',
+    marginBottom: 12,
   },
-  modalButtons: {
+  sectionTitleContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    gap: 10,
+    alignItems: 'center',
+    marginBottom: 12,
   },
-  modalButton: {
-    flex: 1,
-    padding: 12,
-    borderRadius: 10,
+  actionButton: {
+    backgroundColor: '#F0F0F0',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  cancelButton: {
-    backgroundColor: '#F2F2F2',
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EEEEEE',
   },
-  inviteModalButton: {
+  infoLabelContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  infoIcon: {
+    marginRight: 8,
+  },
+  infoLabel: {
+    fontSize: 14,
+    color: '#666666',
+  },
+  infoValueContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  infoValue: {
+    fontSize: 14,
+    color: '#333333',
+    fontWeight: '500',
+  },
+  copyButton: {
+    marginLeft: 8,
+    padding: 4,
+  },
+  macAddressLabel: {
+    fontSize: 14,
+    color: '#666666',
+    marginBottom: 12,
+  },
+  macInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  macInput: {
+    width: 32,
+    height: 40,
+    borderWidth: 1,
+    borderColor: '#DDDDDD',
+    borderRadius: 8,
+    textAlign: 'center',
+    fontSize: 14,
+    color: '#333333',
+    backgroundColor: '#FFFFFF',
+  },
+  macSeparator: {
+    marginHorizontal: 4,
+    color: '#666666',
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: 8,
+  },
+  button: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    marginLeft: 8,
+  },
+  cancelButton: {
+    backgroundColor: '#F0F0F0',
+  },
+  saveButton: {
     backgroundColor: '#007AFF',
   },
   cancelButtonText: {
+    fontSize: 14,
     color: '#666666',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  inviteModalButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  simpleModalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'flex-end',
-  },
-  simpleModalContent: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 20,
-    width: '100%',
-    paddingBottom: Platform.OS === 'ios' ? 40 : 20
-  },
-  simpleModalTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#000000',
-    marginBottom: 20,
-    textAlign: 'center',
-  },
-  simpleModalInput: {
-    borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
-    padding: 10,
-    marginBottom: 15,
-  },
-  simpleModalButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  simpleModalButton: {
-    flex: 1,
-    padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  simpleModalCancelButton: {
-    backgroundColor: '#F2F2F2',
-  },
-  simpleModalCancelButtonText: {
-    color: '#666666',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  simpleModalInviteButton: {
-    backgroundColor: '#007AFF',
-  },
-  simpleModalInviteButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  lastSeen: {
-    fontSize: 12,
-    color: '#8E8E93',
-    marginTop: 2,
-  },
-  locationHistoryButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F5F5F5',
-    padding: 12,
-    borderRadius: 10,
-    marginTop: 12,
-  },
-  locationHistoryButtonText: {
-    fontSize: 16,
-    color: '#007AFF',
-    marginLeft: 8,
     fontWeight: '500',
   },
-  macAddressEditContainer: {
-    width: '100%',
-    marginTop: 8,
+  saveButtonText: {
+    fontSize: 14,
+    color: '#FFFFFF',
+    fontWeight: '500',
   },
-  macInputWrapper: {
+  teamDescription: {
+    fontSize: 14,
+    color: '#666666',
+    marginBottom: 16,
+  },
+  inviteButton: {
+    backgroundColor: '#007AFF',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '100%',
-  },
-  macAddressPartInput: {
-    width: 40,
-    height: 44,
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
+    paddingVertical: 12,
     borderRadius: 8,
-    textAlign: 'center',
-    fontSize: 16,
-    color: '#000',
-    backgroundColor: '#F9F9F9',
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-    padding: 0,
   },
-  macAddressColon: {
-    fontSize: 18,
-    color: '#8E8E93',
-    marginHorizontal: 4,
-    fontWeight: '600',
-  },
-  macAddressActions: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 16,
-    marginTop: 16,
-  },
-  macAddressButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 1,
-    },
-    shadowOpacity: 0.2,
-    shadowRadius: 1.41,
-    elevation: 2,
-  },
-  macAddressCancelButton: {
-    backgroundColor: '#FFE5E5',
-  },
-  macAddressSaveButton: {
-    backgroundColor: '#E5FFE9',
-  },
-  macAddressDisplay: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  macAddressPlaceholder: {
-    color: '#007AFF',
-    fontStyle: 'italic',
-  },
-  editIcon: {
+  inviteButtonText: {
+    fontSize: 14,
+    color: '#FFFFFF',
+    fontWeight: '500',
     marginLeft: 8,
   },
-  macAddressHint: {
-    fontSize: 12,
-    color: '#8E8E93',
+  signOutButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    marginBottom: 32,
+    elevation: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 1,
+  },
+  signOutButtonText: {
+    fontSize: 14,
+    color: '#007AFF',
+    fontWeight: '500',
+    marginLeft: 8,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContainer: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    width: '90%',
+    padding: 20,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333333',
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: '#666666',
+    marginBottom: 16,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: 16,
+  },
+  modalCancelButton: {
+    marginRight: 8,
+  },
+  navbarContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    zIndex: 100,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+  },
+  loadingText: {
     marginTop: 12,
-    textAlign: 'center',
+    color: '#666666',
+    fontSize: 16,
   },
 }); 

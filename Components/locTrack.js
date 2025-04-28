@@ -3218,7 +3218,7 @@ const styles = StyleSheet.create({
   },
   toolbarContainer: {
     position: 'absolute',
-    bottom: 100,
+    bottom: 120, // Increased from 100 to 120 to avoid navbar overlap
     left: 20,
     right: 20,
     backgroundColor: 'rgba(255, 255, 255, 0.95)',
@@ -3229,6 +3229,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
     elevation: 5,
+    marginBottom: 10, // Added additional margin at the bottom
   },
   inputWrapper: {
     marginBottom: 10,
