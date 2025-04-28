@@ -870,32 +870,81 @@ const toggleCurrentLocation = async () => {
         }
       }
       
-      // Try to get location
+      // First try to get the last known position (fastest)
       try {
-        const location = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-          maximumAge: 10000 // Accept locations up to 10 seconds old
+        const lastKnownLocation = await Location.getLastKnownPositionAsync({
+          maxAge: 60000 // Accept a position up to 1 minute old
         });
         
-        if (location && location.coords) {
-          const { latitude, longitude, accuracy } = location.coords;
+        if (lastKnownLocation && lastKnownLocation.coords) {
+          console.log("Got last known location (fast)");
+          const { latitude, longitude, accuracy } = lastKnownLocation.coords;
           locationData = { latitude, longitude };
           setCurrentLocation(locationData);
           setGpsAccuracy(accuracy);
+        }
+      } catch (error) {
+        console.warn("Error getting last known position:", error);
+      }
+      
+      // If we still don't have location, try with low accuracy (faster)
+      if (!locationData) {
+        try {
+          const location = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Lowest,
+            maximumAge: 60000,
+            timeout: 5000 // Timeout after 5 seconds
+          });
           
-          console.log("Successfully obtained current location:", locationData);
-        } else {
-          console.error("Failed to get current location");
-          Alert.alert('Location Error', 'Unable to get your current location. Please try again later.');
+          if (location && location.coords) {
+            const { latitude, longitude, accuracy } = location.coords;
+            locationData = { latitude, longitude };
+            setCurrentLocation(locationData);
+            setGpsAccuracy(accuracy);
+            
+            console.log("Successfully obtained fast current location:", locationData);
+          }
+        } catch (error) {
+          console.warn("Error getting fast location:", error);
+        }
+      }
+      
+      // If we still don't have location, try with balanced accuracy
+      if (!locationData) {
+        try {
+          const location = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+            maximumAge: 10000, // Accept locations up to 10 seconds old
+            timeout: 10000 // 10 second timeout
+          });
+          
+          if (location && location.coords) {
+            const { latitude, longitude, accuracy } = location.coords;
+            locationData = { latitude, longitude };
+            setCurrentLocation(locationData);
+            setGpsAccuracy(accuracy);
+            
+            console.log("Successfully obtained current location:", locationData);
+          } else {
+            console.error("Failed to get current location");
+            Alert.alert('Location Error', 'Unable to get your current location. Please try again later.');
+            setIsFetchingLocation(false);
+            return;
+          }
+        } catch (locationError) {
+          console.error("Error getting current location:", locationError);
+          Alert.alert('Location Error', 'Failed to get your location. Please ensure location services are enabled and try again.');
           setIsFetchingLocation(false);
           return;
         }
-      } catch (locationError) {
-        console.error("Error getting current location:", locationError);
-        Alert.alert('Location Error', 'Failed to get your location. Please ensure location services are enabled and try again.');
-        setIsFetchingLocation(false);
-        return;
       }
+    }
+    
+    // If we still don't have location data, show error and return
+    if (!locationData) {
+      Alert.alert('Location Error', 'Unable to determine your location. Please try again later.');
+      setIsFetchingLocation(false);
+      return;
     }
     
     const auth = getAuth();
@@ -925,6 +974,7 @@ const toggleCurrentLocation = async () => {
       Timestamp: new Date().toISOString(),
       isActive: true,
       lastSeen: new Date().toISOString(),
+      teamCode: profileData.teamCode || '',
       ...profileData
     }).catch(err => console.error("Error updating initial location:", err));
 
@@ -955,6 +1005,32 @@ const toggleCurrentLocation = async () => {
         });
       }
     }, { onlyOnce: true });
+    
+    // Start a background fetch for more accurate location
+    if (locationData) {
+      Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+        timeout: 15000
+      }).then(location => {
+        const { latitude, longitude, accuracy } = location.coords;
+        setCurrentLocation({ latitude, longitude });
+        setGpsAccuracy(accuracy);
+        
+        // Update Firebase with more accurate location
+        set(userLocationRef, { 
+          Latitude: latitude, 
+          Longitude: longitude,
+          Accuracy: accuracy,
+          Timestamp: new Date().toISOString(),
+          isActive: true,
+          lastSeen: new Date().toISOString(),
+          teamCode: profileData.teamCode || '',
+          ...profileData
+        }).catch(err => console.error("Error updating accurate location:", err));
+      }).catch(err => {
+        console.warn("Failed to get high accuracy location in background:", err);
+      });
+    }
     
     setIsFetchingLocation(false);
   } catch (error) {
@@ -998,9 +1074,9 @@ useEffect(() => {
 
       locationSubscriptionRef.current = await Location.watchPositionAsync(
         {
-            accuracy: Location.Accuracy.BestForNavigation, 
-            timeInterval: 1000, // 1 second interval
-            distanceInterval: 2.5, // Increased to 5 meters to reduce update frequency
+            accuracy: Location.Accuracy.Balanced, // Changed from BestForNavigation to Balanced
+            timeInterval: 3000, // Changed from 1s to 3s to reduce load
+            distanceInterval: 5, // Increased from 2.5m to 5m to reduce frequency
             mayShowUserSettingsDialog: true 
         },
         async (location) => {
@@ -3511,7 +3587,7 @@ const styles = StyleSheet.create({
   },
 });
 
-// Add this new function to get location early
+// Optimize requestInitialLocation function to get location faster
 const requestInitialLocation = async () => {
   try {
     // Check if we already have permission
@@ -3521,39 +3597,70 @@ const requestInitialLocation = async () => {
       if (newStatus !== 'granted') return;
     }
     
-    // Get a fast, possibly cached location
-    const fastLocation = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.Low,
-      maximumAge: 30000 // Accept a cached position up to 30 seconds old
-    });
-    
-    if (fastLocation && fastLocation.coords) {
-      console.log("Got initial fast location");
-      const { latitude, longitude } = fastLocation.coords;
-      setCurrentLocation({ latitude, longitude });
-      setGpsAccuracy(fastLocation.coords.accuracy);
-      
-      // Set initial map region
-      setInitialRegion({
-        latitude,
-        longitude,
-        latitudeDelta: 0.02,
-        longitudeDelta: 0.02,
+    // First try to get the last known position (almost instant)
+    try {
+      const lastKnownLocation = await Location.getLastKnownPositionAsync({
+        maxAge: 60000 // Accept a position up to 1 minute old
       });
       
-      // Then get more accurate location in background
-      Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced
-      }).then(location => {
-        setCurrentLocation({ 
-          latitude: location.coords.latitude, 
-          longitude: location.coords.longitude 
+      if (lastKnownLocation && lastKnownLocation.coords) {
+        console.log("Got last known location (fast)");
+        const { latitude, longitude, accuracy } = lastKnownLocation.coords;
+        setCurrentLocation({ latitude, longitude });
+        setGpsAccuracy(accuracy);
+        
+        // Set initial map region
+        setInitialRegion({
+          latitude,
+          longitude,
+          latitudeDelta: 0.02,
+          longitudeDelta: 0.02,
         });
-        setGpsAccuracy(location.coords.accuracy);
-      }).catch(err => {
-        console.warn("Failed to get high accuracy location:", err);
-      });
+      }
+    } catch (error) {
+      console.warn("Error getting last known position:", error);
     }
+    
+    // Then try a low accuracy position (fairly quick)
+    try {
+      // Get a fast, low accuracy location
+      const fastLocation = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Lowest,
+        maximumAge: 60000,
+        timeout: 5000 // Timeout after 5 seconds
+      });
+      
+      if (fastLocation && fastLocation.coords) {
+        console.log("Got initial fast location");
+        const { latitude, longitude } = fastLocation.coords;
+        setCurrentLocation({ latitude, longitude });
+        setGpsAccuracy(fastLocation.coords.accuracy);
+        
+        // Set initial map region
+        setInitialRegion({
+          latitude,
+          longitude,
+          latitudeDelta: 0.02,
+          longitudeDelta: 0.02,
+        });
+      }
+    } catch (error) {
+      console.warn("Error getting fast location:", error);
+    }
+    
+    // Finally, get a more accurate location in background
+    Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Balanced,
+      timeout: 10000 // 10 second timeout for background fetch
+    }).then(location => {
+      setCurrentLocation({ 
+        latitude: location.coords.latitude, 
+        longitude: location.coords.longitude 
+      });
+      setGpsAccuracy(location.coords.accuracy);
+    }).catch(err => {
+      console.warn("Failed to get high accuracy location:", err);
+    });
   } catch (error) {
     console.warn("Error getting initial location:", error);
   }

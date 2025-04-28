@@ -11,6 +11,7 @@ const CACHE_KEYS = {
   TEAM_MEMBERS: 'cache:team-members',
   USER_STATS: 'cache:user-stats',
   TEAM_CODE: 'cache:team-code',
+  TEAM_GEOFENCE: 'cache:team-geofence', // Added for geofence data
 };
 
 // Cache TTLs (time-to-live)
@@ -18,6 +19,7 @@ const CACHE_TTL = {
   TEAM_MEMBERS: 5 * 60 * 1000, // 5 minutes for team members
   USER_STATS: 2 * 60 * 1000,   // 2 minutes for stats (changes more frequently)
   TEAM_CODE: 60 * 60 * 1000,   // 1 hour for team code (rarely changes)
+  TEAM_GEOFENCE: 10 * 60 * 1000, // 10 minutes for geofence data
 };
 
 // Format name function to safely handle empty or null fields
@@ -85,6 +87,25 @@ const formatDistance = (meters) => {
   }
 };
 
+// Check if point is inside polygon
+const isPointInsidePolygon = (point, polygon) => {
+  if (!point || !polygon || !Array.isArray(polygon) || polygon.length < 3) return false;
+  
+  let x = point.latitude, y = point.longitude;
+  let inside = false;
+  
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    let xi = polygon[i].latitude, yi = polygon[i].longitude;
+    let xj = polygon[j].latitude, yj = polygon[j].longitude;
+
+    let intersect = ((yi > y) !== (yj > y)) &&
+      (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  
+  return inside;
+};
+
 export default function UserManagement({ navigation }) {
   const [teamMembers, setTeamMembers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -92,6 +113,7 @@ export default function UserManagement({ navigation }) {
   const [membersLocations, setMembersLocations] = useState({});
   const [userStats, setUserStats] = useState({});
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [teamGeofence, setTeamGeofence] = useState([]);
   const auth = getAuth();
   const db = getDatabase();
 
@@ -110,6 +132,9 @@ export default function UserManagement({ navigation }) {
       
       // Load user stats
       await loadUserStats(false);
+      
+      // Load team geofence
+      await loadTeamGeofence(false);
       
       return () => {
         if (unsubscribe) unsubscribe();
@@ -139,6 +164,12 @@ export default function UserManagement({ navigation }) {
       const cachedStats = await CacheManager.get(CACHE_KEYS.USER_STATS);
       if (cachedStats) {
         setUserStats(cachedStats);
+      }
+      
+      // Load cached geofence
+      const cachedGeofence = await CacheManager.get(CACHE_KEYS.TEAM_GEOFENCE);
+      if (cachedGeofence) {
+        setTeamGeofence(cachedGeofence);
       }
       
       console.log('Loaded cached data for User Management');
@@ -214,6 +245,55 @@ export default function UserManagement({ navigation }) {
     } catch (error) {
       console.error('Error setting up location listener:', error);
       return null;
+    }
+  };
+
+  const loadTeamGeofence = async (showLoading = true) => {
+    if (showLoading) {
+      setIsRefreshing(true);
+    }
+    
+    try {
+      const fetchGeofence = async () => {
+        const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+        const profileSnapshot = await get(userProfileRef);
+        const userTeamCode = profileSnapshot.val()?.teamCode;
+        
+        if (!userTeamCode) {
+          console.log("No team code found, cannot load geofence");
+          return [];
+        }
+        
+        // Use team-specific geofence path
+        const geofenceRef = ref(db, `teams/${userTeamCode}/geofence/coordinates`);
+        const geofenceSnapshot = await get(geofenceRef);
+        
+        if (geofenceSnapshot.exists()) {
+          const coordinates = geofenceSnapshot.val();
+          console.log(`Loaded team geofence with ${coordinates.length} points`);
+          return coordinates;
+        } else {
+          console.log(`No geofence found for team ${userTeamCode}`);
+          return [];
+        }
+      };
+      
+      // Get data with auto-refresh capability
+      const geofence = await CacheManager.getWithAutoRefresh(
+        CACHE_KEYS.TEAM_GEOFENCE,
+        fetchGeofence,
+        CACHE_TTL.TEAM_GEOFENCE
+      );
+      
+      if (geofence) {
+        setTeamGeofence(geofence);
+      }
+    } catch (error) {
+      console.error('Error loading team geofence:', error);
+    } finally {
+      if (showLoading) {
+        setIsRefreshing(false);
+      }
     }
   };
 
@@ -359,6 +439,7 @@ export default function UserManagement({ navigation }) {
 
   const handleRefresh = () => {
     loadTeamMembers(true);
+    loadTeamGeofence(false);
   };
 
   const handleRemoveMember = (memberId, memberName) => {
@@ -419,6 +500,17 @@ export default function UserManagement({ navigation }) {
     // Check if member is online based on presence status only, not location data
     const isOnline = item.presence?.status === 'online';
     
+    // Check if the member is inside the geofence area
+    let isInsideGeofence = false;
+    if (memberLocation.Latitude && memberLocation.Longitude && teamGeofence.length >= 3) {
+      const memberPoint = {
+        latitude: memberLocation.Latitude,
+        longitude: memberLocation.Longitude
+      };
+      isInsideGeofence = isPointInsidePolygon(memberPoint, teamGeofence);
+      console.log(`Member ${memberName} is ${isInsideGeofence ? 'INSIDE' : 'OUTSIDE'} the geofence`);
+    }
+    
     return (
       <View style={styles.memberItem}>
         <View style={styles.memberInfo}>
@@ -455,6 +547,26 @@ export default function UserManagement({ navigation }) {
                   {formatDistance(memberStats.totalDistance)}
                 </Text>
               </View>
+              
+              {/* Geofence status indicator */}
+              {memberLocation.Latitude && teamGeofence.length >= 3 && (
+                <View style={[
+                  styles.indicator,
+                  isInsideGeofence ? styles.insideGeofence : styles.outsideGeofence
+                ]}>
+                  <Ionicons 
+                    name={isInsideGeofence ? "shield-checkmark" : "shield-outline"} 
+                    size={14} 
+                    color={isInsideGeofence ? "#4CD964" : "#FF3B30"} 
+                  />
+                  <Text style={[
+                    styles.indicatorText,
+                    isInsideGeofence ? styles.insideGeofenceText : styles.outsideGeofenceText
+                  ]}>
+                    {isInsideGeofence ? 'In Area' : 'Outside'}
+                  </Text>
+                </View>
+              )}
               
               {/* Indoor/Outdoor indicator - static for now */}
               <View style={styles.indicator}>
@@ -735,5 +847,23 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#333',
     marginLeft: 4,
+  },
+  insideGeofence: {
+    backgroundColor: 'rgba(76, 217, 100, 0.2)',
+    borderWidth: 1,
+    borderColor: '#4CD964',
+  },
+  outsideGeofence: {
+    backgroundColor: 'rgba(255, 59, 48, 0.2)',
+    borderWidth: 1,
+    borderColor: '#FF3B30',
+  },
+  insideGeofenceText: {
+    color: '#388E3C',
+    fontWeight: '500',
+  },
+  outsideGeofenceText: {
+    color: '#D32F2F',
+    fontWeight: '500',
   },
 }); 
