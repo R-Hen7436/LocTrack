@@ -7,8 +7,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Dimensions,
-  Alert,
-  Switch
+  Alert
 } from 'react-native';
 import { getAuth } from 'firebase/auth';
 import { getDatabase, ref, get, query, orderByChild, limitToLast, set, update } from 'firebase/database';
@@ -21,7 +20,6 @@ const AVERAGE_STEP_LENGTH_METERS = 0.762; // Average step length in meters
 export default function StepTracker({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [totalSteps, setTotalSteps] = useState(0);
-  const [stepHistory, setStepHistory] = useState([]);
   const [teamCode, setTeamCode] = useState('');
   const [avgStepsPerUpdate, setAvgStepsPerUpdate] = useState(0);
   const [maxStepsPerUpdate, setMaxStepsPerUpdate] = useState(0);
@@ -93,7 +91,6 @@ export default function StepTracker({ navigation }) {
           
           // Set data from profile as fallback
           setTotalSteps(personalStepData.totalSteps || 0);
-          setStepHistory(personalStepData.history || []);
           setTotalUpdates(personalStepData.history?.length || 0);
           setAvgStepsPerUpdate(personalStepData.totalSteps / (personalStepData.history?.length || 1));
           setMaxStepsPerUpdate(Math.max(...(personalStepData.history?.map(entry => entry.steps) || [0])));
@@ -148,7 +145,6 @@ export default function StepTracker({ navigation }) {
         console.log('📊 STEP TRACKER: No personal step data found in profile. Cannot display history/stats.');
         // Handle case where there's absolutely no data yet
         setTotalSteps(0);
-        setStepHistory([]);
         setTotalUpdates(0);
         setAvgStepsPerUpdate(0);
         setMaxStepsPerUpdate(0);
@@ -168,7 +164,6 @@ export default function StepTracker({ navigation }) {
       const historyLength = currentHistory.length;
       
       setTotalSteps(currentTotalSteps);
-      setStepHistory(currentHistory);
       setTotalUpdates(historyLength); 
       // Calculate average using steps from history entries if available
       const totalStepsFromHistory = currentHistory.reduce((sum, entry) => sum + (entry.steps || 0), 0);
@@ -195,17 +190,11 @@ export default function StepTracker({ navigation }) {
       setEstimatedStepsPerUpdate(avgStepsPerInterval);
       setEstimatedDistancePerUpdate(avgDistancePerInterval);
       // Keep old avg calculation for now, or remove if redundant
-      const avgStepsPerIntervalNumerator = historyLength > 0 ? totalStepsInHistory : currentTotalSteps; 
+      const avgStepsPerIntervalNumerator = historyLength > 0 ? totalStepsFromHistory : currentTotalSteps; 
       setAvgStepsPerUpdate(historyLength > 0 ? Math.round(avgStepsPerIntervalNumerator / historyLength) : 0);
       setMaxStepsPerUpdate(Math.max(...(currentHistory.map(entry => entry.steps || 0)), 0));
 
       console.log(`📊 STEP TRACKER: Calculated Stats - Total: ${currentTotalSteps}, Updates: ${historyLength}, AvgSteps/Upd: ${avgStepsPerInterval}, AvgDist/Upd: ${avgDistancePerInterval.toFixed(2)}m, Est. Total Dist: ${distanceInKm.toFixed(2)}km`);
-
-      // We can still load team data in the background for other purposes if needed,
-      // but we won't use it for the primary display stats of the current user here.
-      // const teamStepDataRef = ref(db, `teams/${teamCode}/locationStepData`);
-      // const teamStepDataSnapshot = await get(teamStepDataRef);
-      // if (teamStepDataSnapshot.exists()) { ... process team data if needed ... }
 
       console.log('📊 STEP TRACKER: Successfully loaded step data using profile history.');
       setLastRefresh(new Date());
@@ -251,108 +240,18 @@ export default function StepTracker({ navigation }) {
         return;
       }
       
-      const db = getDatabase();
+      navigation.navigate('Home');
       
-      // Check if step data has already been initialized
-      const appStateRef = ref(db, `appState/${auth.currentUser.uid}`);
-      const appStateSnapshot = await get(appStateRef);
-      const isInitialized = appStateSnapshot.exists() && appStateSnapshot.val().stepDataInitialized;
-      
-      if (isInitialized) {
-        // If already initialized, give more specific options
-        Alert.alert(
-          'Sync with Map',
-          'Choose an option for tracking your steps:',
-          [
-            {
-              text: 'Indoor Tracking',
-              onPress: startTracking
-            },
-            {
-              text: 'Outdoor GPS Tracking',
-              onPress: () => {
-                console.log('📊 STEP VIEWER: Navigating to outdoor GPS tracking');
-                navigation.navigate('LocTrack');
-              }
-            },
-            {
-              text: 'Refresh Data',
-              onPress: () => {
-                console.log('📊 STEP VIEWER: User chose to refresh data');
-                loadStepData();
-              }
-            },
-            {
-              text: 'Cancel',
-              style: 'cancel'
-            }
-          ]
-        );
-      } else {
-        // If not initialized, guide the user to initialize first
-        Alert.alert(
-          'Initialize Step Tracking',
-          'Step tracking hasn\'t been initialized yet. Choose how to start:',
-          [
-            {
-              text: 'Indoor Tracking',
-              onPress: startTracking
-            },
-            {
-              text: 'Outdoor GPS Tracking',
-              onPress: () => {
-                console.log('📊 STEP VIEWER: Navigating to outdoor GPS tracking for initialization');
-                navigation.navigate('LocTrack');
-              }
-            },
-            {
-              text: 'Cancel',
-              style: 'cancel'
-            }
-          ]
-        );
-      }
-    } catch (error) {
-      console.error('📊 STEP VIEWER ERROR: Error checking step tracking state:', error);
-      // Fall back to original behavior on error
+      // Show a toast-style alert to inform the user
       Alert.alert(
-        'Sync with Map',
-        'Choose an option for tracking your steps:',
-        [
-          {
-            text: 'Indoor Tracking',
-            onPress: startTracking
-          },
-          {
-            text: 'Outdoor GPS Tracking',
-            onPress: () => {
-              console.log('📊 STEP VIEWER: Navigating to outdoor GPS tracking');
-              navigation.navigate('LocTrack');
-            }
-          },
-          {
-            text: 'Cancel',
-            style: 'cancel'
-          }
-        ]
+        'Going to Map',
+        'Opening the map for location tracking.',
+        [{ text: 'OK' }]
       );
+    } catch (error) {
+      console.error('📊 STEP VIEWER: Error navigating to map:', error);
+      Alert.alert('Error', 'Could not navigate to map screen');
     }
-  };
-
-  const formatTimestamp = (timestamp) => {
-    const date = new Date(timestamp);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
-
-  const formatDate = (timestamp) => {
-    const date = new Date(timestamp);
-    return date.toLocaleDateString();
-  };
-
-  const getBarWidth = (steps) => {
-    // Calculate width as percentage of max steps (min 5%)
-    const percentage = Math.max(5, (steps / maxStepsPerUpdate) * 100);
-    return `${percentage}%`;
   };
 
   return (
@@ -392,13 +291,6 @@ export default function StepTracker({ navigation }) {
                 Using device pedometer for accurate step counting
               </Text>
             )}
-            <TouchableOpacity 
-              style={styles.startTrackingButton}
-              onPress={startTracking}
-            >
-              <Ionicons name="play" size={16} color="white" />
-              <Text style={styles.startTrackingText}>Go to Map to Track</Text>
-            </TouchableOpacity>
           </View>
 
           <View style={styles.statsCard}>
@@ -452,80 +344,6 @@ export default function StepTracker({ navigation }) {
               Last updated: {lastRefresh.toLocaleTimeString()}
             </Text>
           )}
-
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Steps History</Text>
-            <Text style={styles.sectionSubtitle}>
-              Each bar represents steps taken between updates
-            </Text>
-          </View>
-
-          {stepHistory.length > 0 ? (
-            <View style={styles.historyContainer}>
-              {stepHistory.map((entry, index) => (
-                <View key={index} style={styles.historyItem}>
-                  <View style={styles.historyInfo}>
-                    <Text style={styles.historyTime}>
-                      {formatTimestamp(entry.timestamp)}
-                    </Text>
-                    <Text style={styles.historyDate}>
-                      {formatDate(entry.timestamp)}
-                    </Text>
-                  </View>
-                  <View style={styles.barContainer}>
-                    <View 
-                      style={[
-                        styles.bar, 
-                        { width: getBarWidth(entry.steps) },
-                      ]}
-                    />
-                    <Text style={styles.barText}>{entry.steps} steps</Text>
-                  </View>
-                </View>
-              ))}
-            </View>
-          ) : (
-            <View style={styles.emptyState}>
-              <Ionicons name="walk-outline" size={50} color="#ccc" />
-              <Text style={styles.emptyStateText}>
-                No step data available yet. Start walking with the app open to track steps.
-              </Text>
-              <TouchableOpacity 
-                style={styles.tryAgainButton}
-                onPress={startTracking}
-              >
-                <Text style={styles.tryAgainButtonText}>Start Tracking Steps</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
-          <View style={styles.infoCard}>
-            <Text style={styles.infoTitle}>How It Works</Text>
-            <Text style={styles.infoText}>
-              • Step tracking uses GPS to track your movement
-              • Use the map screen for GPS-based tracking
-              • Keep the app open while walking for best results
-              • Refresh this screen to see your updated steps
-            </Text>
-          </View>
-          
-          {/* Debug information */}
-          <TouchableOpacity 
-            style={styles.debugButton}
-            onPress={() => {
-              Alert.alert(
-                'Debug Info',
-                `Team Code: ${teamCode || 'None'}\n` +
-                `Total Steps: ${totalSteps}\n` +
-                `Step History Entries: ${stepHistory.length}\n` +
-                `Pedometer Used: ${isPedometerUsed ? 'Yes' : 'No'}\n` +
-                `Real-time Pedometer Count: ${realTimeStepCount}\n` +
-                `Last Updated: ${stepHistory.length ? new Date(stepHistory[0].timestamp).toLocaleString() : 'Never'}`
-              );
-            }}
-          >
-            <Text style={styles.debugButtonText}>Debug Info</Text>
-          </TouchableOpacity>
         </ScrollView>
       )}
     </View>
@@ -615,20 +433,6 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontStyle: 'italic',
   },
-  startTrackingButton: {
-    backgroundColor: '#4CAF50',
-    borderRadius: 8,
-    padding: 12,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginTop: 12,
-  },
-  startTrackingText: {
-    color: 'white',
-    fontWeight: 'bold',
-    marginLeft: 8,
-  },
   lastRefreshText: {
     textAlign: 'right',
     color: '#888',
@@ -651,126 +455,5 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666',
     marginTop: 4,
-  },
-  sectionHeader: {
-    marginBottom: 12,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  sectionSubtitle: {
-    fontSize: 12,
-    color: '#666',
-    marginTop: 4,
-  },
-  historyContainer: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 2,
-    marginBottom: 20,
-  },
-  historyItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
-  },
-  historyInfo: {
-    width: 80,
-  },
-  historyTime: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#333',
-  },
-  historyDate: {
-    fontSize: 12,
-    color: '#666',
-  },
-  barContainer: {
-    flex: 1,
-    height: 24,
-    backgroundColor: '#F0F0F0',
-    borderRadius: 4,
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  bar: {
-    height: '100%',
-  },
-  barText: {
-    position: 'absolute',
-    right: 8,
-    top: 3,
-    fontSize: 12,
-    fontWeight: '500',
-    color: '#333',
-  },
-  emptyState: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 30,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1, 
-    shadowRadius: 3,
-    elevation: 2,
-    marginBottom: 20,
-  },
-  emptyStateText: {
-    textAlign: 'center',
-    color: '#666',
-    marginTop: 12,
-    fontSize: 14,
-  },
-  infoCard: {
-    backgroundColor: '#E3F2FD',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 20,
-  },
-  infoTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#1976D2',
-    marginBottom: 8,
-  },
-  infoText: {
-    fontSize: 14,
-    color: '#333',
-    lineHeight: 20,
-  },
-  tryAgainButton: {
-    padding: 12,
-    backgroundColor: '#2196F3',
-    borderRadius: 8,
-    marginTop: 12,
-  },
-  tryAgainButtonText: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: 'white',
-  },
-  debugButton: {
-    padding: 8,
-    backgroundColor: '#E0E0E0',
-    borderRadius: 8,
-    marginTop: 20,
-    alignSelf: 'center',
-  },
-  debugButtonText: {
-    fontSize: 14,
-    color: '#757575',
-  },
+  }
 }); 
