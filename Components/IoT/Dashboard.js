@@ -107,70 +107,139 @@ export default function Dashboard({ navigation }) {
     truefalseValue: { true: '', false: '' },
     threshold: {
       value: '',
-      operator: '>', // Default operator
-      action: 'alert' // Default action
+      operator: '>' // Default operator
     }
   });
 
-  const [editingThreshold, setEditingThreshold] = useState(null);
-  const [thresholdValue, setThresholdValue] = useState('');
-  const [thresholdOperator, setThresholdOperator] = useState('>');
-  const [thresholdAction, setThresholdAction] = useState('alert');
-  const [isThresholdModalVisible, setIsThresholdModalVisible] = useState(false);
   const [isDeleteModalVisible, setIsDeleteModalVisible] = useState(false);
   const [deviceToDelete, setDeviceToDelete] = useState(null);
   const longPressTimer = useRef(null);
 
   useEffect(() => {
-    const loadUserProfile = async () => {
+    const loadData = async () => {
       try {
         const auth = getAuth();
-        const db = getDatabase();
-        const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
-        const snapshot = await get(userProfileRef);
+        if (!auth.currentUser) return;
         
-        if (snapshot.exists()) {
-          const profileData = snapshot.val();
+        const db = getDatabase();
+        
+        // Load user profile
+        const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+        const profileSnapshot = await get(userProfileRef);
+        
+        if (profileSnapshot.exists()) {
+          const profileData = profileSnapshot.val();
           setUserProfile(profileData);
           
-          // Check if user is an owner and needs to set up geofence
+          // Handle geofence checks for owner
           if (profileData.role === 'owner') {
-            // First check user profile for geofence data (fastest)
-            if (profileData.geofenceData && profileData.geofenceData.coordinates && 
-                profileData.geofenceData.coordinates.length >= 3) {
-              console.log('Owner has geofence in profile data');
-            } else {
-              // If not in profile, check team geofence
-              if (profileData.teamCode) {
-                const teamGeofenceRef = ref(db, `teams/${profileData.teamCode}/geofence`);
-                const geofenceSnapshot = await get(teamGeofenceRef);
-                
-                // Only show alert if team exists but has no geofence data
-                if (geofenceSnapshot.exists()) {
-                  const geofenceData = geofenceSnapshot.val();
-                  const hasCoordinates = geofenceData && 
-                                        ((Array.isArray(geofenceData.coordinates) && geofenceData.coordinates.length >= 3) ||
-                                        (Array.isArray(geofenceData) && geofenceData.length >= 3));
-                  
-                  if (!hasCoordinates) {
-                    showGeofenceAlert(profileData.teamCode);
-                  }
-                } else {
-                  showGeofenceAlert(profileData.teamCode);
-                }
-              }
-            }
+            handleGeofenceCheck(profileData);
           }
         }
-        setLoading(false);
+
+        // Set up real-time listener for IoT devices
+        const iotRef = ref(db, `iotDevices/${auth.currentUser.uid}`);
+        const unsubscribeDevices = onValue(iotRef, async (snapshot) => {
+          if (snapshot.exists()) {
+            const deviceData = snapshot.val();
+            const formattedDevices = [];
+
+            // Process each device and set up individual listeners
+            for (const [key, device] of Object.entries(deviceData)) {
+              if (device.deviceId) {
+                // Get initial IOT data
+                const iotDataRef = ref(db, `IOTs/${device.deviceId}`);
+                const iotSnapshot = await get(iotDataRef);
+                
+                const formattedDevice = {
+                  id: key,
+                  deviceId: device.deviceId,
+                  name: device.name,
+                  type: device.type,
+                  location: device.location,
+                  lastUpdated: device.lastUpdated,
+                  isDynamic: device.isDynamic,
+                  conditions: device.conditions,
+                  data: {
+                    ...(iotSnapshot.exists() ? iotSnapshot.val() : {}),
+                    isOnline: iotSnapshot.exists() ? iotSnapshot.val().isOnline : false
+                  }
+                };
+
+                formattedDevices.push(formattedDevice);
+
+                // Set up real-time listener for each IOT device
+                onValue(iotDataRef, (iotDataSnapshot) => {
+                  if (iotDataSnapshot.exists()) {
+                    const iotData = iotDataSnapshot.val();
+                    setIotDevices(currentDevices => 
+                      currentDevices.map(d => 
+                        d.deviceId === device.deviceId 
+                          ? {
+                              ...d,
+                              data: {
+                                ...iotData,
+                                isOnline: iotData.isOnline || false
+                              }
+                            }
+                          : d
+                      )
+                    );
+                  }
+                });
+              }
+            }
+
+            setIotDevices(formattedDevices);
+          } else {
+            setIotDevices([]);
+          }
+          setLoading(false);
+        });
+
+        // Cleanup function
+        return () => {
+          unsubscribeDevices();
+          // Clean up individual IOT listeners
+          const db = getDatabase();
+          iotDevices.forEach(device => {
+            if (device.deviceId) {
+              const iotRef = ref(db, `IOTs/${device.deviceId}`);
+              off(iotRef);
+            }
+          });
+        };
       } catch (error) {
-        console.error('Error loading profile:', error);
+        console.error('Error loading data:', error);
         setLoading(false);
       }
     };
-    
+
+    const handleGeofenceCheck = async (profileData) => {
+      if (profileData.geofenceData && 
+          profileData.geofenceData.coordinates && 
+          profileData.geofenceData.coordinates.length >= 3) {
+        return;
+      }
+
+      if (profileData.teamCode) {
+        const db = getDatabase();
+        const teamGeofenceRef = ref(db, `teams/${profileData.teamCode}/geofence`);
+        const geofenceSnapshot = await get(teamGeofenceRef);
+        
+        if (!geofenceSnapshot.exists() || !hasValidCoordinates(geofenceSnapshot.val())) {
+          showGeofenceAlert(profileData.teamCode);
+        }
+      }
+    };
+
+    const hasValidCoordinates = (geofenceData) => {
+      return geofenceData && 
+        ((Array.isArray(geofenceData.coordinates) && geofenceData.coordinates.length >= 3) ||
+         (Array.isArray(geofenceData) && geofenceData.length >= 3));
+    };
+
     const showGeofenceAlert = (teamCode) => {
-      // Only show alert if navigation is available and team code exists
       if (navigation && teamCode) {
         setTimeout(() => {
           Alert.alert(
@@ -187,35 +256,22 @@ export default function Dashboard({ navigation }) {
               }
             ]
           );
-        }, 500); // Short delay to ensure UI is ready
+        }, 500);
       }
     };
 
-    loadUserProfile();
-    loadIoTDevices();
+    // Start loading data
+    const unsubscribe = loadData();
 
-    // Cleanup function to remove listeners when component unmounts
+    // Cleanup on unmount
     return () => {
-      const auth = getAuth();
-      if (!auth.currentUser) return;
-      
-      const db = getDatabase();
-      // Remove main devices listener
-      const iotRef = ref(db, `iotDevices/${auth.currentUser.uid}`);
-      off(iotRef);
-
-      // Remove individual device listeners
-      iotDevices.forEach(device => {
-        if (device.deviceId) {
-          const iotDataRef = ref(db, `IOTs/${device.deviceId}`);
-          off(iotDataRef);
-        }
-      });
+      if (unsubscribe) {
+        unsubscribe();
+      }
     };
   }, [navigation]);
 
-  // Modify the loadIoTDevices function to only use isOnline from Firebase
-  const loadIoTDevices = async () => {
+  const loadIoTDevices = () => {
     try {
       const auth = getAuth();
       if (!auth.currentUser) return;
@@ -223,44 +279,79 @@ export default function Dashboard({ navigation }) {
       const db = getDatabase();
       const iotRef = ref(db, `iotDevices/${auth.currentUser.uid}`);
       
-      // Listen to user's registered devices
-      onValue(iotRef, async (snapshot) => {
+      // Store all active listeners
+      const listeners = new Map();
+      
+      // Main devices listener
+      const devicesUnsubscribe = onValue(iotRef, async (snapshot) => {
         if (snapshot.exists()) {
           const deviceData = snapshot.val();
-          const formattedDevices = [];
+          const deviceMap = new Map();
 
-          // For each device, set up a listener for its IOTs data
+          // Remove old listeners that are no longer needed
+          const currentDeviceIds = Object.values(deviceData).map(device => device.deviceId);
+          for (const [deviceId, unsubscribe] of listeners.entries()) {
+            if (!currentDeviceIds.includes(deviceId)) {
+              unsubscribe();
+              listeners.delete(deviceId);
+            }
+          }
+
+          // For each device, set up or maintain a listener for its IOTs data
           for (const [key, device] of Object.entries(deviceData)) {
-            if (device.deviceId) {
+            if (device.deviceId && !listeners.has(device.deviceId)) {
               const iotDataRef = ref(db, `IOTs/${device.deviceId}`);
               
               // Create a listener for each device's IOTs data
-              onValue(iotDataRef, (iotSnapshot) => {
+              const iotUnsubscribe = onValue(iotDataRef, (iotSnapshot) => {
                 if (iotSnapshot.exists()) {
                   const iotData = iotSnapshot.val();
                   
                   // Update the device in state with latest IOTs data
-                  setIotDevices(currentDevices => 
-                    currentDevices.map(d => 
-                      d.deviceId === device.deviceId 
-                        ? { 
-                            ...d,
-                            type: device.type,
-                            data: {
-                              ...iotData,
-                              isOnline: iotData.isOnline || false
-                            }
-                          }
-                        : d
-                    )
-                  );
+                  setIotDevices(currentDevices => {
+                    const deviceIndex = currentDevices.findIndex(d => d.deviceId === device.deviceId);
+                    if (deviceIndex === -1) {
+                      // Device not in state yet, add it
+                      return [...currentDevices, {
+                        id: key,
+                        deviceId: device.deviceId,
+                        name: device.name,
+                        type: device.type,
+                        location: device.location,
+                        lastUpdated: device.lastUpdated,
+                        isDynamic: device.isDynamic,
+                        conditions: device.conditions,
+                        data: {
+                          ...iotData,
+                          isOnline: iotData.isOnline || false
+                        }
+                      }];
+                    } else {
+                      // Update existing device
+                      const updatedDevices = [...currentDevices];
+                      updatedDevices[deviceIndex] = {
+                        ...updatedDevices[deviceIndex],
+                        data: {
+                          ...iotData,
+                          isOnline: iotData.isOnline || false
+                        }
+                      };
+                      return updatedDevices;
+                    }
+                  });
                 }
               }, (error) => {
                 console.error(`Error in IOTs listener for device ${device.deviceId}:`, error);
               });
 
-              // Add device to initial formatted devices array
-              formattedDevices.push({
+              // Store the unsubscribe function
+              listeners.set(device.deviceId, iotUnsubscribe);
+            }
+
+            // Store the latest version of each device
+            if (!deviceMap.has(device.deviceId) || 
+                new Date(device.lastUpdated) > new Date(deviceMap.get(device.deviceId).lastUpdated)) {
+              deviceMap.set(device.deviceId, {
                 id: key,
                 deviceId: device.deviceId,
                 name: device.name,
@@ -277,7 +368,9 @@ export default function Dashboard({ navigation }) {
             }
           }
           
-          setIotDevices(formattedDevices);
+          // Set initial state with latest device data
+          const uniqueDevices = Array.from(deviceMap.values());
+          setIotDevices(uniqueDevices);
           console.log('Successfully loaded IoT devices from Firebase');
         } else {
           console.log('No IoT devices found');
@@ -288,9 +381,18 @@ export default function Dashboard({ navigation }) {
         console.error('Error in IoT devices listener:', error);
         setLoading(false);
       });
+
+      // Return a cleanup function that removes all listeners
+      return () => {
+        devicesUnsubscribe();
+        for (const unsubscribe of listeners.values()) {
+          unsubscribe();
+        }
+      };
     } catch (error) {
       console.error('Error loading IoT devices:', error);
       setLoading(false);
+      return () => {}; // Return empty cleanup function in case of error
     }
   };
 
@@ -381,6 +483,91 @@ export default function Dashboard({ navigation }) {
         return 'hardware-chip';
     }
   };
+
+  const renderDeviceContent = (item) => {
+    // Helper function to render device details based on type
+    if (item.data?.Status !== undefined) {
+      // Device with Status field
+      return (
+        <>
+          <View style={styles.deviceDataRow}>
+            <Text style={styles.dataLabel}>Status</Text>
+            <Text style={styles.dataValue}>
+              {item.data.Status === '1' ? 'Door Locked' : 'Door Unlocked'}
+            </Text>
+          </View>
+
+          <View style={styles.deviceDataRow}>
+            <Text style={styles.dataLabel}>Last Status Update</Text>
+            <Text style={styles.dataValue}>
+              {item.data.lastStatusUpdate || 'Not available'}
+            </Text>
+          </View>
+        </>
+      );
+    } else if (item.data?.Threshold !== undefined) {
+      // Device with Threshold field
+      return (
+        <>
+          <View style={styles.deviceDataRow}>
+            <Text style={styles.dataLabel}>Operator</Text>
+            <Text style={styles.dataValue}>
+              {item.data.Operator || '>'}
+            </Text>
+          </View>
+
+          <View style={styles.deviceDataRow}>
+            <Text style={styles.dataLabel}>Environment</Text>
+            <Text style={styles.dataValue}>
+              {item.data.Environment || 'Not set'}
+            </Text>
+          </View>
+
+          <View style={styles.deviceDataRow}>
+            <Text style={styles.dataLabel}>Threshold</Text>
+            <Text style={styles.dataValue}>
+              {item.data.Threshold}
+            </Text>
+          </View>
+
+          <View style={styles.deviceDataRow}>
+            <Text style={styles.dataLabel}>Last Status Update</Text>
+            <Text style={styles.dataValue}>
+              {item.data.lastStatusUpdate || 'Not available'}
+            </Text>
+          </View>
+        </>
+      );
+    } else if (item.data?.Readings !== undefined) {
+      // Device with Readings field
+      return (
+        <>
+          <View style={styles.deviceDataRow}>
+            <Text style={styles.dataLabel}>Readings</Text>
+            <Text style={styles.dataValue}>
+              {item.data.Readings}
+            </Text>
+          </View>
+
+          <View style={styles.deviceDataRow}>
+            <Text style={styles.dataLabel}>Last Status Update</Text>
+            <Text style={styles.dataValue}>
+              {item.data.lastStatusUpdate || 'Not available'}
+            </Text>
+          </View>
+        </>
+      );
+    } else {
+      // Default/fallback content
+      return (
+        <View style={styles.deviceDataRow}>
+          <Text style={styles.dataLabel}>Status</Text>
+          <Text style={styles.dataValue}>No data available</Text>
+        </View>
+      );
+    }
+  };
+
   const renderDevice = ({ item }) => (
     <TouchableOpacity 
       style={[
@@ -404,8 +591,8 @@ export default function Dashboard({ navigation }) {
           />
         </View>
         <View style={styles.deviceInfo}>
-          <Text style={styles.deviceName}>{item.name || 'SmartLock'}</Text>
-          <Text style={styles.deviceLocation}>{item.location || 'Door'}</Text>
+          <Text style={styles.deviceName}>{item.name || 'Unknown Device'}</Text>
+          <Text style={styles.deviceLocation}>{item.location || 'No Location'}</Text>
         </View>
         <View style={styles.deviceStatus}>
           <View style={[
@@ -419,35 +606,13 @@ export default function Dashboard({ navigation }) {
       </View>
       
       <View style={styles.deviceDetails}>
-        {/* isOnline status */}
-        <View style={styles.deviceDataRow}>
-          <Text style={styles.dataLabel}>isOnline</Text>
-          <Text style={styles.dataValue}>{item.data?.isOnline ? 'true' : 'false'}</Text>
-        </View>
+        {renderDeviceContent(item)}
 
-        {/* Status (0/1) */}
-        <View style={styles.deviceDataRow}>
-          <Text style={styles.dataLabel}>Status</Text>
-          <Text style={styles.dataValue}>{item.data?.Status || '0'}</Text>
-        </View>
-
-        {/* Last Status Update */}
-        <View style={styles.deviceDataRow}>
-          <Text style={styles.dataLabel}>lastStatusUpdate</Text>
-          <Text style={styles.dataValue}>{item.data?.lastStatusUpdate || new Date().toISOString()}</Text>
-        </View>
-
-        {/* Smoke Level */}
-        <View style={styles.deviceDataRow}>
-          <Text style={styles.dataLabel}>Smoke Level</Text>
-          <Text style={styles.dataValue}>{item.data?.smokeLevel || '0'}</Text>
-        </View>
-
-        {/* Toggle if device is dynamic */}
+        {/* Toggle if device is dynamic and has toggle type */}
         {item.isDynamic && item.conditions?.type === 'toggle' && (
           <View style={styles.toggleContainer}>
             <AnimatedToggle
-              value={Number(item.data?.Status) === Number(item.conditions.toggleStates.on)}
+              value={item.data?.Status === '1'}
               onToggle={() => handleToggleChange(item)}
               onText={item.conditions.toggleStates.onText || 'ON'}
               offText={item.conditions.toggleStates.offText || 'OFF'}
@@ -455,35 +620,197 @@ export default function Dashboard({ navigation }) {
           </View>
         )}
 
-        {/* Threshold configuration display with direct editing */}
-        {item.isDynamic && item.conditions?.type === 'threshold' && (
-          <View style={styles.thresholdDisplayContainer}>
-            <Text style={styles.thresholdTitle}>Threshold Configuration</Text>
-            <View style={styles.deviceDataRow}>
-              <Text style={styles.dataLabel}>Operator</Text>
-              <Text style={styles.dataValue}>{item.conditions.threshold.operator}</Text>
+        {/* Threshold configuration edit button */}
+        {item.isDynamic && item.conditions?.type === 'threshold' && !item.isEditing && (
+          <TouchableOpacity 
+            style={styles.editButton}
+            onPress={() => handleThresholdEdit(item)}
+          >
+            <Ionicons name="create-outline" size={18} color="#FFFFFF" />
+            <Text style={styles.editButtonText}>Edit Threshold</Text>
+          </TouchableOpacity>
+        )}
+
+        {/* Threshold inline editing interface */}
+        {item.isDynamic && item.conditions?.type === 'threshold' && item.isEditing && (
+          <View style={styles.inlineEditContainer}>
+            <View style={styles.operatorRow}>
+              <Text style={styles.inlineEditLabel}>Operator:</Text>
+              <View style={styles.operatorInlineButtons}>
+                <TouchableOpacity
+                  style={[
+                    styles.operatorInlineButton,
+                    item.conditions.threshold.operator === '>' && styles.operatorInlineButtonSelected
+                  ]}
+                  onPress={() => {
+                    setIotDevices(currentDevices => 
+                      currentDevices.map(d => 
+                        d.id === item.id ? { 
+                          ...d, 
+                          conditions: {
+                            ...d.conditions,
+                            threshold: {
+                              ...d.conditions.threshold,
+                              operator: '>'
+                            }
+                          }
+                        } : d
+                      )
+                    );
+                  }}
+                >
+                  <Text style={[
+                    styles.operatorInlineButtonText,
+                    item.conditions.threshold.operator === '>' && styles.operatorInlineButtonTextSelected
+                  ]}>{'>'}</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={[
+                    styles.operatorInlineButton,
+                    item.conditions.threshold.operator === '<' && styles.operatorInlineButtonSelected
+                  ]}
+                  onPress={() => {
+                    setIotDevices(currentDevices => 
+                      currentDevices.map(d => 
+                        d.id === item.id ? { 
+                          ...d, 
+                          conditions: {
+                            ...d.conditions,
+                            threshold: {
+                              ...d.conditions.threshold,
+                              operator: '<'
+                            }
+                          }
+                        } : d
+                      )
+                    );
+                  }}
+                >
+                  <Text style={[
+                    styles.operatorInlineButtonText,
+                    item.conditions.threshold.operator === '<' && styles.operatorInlineButtonTextSelected
+                  ]}>{'<'}</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-            <View style={styles.deviceDataRow}>
-              <Text style={styles.dataLabel}>Value</Text>
-              <Text style={styles.dataValue}>{item.conditions.threshold.value}</Text>
+            
+            <View style={styles.valueRow}>
+              <Text style={styles.inlineEditLabel}>Value:</Text>
+              <View style={styles.valueControls}>
+                <TouchableOpacity
+                  style={styles.valueButton}
+                  onPress={() => {
+                    const currentValue = Number(item.conditions.threshold.value) || 0;
+                    const newValue = Math.max(0, currentValue - 1).toString();
+                    
+                    setIotDevices(currentDevices => 
+                      currentDevices.map(d => 
+                        d.id === item.id ? { 
+                          ...d, 
+                          conditions: {
+                            ...d.conditions,
+                            threshold: {
+                              ...d.conditions.threshold,
+                              value: newValue
+                            }
+                          }
+                        } : d
+                      )
+                    );
+                  }}
+                >
+                  <Ionicons name="remove-circle" size={28} color="#2196F3" />
+                </TouchableOpacity>
+                
+                <TextInput
+                  style={styles.valueDisplayInput}
+                  value={item.conditions.threshold.value || '0'}
+                  onChangeText={(newValue) => {
+                    // Only allow numeric input
+                    if (/^\d*$/.test(newValue)) {
+                      setIotDevices(currentDevices => 
+                        currentDevices.map(d => 
+                          d.id === item.id ? { 
+                            ...d, 
+                            conditions: {
+                              ...d.conditions,
+                              threshold: {
+                                ...d.conditions.threshold,
+                                value: newValue
+                              }
+                            }
+                          } : d
+                        )
+                      );
+                    }
+                  }}
+                  keyboardType="numeric"
+                />
+                
+                <TouchableOpacity
+                  style={styles.valueButton}
+                  onPress={() => {
+                    const currentValue = Number(item.conditions.threshold.value) || 0;
+                    const newValue = (currentValue + 1).toString();
+                    
+                    setIotDevices(currentDevices => 
+                      currentDevices.map(d => 
+                        d.id === item.id ? { 
+                          ...d, 
+                          conditions: {
+                            ...d.conditions,
+                            threshold: {
+                              ...d.conditions.threshold,
+                              value: newValue
+                            }
+                          }
+                        } : d
+                      )
+                    );
+                  }}
+                >
+                  <Ionicons name="add-circle" size={28} color="#2196F3" />
+                </TouchableOpacity>
+              </View>
             </View>
-            <View style={styles.deviceDataRow}>
-              <Text style={styles.dataLabel}>Action</Text>
-              <Text style={styles.dataValue}>{item.conditions.threshold.action}</Text>
+            
+            <View style={styles.inlineButtonsRow}>
+              <TouchableOpacity 
+                style={styles.cancelButton}
+                onPress={() => {
+                  setIotDevices(currentDevices => 
+                    currentDevices.map(d => 
+                      d.id === item.id ? { ...d, isEditing: false } : d
+                    )
+                  );
+                }}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={styles.saveButton}
+                onPress={() => {
+                  saveThresholdChanges(
+                    item, 
+                    item.conditions.threshold.operator,
+                    item.conditions.threshold.value
+                  );
+                }}
+              >
+                <Text style={styles.saveButtonText}>Save</Text>
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity 
-              style={styles.editButton}
-              onPress={() => handleThresholdEdit(item)}
-            >
-              <Ionicons name="create-outline" size={18} color="#FFFFFF" />
-              <Text style={styles.editButtonText}>Edit Threshold</Text>
-            </TouchableOpacity>
           </View>
         )}
 
         <View style={styles.deviceActions}>
           <Text style={styles.lastUpdated}>
             Last updated: {formatRelativeTime(item.lastUpdated)}
+          </Text>
+          <Text style={styles.deleteHint}>
+            <Ionicons name="trash-outline" size={12} color="#999" /> Long-press for 3 seconds to delete
           </Text>
         </View>
       </View>
@@ -513,19 +840,69 @@ export default function Dashboard({ navigation }) {
         console.log('Found device data:', deviceData);
         setDeviceFound(deviceData);
         setDeviceName(deviceData.deviceType || 'Unknown Device');
-        
-        // Load existing threshold configuration if available
-        if (deviceData.Operator && deviceData.Threshold !== undefined) {
-          setConditions(prev => ({
-            ...prev,
-            type: 'threshold',
-            threshold: {
-              ...prev.threshold,
-              operator: deviceData.Operator,
-              value: deviceData.Threshold.toString()
-            }
-          }));
           setIsDynamic(true);
+        
+        // Check if device has a Readings field first
+        if ('Readings' in deviceData) {
+          setConditions({
+            type: 'static',
+            minValue: '',
+            maxValue: '',
+            buttonActions: [],
+            toggleStates: { 
+              on: '', 
+              off: '',
+              onText: '',
+              offText: ''
+            },
+            truefalseValue: { true: '', false: '' },
+            threshold: {
+              value: '',
+              operator: '>', 
+              action: 'alert'
+            }
+          });
+        }
+        // Then check if device has a Threshold field
+        else if ('Threshold' in deviceData) {
+          setConditions({
+            type: 'threshold',
+            minValue: '',
+            maxValue: '',
+            buttonActions: [],
+            toggleStates: { 
+              on: '', 
+              off: '',
+              onText: '',
+              offText: ''
+            },
+            truefalseValue: { true: '', false: '' },
+            threshold: {
+              value: deviceData.Threshold.toString(),
+              operator: deviceData.Operator || '>', 
+              action: 'alert'
+            }
+          });
+        }
+        // Then check for LockStatus or Status
+        else if ('LockStatus' in deviceData || 'Status' in deviceData) {
+          setConditions({
+            type: 'toggle',
+            minValue: '',
+            maxValue: '',
+            buttonActions: [],
+            toggleStates: { 
+              on: '1', 
+              off: '0',
+              onText: 'LockStatus' in deviceData ? 'Locked' : 'ON',
+              offText: 'LockStatus' in deviceData ? 'Unlocked' : 'OFF'
+            },
+            truefalseValue: { true: '', false: '' },
+            threshold: {
+              value: '',
+              operator: '>'
+            }
+          });
         }
       } else {
         Alert.alert('Error', 'Device not found');
@@ -536,7 +913,466 @@ export default function Dashboard({ navigation }) {
     }
   };
 
-  // Modify the search step in renderAddDeviceModal to show device data
+  // Modify the saveThresholdChanges function to work with inline editing
+  const saveThresholdChanges = async (device, newOperator, newValue) => {
+    try {
+      const auth = getAuth();
+      if (!auth.currentUser) {
+        Alert.alert('Error', 'User not authenticated');
+        return;
+      }
+
+      const db = getDatabase();
+      
+      // Update the device in user's devices
+      const userDevicesRef = ref(db, `iotDevices/${auth.currentUser.uid}`);
+      const snapshot = await get(userDevicesRef);
+      
+      if (snapshot.exists()) {
+        const userDevices = snapshot.val();
+        
+        // Find the key for the device
+        let deviceKey = null;
+        Object.entries(userDevices).forEach(([key, value]) => {
+          if ((value.id === device.id) || 
+              (value.deviceId === device.deviceId) || 
+              (JSON.stringify(value) === JSON.stringify(device))) {
+            deviceKey = key;
+          }
+        });
+        
+        if (deviceKey) {
+          const deviceRef = ref(db, `iotDevices/${auth.currentUser.uid}/${deviceKey}`);
+          const deviceSnapshot = await get(deviceRef);
+          
+          if (deviceSnapshot.exists()) {
+            const deviceData = deviceSnapshot.val();
+            const updatedDevice = {
+              ...deviceData,
+              conditions: {
+                ...deviceData.conditions,
+                threshold: {
+                  operator: newOperator,
+                  value: newValue
+                }
+              }
+            };
+            
+            await set(deviceRef, updatedDevice);
+          }
+        }
+      }
+      
+      // Update the threshold in IOTs collection
+      const iotRef = ref(db, `IOTs/${device.deviceId}`);
+      const iotSnapshot = await get(iotRef);
+      
+      if (iotSnapshot.exists()) {
+        const iotData = iotSnapshot.val();
+        await set(iotRef, {
+          ...iotData,
+          Operator: newOperator,
+          Threshold: Number(newValue) || 0
+        });
+      }
+      
+      // Update the local state and exit edit mode
+      setIotDevices(currentDevices => 
+        currentDevices.map(d => 
+          d.id === device.id ? { 
+            ...d, 
+            isEditing: false,
+            conditions: {
+              ...d.conditions,
+              threshold: {
+                ...d.conditions.threshold,
+                operator: newOperator,
+                value: newValue
+              }
+            }
+          } : d
+        )
+      );
+      
+      Alert.alert('Success', 'Threshold updated successfully');
+    } catch (error) {
+      console.error('Error updating threshold:', error);
+      Alert.alert('Error', 'Failed to update threshold: ' + error.message);
+    }
+  };
+
+  // Add new animated toggle component
+  const AnimatedToggle = ({ value, onToggle, size = 28, onText = '', offText = '' }) => {
+    const translation = useRef(new Animated.Value(value ? size : 0)).current;
+
+    useEffect(() => {
+      Animated.spring(translation, {
+        toValue: value ? size : 0,
+        useNativeDriver: true,
+        bounciness: 8,
+      }).start();
+    }, [value, size]);
+
+    return (
+      <View style={styles.toggleWrapper}>
+        <Text style={styles.toggleLabel}>
+          {value ? (onText || 'ON') : (offText || 'OFF')}
+        </Text>
+        <Pressable
+          onPress={onToggle}
+          style={[
+            styles.toggleTrack,
+            {
+              width: size * 2,
+              height: size + 4,
+              backgroundColor: value ? '#4CAF50' : '#FF3B30',
+            },
+          ]}
+        >
+          <Animated.View
+            style={[
+              styles.toggleThumb,
+              {
+                width: size - 4,
+                height: size - 4,
+                transform: [{ translateX: translation }],
+              },
+            ]}
+          />
+        </Pressable>
+      </View>
+    );
+  };
+
+  // Add a render function for the threshold edit modal
+  const renderThresholdEditModal = () => (
+    <Modal
+      animationType="slide"
+      transparent={true}
+      visible={isThresholdModalVisible}
+      onRequestClose={() => setIsThresholdModalVisible(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={[styles.modalContent, styles.thresholdModalContent]}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Edit Threshold Configuration</Text>
+            <TouchableOpacity 
+              onPress={() => setIsThresholdModalVisible(false)}
+            >
+              <Ionicons name="close" size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.thresholdModalBody}>
+            <View style={styles.thresholdEditSection}>
+              <Text style={styles.thresholdEditLabel}>Select Operator</Text>
+              <View style={styles.operatorButtonsContainer}>
+                <TouchableOpacity
+                  style={[
+                    styles.operatorButtonNew,
+                    thresholdOperator === '>' && styles.operatorButtonNewSelected
+                  ]}
+                  onPress={() => setThresholdOperator('>')}
+                >
+                  <Ionicons 
+                    name="arrow-up" 
+                    size={22} 
+                    color={thresholdOperator === '>' ? '#FFFFFF' : '#2196F3'} 
+                  />
+                  <Text style={[
+                    styles.operatorButtonNewText,
+                    thresholdOperator === '>' && styles.operatorButtonNewTextSelected
+                  ]}>Greater Than</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={[
+                    styles.operatorButtonNew,
+                    thresholdOperator === '<' && styles.operatorButtonNewSelected
+                  ]}
+                  onPress={() => setThresholdOperator('<')}
+                >
+                  <Ionicons 
+                    name="arrow-down" 
+                    size={22} 
+                    color={thresholdOperator === '<' ? '#FFFFFF' : '#2196F3'} 
+                  />
+                  <Text style={[
+                    styles.operatorButtonNewText,
+                    thresholdOperator === '<' && styles.operatorButtonNewTextSelected
+                  ]}>Less Than</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <View style={styles.thresholdEditSection}>
+              <Text style={styles.thresholdEditLabel}>Threshold Value</Text>
+              <View style={styles.thresholdValueContainer}>
+                <View style={styles.thresholdInputWrapper}>
+                  <TextInput
+                    style={styles.thresholdValueInput}
+                    value={thresholdValue}
+                    onChangeText={setThresholdValue}
+                    placeholder="Enter value"
+                    keyboardType="numeric"
+                  />
+                </View>
+                
+                <View style={styles.thresholdValueButtons}>
+                  <TouchableOpacity 
+                    style={styles.thresholdValueButton}
+                    onPress={() => {
+                      const currentValue = Number(thresholdValue) || 0;
+                      setThresholdValue((currentValue + 1).toString());
+                    }}
+                  >
+                    <Ionicons name="add" size={24} color="#2196F3" />
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity 
+                    style={styles.thresholdValueButton}
+                    onPress={() => {
+                      const currentValue = Number(thresholdValue) || 0;
+                      setThresholdValue(Math.max(0, currentValue - 1).toString());
+                    }}
+                  >
+                    <Ionicons name="remove" size={24} color="#2196F3" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.thresholdEditSection}>
+              <Text style={styles.thresholdEditLabel}>Action When Triggered</Text>
+              <View style={styles.actionButtonsNew}>
+                <TouchableOpacity
+                  style={[
+                    styles.actionButtonNew,
+                    thresholdAction === 'alert' && styles.actionButtonNewSelected
+                  ]}
+                  onPress={() => setThresholdAction('alert')}
+                >
+                  <Ionicons 
+                    name="warning-outline" 
+                    size={22} 
+                    color={thresholdAction === 'alert' ? '#FFFFFF' : '#2196F3'} 
+                  />
+                  <Text style={[
+                    styles.actionButtonNewText,
+                    thresholdAction === 'alert' && styles.actionButtonNewTextSelected
+                  ]}>Alert</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={[
+                    styles.actionButtonNew,
+                    thresholdAction === 'notify' && styles.actionButtonNewSelected
+                  ]}
+                  onPress={() => setThresholdAction('notify')}
+                >
+                  <Ionicons 
+                    name="notifications-outline" 
+                    size={22} 
+                    color={thresholdAction === 'notify' ? '#FFFFFF' : '#2196F3'} 
+                  />
+                  <Text style={[
+                    styles.actionButtonNewText,
+                    thresholdAction === 'notify' && styles.actionButtonNewTextSelected
+                  ]}>Notify</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <View style={styles.thresholdSummary}>
+              <Text style={styles.thresholdSummaryTitle}>Configuration Summary</Text>
+              <Text style={styles.thresholdSummaryText}>
+                When value is <Text style={styles.thresholdHighlight}>{thresholdOperator}</Text> than{' '}
+                <Text style={styles.thresholdHighlight}>{thresholdValue || '0'}</Text>
+              </Text>
+            </View>
+
+            <TouchableOpacity 
+              style={styles.thresholdSaveButton}
+              onPress={() => saveThresholdChanges(device, thresholdOperator, thresholdValue, thresholdAction)}
+            >
+              <Text style={styles.thresholdSaveButtonText}>Save Changes</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+
+  // Add a render function for the delete confirmation modal
+  const renderDeleteConfirmationModal = () => (
+    <Modal
+      animationType="slide"
+      transparent={true}
+      visible={isDeleteModalVisible}
+      onRequestClose={() => setIsDeleteModalVisible(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Delete Device</Text>
+            <TouchableOpacity 
+              onPress={() => setIsDeleteModalVisible(false)}
+            >
+              <Ionicons name="close" size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.modalBody}>
+            <Text style={styles.deleteConfirmationText}>
+              Are you sure you want to delete this device?
+            </Text>
+            <Text style={styles.deviceNameText}>
+              {deviceToDelete?.name || 'Unknown Device'}
+            </Text>
+            <Text style={styles.deviceIdText}>
+              ID: {deviceToDelete?.deviceId || 'Unknown'}
+            </Text>
+            
+            <View style={styles.deleteModalButtons}>
+              <TouchableOpacity 
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => setIsDeleteModalVisible(false)}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.modalButton, styles.deleteButton]}
+                onPress={deleteDevice}
+              >
+                <Text style={styles.modalButtonText}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+
+  // Modify saveDeviceWithConditions function
+  const saveDeviceWithConditions = async () => {
+    if (!deviceSearchId) {
+      Alert.alert('Error', 'Device ID is required');
+      return;
+    }
+
+    try {
+      const auth = getAuth();
+      if (!auth.currentUser) {
+        Alert.alert('Error', 'User not authenticated');
+        return;
+      }
+      
+      const db = getDatabase();
+      
+      // Check if device already exists in user's devices
+      const userDevicesRef = ref(db, `iotDevices/${auth.currentUser.uid}`);
+      const snapshot = await get(userDevicesRef);
+      let existingDeviceKey = null;
+      
+      if (snapshot.exists()) {
+        const userDevices = snapshot.val();
+        // Find if device with same deviceId exists
+        Object.entries(userDevices).forEach(([key, value]) => {
+          if (value.deviceId === deviceSearchId) {
+            existingDeviceKey = key;
+          }
+        });
+      }
+      
+      // Prepare the device data
+      const newDevice = {
+        deviceId: deviceSearchId,
+        name: deviceName || deviceFound?.deviceType || 'Unknown Device',
+        type: deviceFound?.deviceType?.toLowerCase() || 'other',
+        location: deviceLocation || 'Not specified',
+        lastUpdated: new Date().toISOString(),
+        isDynamic: isDynamic,
+        conditions: isDynamic ? conditions : null,
+        data: {
+          isOnline: deviceFound?.isOnline || false
+        }
+      };
+
+      // If device exists, update it. Otherwise, create new
+      const deviceKey = existingDeviceKey || `${new Date().getTime()}_${Math.random().toString(36).substring(2, 8)}`;
+      const deviceRef = ref(db, `iotDevices/${auth.currentUser.uid}/${deviceKey}`);
+      
+      await set(deviceRef, newDevice);
+      
+      // Update the IOTs collection based on condition type
+      if (isDynamic) {
+        const iotRef = ref(db, `IOTs/${deviceSearchId}`);
+        const iotSnapshot = await get(iotRef);
+        
+        if (iotSnapshot.exists()) {
+          const iotData = iotSnapshot.val();
+          
+          if (conditions.type === 'threshold') {
+            // Update Threshold and Operator fields in IOTs collection
+            await set(iotRef, {
+              ...iotData,
+              Operator: conditions.threshold.operator,
+              Threshold: Number(conditions.threshold.value) || 0
+            });
+            console.log('Updated threshold settings in IOTs collection');
+          }
+        }
+      }
+      
+      console.log(`Successfully ${existingDeviceKey ? 'updated' : 'added'} device with ID:`, deviceSearchId);
+      
+      // Reset form
+      setDeviceSearchId('');
+      setDeviceName('');
+      setDeviceLocation('');
+      setDeviceFound(null);
+      setIsDynamic(false);
+      setConditions({
+        type: 'static',
+        minValue: '',
+        maxValue: '',
+        buttonActions: [],
+        toggleStates: { 
+          on: '', 
+          off: '',
+          onText: '',
+          offText: ''
+        },
+        truefalseValue: { true: '', false: '' },
+        threshold: {
+          value: '',
+          operator: '>', 
+          action: 'alert'
+        }
+      });
+      
+      // Close modal and reset search step
+      setIsAddModalVisible(false);
+      setIsSearchStep(true);
+      
+      Alert.alert('Success', `Device ${existingDeviceKey ? 'updated' : 'added'} successfully`);
+    } catch (error) {
+      console.error('Error saving device:', error);
+      Alert.alert('Error', 'Failed to save device: ' + error.message);
+    }
+  };
+
+  // Create a custom component for WiFi with slash
+  const WifiSlashIcon = ({ size = 16, color = "#FFFFFF" }) => (
+    <View style={styles.iconOverlayContainer}>
+      <Ionicons name="wifi" size={size} color={color} />
+      <View style={styles.slashOverlay}>
+        <View style={[styles.slashLine, { transform: [{ rotate: '45deg' }] }]} />
+      </View>
+    </View>
+  );
+
+  // Add back the renderAddDeviceModal function
   const renderAddDeviceModal = () => (
     <Modal
       animationType="slide"
@@ -576,12 +1412,14 @@ export default function Dashboard({ navigation }) {
                   onChangeText={setDeviceSearchId}
                   placeholder="Enter Device ID (e.g. SL_0000)"
                 />
-                <TouchableOpacity 
-                  style={styles.modalButton}
-                  onPress={searchDevice}
-                >
-                  <Text style={styles.modalButtonText}>Search Device</Text>
-                </TouchableOpacity>
+                {!deviceFound && (
+                  <TouchableOpacity 
+                    style={styles.modalButton}
+                    onPress={searchDevice}
+                  >
+                    <Text style={styles.modalButtonText}>Search Device</Text>
+                  </TouchableOpacity>
+                )}
 
                 {deviceFound && (
                   <View style={styles.devicePreview}>
@@ -626,7 +1464,7 @@ export default function Dashboard({ navigation }) {
                   </View>
                 </View>
 
-                <Text style={styles.inputLabel}>Device Name (Auto-filled from Device Type)</Text>
+                <Text style={styles.inputLabel}>Device Name</Text>
                 <TextInput
                   style={[styles.input, { backgroundColor: '#E8E8E8' }]}
                   value={deviceName}
@@ -661,105 +1499,176 @@ export default function Dashboard({ navigation }) {
                       style={styles.conditionTypeScroll}
                     >
                       <View style={styles.conditionButtons}>
-                        <TouchableOpacity
-                          style={[
-                            styles.conditionTypeButton,
-                            conditions.type === 'static' && styles.conditionTypeButtonSelected
-                          ]}
-                          onPress={() => handleConditionChange('static')}
-                        >
-                          <Ionicons 
-                            name="document-text-outline" 
-                            size={24} 
-                            color={conditions.type === 'static' ? '#FFFFFF' : '#2196F3'} 
-                          />
-                          <Text style={[
-                            styles.conditionTypeText,
-                            conditions.type === 'static' && styles.conditionTypeTextSelected
-                          ]}>
-                            Static
-                          </Text>
-                        </TouchableOpacity>
+                        {/* Show Threshold option if device has Threshold field */}
+                        {(deviceFound && 'Threshold' in deviceFound) ? (
+                          <TouchableOpacity
+                            style={[
+                              styles.conditionTypeButton,
+                              styles.conditionTypeButtonSelected,
+                              { borderColor: '#4CAF50', borderWidth: 2 }
+                            ]}
+                            disabled={true}
+                          >
+                            <Ionicons 
+                              name="analytics-outline" 
+                              size={24} 
+                              color="#FFFFFF"
+                            />
+                            <Text style={[
+                              styles.conditionTypeText,
+                              styles.conditionTypeTextSelected
+                            ]}>
+                              Threshold
+                            </Text>
+                          </TouchableOpacity>
+                        ) : (deviceFound && ('LockStatus' in deviceFound || 'Status' in deviceFound)) ? (
+                          // Show Toggle option if device has LockStatus or Status
+                          <TouchableOpacity
+                            style={[
+                              styles.conditionTypeButton,
+                              styles.conditionTypeButtonSelected,
+                              { borderColor: '#4CAF50', borderWidth: 2 }
+                            ]}
+                            disabled={true}
+                          >
+                            <Ionicons 
+                              name="toggle-outline" 
+                              size={24} 
+                              color="#FFFFFF"
+                            />
+                            <Text style={[
+                              styles.conditionTypeText,
+                              styles.conditionTypeTextSelected
+                            ]}>
+                              Toggle
+                            </Text>
+                          </TouchableOpacity>
+                        ) : (deviceFound && 'Readings' in deviceFound) ? (
+                          // Show only Static option if device has Readings field
+                          <TouchableOpacity
+                            style={[
+                              styles.conditionTypeButton,
+                              styles.conditionTypeButtonSelected,
+                              { borderColor: '#4CAF50', borderWidth: 2 }
+                            ]}
+                            disabled={true}
+                          >
+                            <Ionicons 
+                              name="document-text-outline" 
+                              size={24} 
+                              color="#FFFFFF"
+                            />
+                            <Text style={[
+                              styles.conditionTypeText,
+                              styles.conditionTypeTextSelected
+                            ]}>
+                              Static
+                            </Text>
+                          </TouchableOpacity>
+                        ) : (
+                          // Show all options if device has no special fields
+                          <>
+                            <TouchableOpacity
+                              style={[
+                                styles.conditionTypeButton,
+                                conditions.type === 'static' && styles.conditionTypeButtonSelected
+                              ]}
+                              onPress={() => handleConditionChange('static')}
+                            >
+                              <Ionicons 
+                                name="document-text-outline" 
+                                size={24} 
+                                color={conditions.type === 'static' ? '#FFFFFF' : '#2196F3'} 
+                              />
+                              <Text style={[
+                                styles.conditionTypeText,
+                                conditions.type === 'static' && styles.conditionTypeTextSelected
+                              ]}>
+                                Static
+                              </Text>
+                            </TouchableOpacity>
 
-                        <TouchableOpacity
-                          style={[
-                            styles.conditionTypeButton,
-                            conditions.type === 'range' && styles.conditionTypeButtonSelected
-                          ]}
-                          onPress={() => handleConditionChange('range')}
-                        >
-                          <Ionicons 
-                            name="options-outline" 
-                            size={24} 
-                            color={conditions.type === 'range' ? '#FFFFFF' : '#2196F3'} 
-                          />
-                          <Text style={[
-                            styles.conditionTypeText,
-                            conditions.type === 'range' && styles.conditionTypeTextSelected
-                          ]}>
-                            Range
-                          </Text>
-                        </TouchableOpacity>
+                            <TouchableOpacity
+                              style={[
+                                styles.conditionTypeButton,
+                                conditions.type === 'range' && styles.conditionTypeButtonSelected
+                              ]}
+                              onPress={() => handleConditionChange('range')}
+                            >
+                              <Ionicons 
+                                name="options-outline" 
+                                size={24} 
+                                color={conditions.type === 'range' ? '#FFFFFF' : '#2196F3'} 
+                              />
+                              <Text style={[
+                                styles.conditionTypeText,
+                                conditions.type === 'range' && styles.conditionTypeTextSelected
+                              ]}>
+                                Range
+                              </Text>
+                            </TouchableOpacity>
 
-                        <TouchableOpacity
-                          style={[
-                            styles.conditionTypeButton,
-                            conditions.type === 'toggle' && styles.conditionTypeButtonSelected
-                          ]}
-                          onPress={() => handleConditionChange('toggle')}
-                        >
-                          <Ionicons 
-                            name="toggle-outline" 
-                            size={24} 
-                            color={conditions.type === 'toggle' ? '#FFFFFF' : '#2196F3'} 
-                          />
-                          <Text style={[
-                            styles.conditionTypeText,
-                            conditions.type === 'toggle' && styles.conditionTypeTextSelected
-                          ]}>
-                            Toggle
-                          </Text>
-                        </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[
+                              styles.conditionTypeButton,
+                                conditions.type === 'toggle' && styles.conditionTypeButtonSelected
+                            ]}
+                            onPress={() => handleConditionChange('toggle')}
+                          >
+                            <Ionicons 
+                              name="toggle-outline" 
+                              size={24} 
+                              color={conditions.type === 'toggle' ? '#FFFFFF' : '#2196F3'} 
+                            />
+                            <Text style={[
+                              styles.conditionTypeText,
+                              conditions.type === 'toggle' && styles.conditionTypeTextSelected
+                            ]}>
+                              Toggle
+                            </Text>
+                          </TouchableOpacity>
 
-                        <TouchableOpacity
-                          style={[
-                            styles.conditionTypeButton,
-                            conditions.type === 'truefalse' && styles.conditionTypeButtonSelected
-                          ]}
-                          onPress={() => handleConditionChange('truefalse')}
-                        >
-                          <Ionicons 
-                            name="git-compare-outline" 
-                            size={24} 
-                            color={conditions.type === 'truefalse' ? '#FFFFFF' : '#2196F3'} 
-                          />
-                          <Text style={[
-                            styles.conditionTypeText,
-                            conditions.type === 'truefalse' && styles.conditionTypeTextSelected
-                          ]}>
-                            True/False
-                          </Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                          style={[
-                            styles.conditionTypeButton,
-                            conditions.type === 'threshold' && styles.conditionTypeButtonSelected
-                          ]}
-                          onPress={() => handleConditionChange('threshold')}
-                        >
-                          <Ionicons 
-                            name="analytics-outline" 
-                            size={24} 
-                            color={conditions.type === 'threshold' ? '#FFFFFF' : '#2196F3'} 
-                          />
-                          <Text style={[
-                            styles.conditionTypeText,
-                            conditions.type === 'threshold' && styles.conditionTypeTextSelected
-                          ]}>
-                            Threshold
-                          </Text>
-                        </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[
+                              styles.conditionTypeButton,
+                              conditions.type === 'truefalse' && styles.conditionTypeButtonSelected
+                            ]}
+                            onPress={() => handleConditionChange('truefalse')}
+                          >
+                            <Ionicons 
+                              name="git-compare-outline" 
+                              size={24} 
+                              color={conditions.type === 'truefalse' ? '#FFFFFF' : '#2196F3'} 
+                            />
+                            <Text style={[
+                              styles.conditionTypeText,
+                              conditions.type === 'truefalse' && styles.conditionTypeTextSelected
+                            ]}>
+                              True/False
+                            </Text>
+                          </TouchableOpacity>
+                        
+                          <TouchableOpacity
+                            style={[
+                              styles.conditionTypeButton,
+                                conditions.type === 'threshold' && styles.conditionTypeButtonSelected
+                            ]}
+                            onPress={() => handleConditionChange('threshold')}
+                          >
+                            <Ionicons 
+                              name="analytics-outline" 
+                              size={24} 
+                              color={conditions.type === 'threshold' ? '#FFFFFF' : '#2196F3'} 
+                            />
+                            <Text style={[
+                              styles.conditionTypeText,
+                              conditions.type === 'threshold' && styles.conditionTypeTextSelected
+                            ]}>
+                              Threshold
+                            </Text>
+                          </TouchableOpacity>
+                          </>
+                        )}
                       </View>
                     </ScrollView>
 
@@ -805,6 +1714,7 @@ export default function Dashboard({ navigation }) {
                             toggleStates: {...conditions.toggleStates, on: value}
                           })}
                           placeholder="On State Value ( 0 or 1 )"
+                          editable={!deviceFound || (!('LockStatus' in deviceFound) && !('Status' in deviceFound))}
                         />
                         <TextInput
                           style={styles.input}
@@ -814,6 +1724,7 @@ export default function Dashboard({ navigation }) {
                             toggleStates: {...conditions.toggleStates, off: value}
                           })}
                           placeholder="Off State Value ( 0 or 1 )"
+                          editable={!deviceFound || (!('LockStatus' in deviceFound) && !('Status' in deviceFound))}
                         />
                         <Text style={styles.inputLabel}>Toggle Labels</Text>
                         <TextInput
@@ -824,6 +1735,7 @@ export default function Dashboard({ navigation }) {
                             toggleStates: {...conditions.toggleStates, onText: value}
                           })}
                           placeholder="On State Label (ON, Running, Locked)"
+                          editable={!deviceFound || (!('LockStatus' in deviceFound) && !('Status' in deviceFound))}
                         />
                         <TextInput
                           style={styles.input}
@@ -833,6 +1745,7 @@ export default function Dashboard({ navigation }) {
                             toggleStates: {...conditions.toggleStates, offText: value}
                           })}
                           placeholder="Off State Label (OFF, Stopped, Unlocked)"
+                          editable={!deviceFound || (!('LockStatus' in deviceFound) && !('Status' in deviceFound))}
                         />
                       </>
                     )}
@@ -911,42 +1824,6 @@ export default function Dashboard({ navigation }) {
                             placeholder="Threshold Value"
                             keyboardType="numeric"
                           />
-
-                          <View style={styles.actionContainer}>
-                            <Text style={styles.inputLabel}>Action</Text>
-                            <View style={styles.actionButtons}>
-                              <TouchableOpacity
-                                style={[
-                                  styles.actionButton,
-                                  conditions.threshold.action === 'alert' && styles.actionButtonSelected
-                                ]}
-                                onPress={() => setConditions({
-                                  ...conditions,
-                                  threshold: { ...conditions.threshold, action: 'alert' }
-                                })}
-                              >
-                                <Text style={[
-                                  styles.actionButtonText,
-                                  conditions.threshold.action === 'alert' && styles.actionButtonTextSelected
-                                ]}>Alert</Text>
-                              </TouchableOpacity>
-                              <TouchableOpacity
-                                style={[
-                                  styles.actionButton,
-                                  conditions.threshold.action === 'notify' && styles.actionButtonSelected
-                                ]}
-                                onPress={() => setConditions({
-                                  ...conditions,
-                                  threshold: { ...conditions.threshold, action: 'notify' }
-                                })}
-                              >
-                                <Text style={[
-                                  styles.actionButtonText,
-                                  conditions.threshold.action === 'notify' && styles.actionButtonTextSelected
-                                ]}>Notify</Text>
-                              </TouchableOpacity>
-                            </View>
-                          </View>
                         </View>
                       </>
                     )}
@@ -967,119 +1844,34 @@ export default function Dashboard({ navigation }) {
     </Modal>
   );
   
-  // Add renderDeviceTypeSelector function
-  const renderDeviceTypeSelector = () => (
-    <ScrollView 
-      horizontal 
-      showsHorizontalScrollIndicator={false}
-      style={styles.typeSelector}
-    >
-      {DEVICE_TYPES.map(type => (
-        <TouchableOpacity
-          key={type.id}
-          style={[
-            styles.typeButton,
-            deviceType === type.id && styles.typeButtonSelected
-          ]}
-          onPress={() => setDeviceType(type.id)}
-        >
-          <Ionicons 
-            name={type.icon} 
-            size={24} 
-            color={deviceType === type.id ? '#FFFFFF' : '#2196F3'} 
-          />
-          <Text 
-            style={[
-              styles.typeButtonText,
-              deviceType === type.id && styles.typeButtonTextSelected
-            ]}
-          >
-            {type.name}
-          </Text>
-        </TouchableOpacity>
-      ))}
-    </ScrollView>
-  );
-
-  // Modify handleConditionChange function
   const handleConditionChange = (type) => {
     setConditions({
+      ...conditions,
       type,
+      // Reset values when changing type
       minValue: '',
       maxValue: '',
       buttonActions: [],
-      toggleStates: { 
-        on: '', 
-        off: '',
-        onText: '',
-        offText: ''
-      },
-      truefalseValue: { true: '', false: '' },
-      threshold: {
+      toggleStates: type === 'toggle' ? { 
+        on: '1', 
+        off: '0',
+        onText: 'ON',
+        offText: 'OFF'
+      } : conditions.toggleStates,
+      truefalseValue: type === 'truefalse' ? { true: '', false: '' } : conditions.truefalseValue,
+      threshold: type === 'threshold' ? {
         value: '',
-        operator: '>', // Default operator
-        action: 'alert' // Default action
-      }
+        operator: '>'
+      } : conditions.threshold
     });
   };
 
-  // Modify handleToggleChange function to preserve isOnline status
-  const handleToggleChange = async (device) => {
-    if (!device.isDynamic || !device.conditions || device.conditions.type !== 'toggle') {
-      return;
-    }
-
-    try {
-      const auth = getAuth();
-      if (!auth.currentUser) {
-        Alert.alert('Error', 'User not authenticated');
-        return;
-      }
-
-      const db = getDatabase();
-      const deviceStatusRef = ref(db, `IOTs/${device.deviceId}/Status`);
-      
-      // Get current status
-      const snapshot = await get(deviceStatusRef);
-      const currentStatus = snapshot.exists() ? Number(snapshot.val()) : 1;
-      
-      // Determine new status based on current value
-      const { on, off } = device.conditions.toggleStates;
-      const onValue = Number(on);
-      const offValue = Number(off);
-      const newStatus = currentStatus === onValue ? offValue : onValue;
-      
-      // Update the status in Firebase while preserving isOnline
-      const deviceRef = ref(db, `IOTs/${device.deviceId}`);
-      const deviceSnapshot = await get(deviceRef);
-      if (deviceSnapshot.exists()) {
-        const currentData = deviceSnapshot.val();
-        await set(deviceRef, {
-          ...currentData,
-          Status: newStatus,
-          isOnline: currentData.isOnline // Preserve the isOnline status
-        });
-      } else {
-        await set(deviceStatusRef, newStatus);
-      }
-      
-      console.log('Successfully toggled device status:', newStatus);
-    } catch (error) {
-      console.error('Error toggling device:', error);
-      Alert.alert('Error', 'Failed to toggle device status: ' + error.message);
-    }
-  };
-
-  // Add a function to handle long press for device deletion
   const handleDeviceLongPress = (device) => {
     setDeviceToDelete(device);
     setIsDeleteModalVisible(true);
   };
 
-  // Add a function to handle device deletion
   const deleteDevice = async () => {
-    if (!deviceToDelete) return;
-    
     try {
       const auth = getAuth();
       if (!auth.currentUser) {
@@ -1089,35 +1881,57 @@ export default function Dashboard({ navigation }) {
 
       const db = getDatabase();
       
-      // Delete from user's devices
-      const deviceRef = ref(db, `iotDevices/${auth.currentUser.uid}/${deviceToDelete.deviceId}`);
-      await set(deviceRef, null);
+      // Find the device key in user's devices
+      const userDevicesRef = ref(db, `iotDevices/${auth.currentUser.uid}`);
+      const snapshot = await get(userDevicesRef);
       
-      // If it's a threshold device, we don't delete from IOTs collection
-      // as other users might be using the same device
-      
-      setIsDeleteModalVisible(false);
-      setDeviceToDelete(null);
-      Alert.alert('Success', 'Device deleted successfully');
+      if (snapshot.exists()) {
+        const userDevices = snapshot.val();
+        let deviceKey = null;
+        
+        // Find the key for the device to delete
+        Object.entries(userDevices).forEach(([key, value]) => {
+          if ((value.id === deviceToDelete.id) || 
+              (value.deviceId === deviceToDelete.deviceId) || 
+              (JSON.stringify(value) === JSON.stringify(deviceToDelete))) {
+            deviceKey = key;
+          }
+        });
+        
+        if (deviceKey) {
+          // Delete the device from user's devices
+          const deviceRef = ref(db, `iotDevices/${auth.currentUser.uid}/${deviceKey}`);
+          await set(deviceRef, null);
+          
+          // Update local state
+          setIotDevices(currentDevices => 
+            currentDevices.filter(d => d.id !== deviceToDelete.id)
+          );
+          
+          // Close modal and reset state
+          setIsDeleteModalVisible(false);
+          setDeviceToDelete(null);
+          
+          Alert.alert('Success', 'Device deleted successfully');
+        } else {
+          Alert.alert('Error', 'Device not found');
+        }
+      }
     } catch (error) {
       console.error('Error deleting device:', error);
       Alert.alert('Error', 'Failed to delete device: ' + error.message);
     }
   };
 
-  // Add a function to handle threshold editing
   const handleThresholdEdit = (device) => {
-    setEditingThreshold(device);
-    setThresholdValue(device.conditions.threshold.value);
-    setThresholdOperator(device.conditions.threshold.operator);
-    setThresholdAction(device.conditions.threshold.action);
-    setIsThresholdModalVisible(true);
+    setIotDevices(currentDevices => 
+      currentDevices.map(d => 
+        d.id === device.id ? { ...d, isEditing: true } : d
+      )
+    );
   };
 
-  // Add a function to save threshold changes
-  const saveThresholdChanges = async () => {
-    if (!editingThreshold) return;
-    
+  const handleToggleChange = async (device) => {
     try {
       const auth = getAuth();
       if (!auth.currentUser) {
@@ -1126,239 +1940,55 @@ export default function Dashboard({ navigation }) {
       }
 
       const db = getDatabase();
-      
-      // Update the device in user's devices
-      const deviceRef = ref(db, `iotDevices/${auth.currentUser.uid}/${editingThreshold.deviceId}`);
-      const deviceSnapshot = await get(deviceRef);
-      
-      if (deviceSnapshot.exists()) {
-        const deviceData = deviceSnapshot.val();
-        const updatedDevice = {
-          ...deviceData,
-          conditions: {
-            ...deviceData.conditions,
-            threshold: {
-              operator: thresholdOperator,
-              value: thresholdValue,
-              action: thresholdAction
-            }
-          }
-        };
-        
-        await set(deviceRef, updatedDevice);
-      }
-      
-      // Update the threshold in IOTs collection
-      const iotRef = ref(db, `IOTs/${editingThreshold.deviceId}`);
-      const iotSnapshot = await get(iotRef);
-      
-      if (iotSnapshot.exists()) {
-        const iotData = iotSnapshot.val();
+      const iotRef = ref(db, `IOTs/${device.deviceId}`);
+      const snapshot = await get(iotRef);
+
+      if (snapshot.exists()) {
+        const currentData = snapshot.val();
+        let newValue;
+
+        // Determine which field to toggle (LockStatus or Status)
+        const fieldToToggle = 'LockStatus' in currentData ? 'LockStatus' : 'Status';
+        const currentValue = currentData[fieldToToggle];
+
+        // Get the toggle states from device conditions
+        const { on, off } = device.conditions?.toggleStates || { on: '1', off: '0' };
+
+        // Toggle the value
+        newValue = currentValue === on ? off : on;
+
+        // Update the device state in Firebase
         await set(iotRef, {
-          ...iotData,
-          Operator: thresholdOperator,
-          Threshold: Number(thresholdValue) || 0
+          ...currentData,
+          [fieldToToggle]: newValue,
+          lastStatusUpdate: new Date().toISOString()
         });
+
+        // Update local state
+        setIotDevices(currentDevices =>
+          currentDevices.map(d =>
+            d.id === device.id
+              ? {
+                  ...d,
+                  data: {
+                    ...d.data,
+                    [fieldToToggle]: newValue,
+                    lastStatusUpdate: new Date().toISOString()
+                  }
+                }
+              : d
+          )
+        );
+
+        console.log(`Successfully toggled ${fieldToToggle} to ${newValue}`);
+      } else {
+        Alert.alert('Error', 'Device data not found');
       }
-      
-      setIsThresholdModalVisible(false);
-      setEditingThreshold(null);
-      Alert.alert('Success', 'Threshold updated successfully');
     } catch (error) {
-      console.error('Error updating threshold:', error);
-      Alert.alert('Error', 'Failed to update threshold: ' + error.message);
+      console.error('Error toggling device:', error);
+      Alert.alert('Error', 'Failed to toggle device: ' + error.message);
     }
   };
-
-  // Add new animated toggle component
-  const AnimatedToggle = ({ value, onToggle, size = 28, onText = '', offText = '' }) => {
-    const translation = useRef(new Animated.Value(value ? size : 0)).current;
-
-    useEffect(() => {
-      Animated.spring(translation, {
-        toValue: value ? size : 0,
-        useNativeDriver: true,
-        bounciness: 8,
-      }).start();
-    }, [value, size]);
-
-    return (
-      <View style={styles.toggleWrapper}>
-        <Text style={styles.toggleLabel}>
-          {value ? (onText || 'ON') : (offText || 'OFF')}
-        </Text>
-        <Pressable
-          onPress={onToggle}
-          style={[
-            styles.toggleTrack,
-            {
-              width: size * 2,
-              height: size + 4,
-              backgroundColor: value ? '#4CAF50' : '#FF3B30',
-            },
-          ]}
-        >
-          <Animated.View
-            style={[
-              styles.toggleThumb,
-              {
-                width: size - 4,
-                height: size - 4,
-                transform: [{ translateX: translation }],
-              },
-            ]}
-          />
-        </Pressable>
-      </View>
-    );
-  };
-
-  // Add a render function for the threshold edit modal
-  const renderThresholdEditModal = () => (
-    <Modal
-      animationType="slide"
-      transparent={true}
-      visible={isThresholdModalVisible}
-      onRequestClose={() => setIsThresholdModalVisible(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Edit Threshold</Text>
-            <TouchableOpacity 
-              onPress={() => setIsThresholdModalVisible(false)}
-            >
-              <Ionicons name="close" size={24} color="#666" />
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.modalBody}>
-            <Text style={styles.inputLabel}>Operator</Text>
-            <View style={styles.operatorButtons}>
-              <TouchableOpacity
-                style={[
-                  styles.operatorButton,
-                  thresholdOperator === '>' && styles.operatorButtonSelected
-                ]}
-                onPress={() => setThresholdOperator('>')}
-              >
-                <Text style={[
-                  styles.operatorButtonText,
-                  thresholdOperator === '>' && styles.operatorButtonTextSelected
-                ]}>Greater Than</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.operatorButton,
-                  thresholdOperator === '<' && styles.operatorButtonSelected
-                ]}
-                onPress={() => setThresholdOperator('<')}
-              >
-                <Text style={[
-                  styles.operatorButtonText,
-                  thresholdOperator === '<' && styles.operatorButtonTextSelected
-                ]}>Less Than</Text>
-              </TouchableOpacity>
-            </View>
-
-            <Text style={styles.inputLabel}>Threshold Value</Text>
-            <TextInput
-              style={styles.input}
-              value={thresholdValue}
-              onChangeText={setThresholdValue}
-              placeholder="Enter threshold value"
-              keyboardType="numeric"
-            />
-
-            <Text style={styles.inputLabel}>Action</Text>
-            <View style={styles.actionButtons}>
-              <TouchableOpacity
-                style={[
-                  styles.actionButton,
-                  thresholdAction === 'alert' && styles.actionButtonSelected
-                ]}
-                onPress={() => setThresholdAction('alert')}
-              >
-                <Text style={[
-                  styles.actionButtonText,
-                  thresholdAction === 'alert' && styles.actionButtonTextSelected
-                ]}>Alert</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.actionButton,
-                  thresholdAction === 'notify' && styles.actionButtonSelected
-                ]}
-                onPress={() => setThresholdAction('notify')}
-              >
-                <Text style={[
-                  styles.actionButtonText,
-                  thresholdAction === 'notify' && styles.actionButtonTextSelected
-                ]}>Notify</Text>
-              </TouchableOpacity>
-            </View>
-
-            <TouchableOpacity 
-              style={styles.modalButton}
-              onPress={saveThresholdChanges}
-            >
-              <Text style={styles.modalButtonText}>Save Changes</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
-  );
-
-  // Add a render function for the delete confirmation modal
-  const renderDeleteConfirmationModal = () => (
-    <Modal
-      animationType="slide"
-      transparent={true}
-      visible={isDeleteModalVisible}
-      onRequestClose={() => setIsDeleteModalVisible(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Delete Device</Text>
-            <TouchableOpacity 
-              onPress={() => setIsDeleteModalVisible(false)}
-            >
-              <Ionicons name="close" size={24} color="#666" />
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.modalBody}>
-            <Text style={styles.deleteConfirmationText}>
-              Are you sure you want to delete this device?
-            </Text>
-            <Text style={styles.deviceNameText}>
-              {deviceToDelete?.name || 'Unknown Device'}
-            </Text>
-            <Text style={styles.deviceIdText}>
-              ID: {deviceToDelete?.deviceId || 'Unknown'}
-            </Text>
-            
-            <View style={styles.deleteModalButtons}>
-              <TouchableOpacity 
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => setIsDeleteModalVisible(false)}
-              >
-                <Text style={styles.modalButtonText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={[styles.modalButton, styles.deleteButton]}
-                onPress={deleteDevice}
-              >
-                <Text style={styles.modalButtonText}>Delete</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </View>
-    </Modal>
-  );
 
   return (
     <View style={styles.container}>
@@ -1376,19 +2006,26 @@ export default function Dashboard({ navigation }) {
       </View>
       
       <View style={styles.statsContainer}>
-        <View style={styles.statCard}>
-          <Ionicons name="checkmark-circle" size={24} color="#4CAF50" />
-          <Text style={styles.statNumber}>
-            {iotDevices.filter(d => d.data?.isOnline === true).length}
-          </Text>
-          <Text style={styles.statLabel}>Online</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Ionicons name="alert-circle" size={24} color="#FF3B30" />
-          <Text style={styles.statNumber}>
-            {iotDevices.filter(d => d.data?.isOnline === false).length}
-          </Text>
-          <Text style={styles.statLabel}>Offline</Text>
+        <View style={styles.statsRow}>
+          <View style={styles.statBadge}>
+            <View style={styles.statIconContainer}>
+              <Ionicons name="wifi" size={16} color="#FFFFFF" />
+            </View>
+            <Text style={styles.statNumber}>
+              {iotDevices.filter(d => d.data?.isOnline === true).length}
+            </Text>
+            <Text style={styles.statLabel}>Online</Text>
+          </View>
+
+          <View style={styles.statBadge}>
+            <View style={styles.statIconContainerRed}>
+              <WifiSlashIcon size={16} color="#FFFFFF" />
+            </View>
+            <Text style={styles.statNumber}>
+              {iotDevices.filter(d => d.data?.isOnline === false).length}
+            </Text>
+            <Text style={styles.statLabel}>Offline</Text>
+          </View>
         </View>
       </View>
       
@@ -1420,7 +2057,6 @@ export default function Dashboard({ navigation }) {
       )}
       
       {renderAddDeviceModal()}
-      {renderThresholdEditModal()}
       {renderDeleteConfirmationModal()}
       
       <Navbar activePage="dashboard" />
@@ -1465,25 +2101,57 @@ const styles = StyleSheet.create({
   },
   statsContainer: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
+    justifyContent: 'center',
     paddingHorizontal: 15,
-    paddingVertical: 15,
+    paddingVertical: 8,
     backgroundColor: '#FFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E5E5E5',
   },
-  statCard: {
-    flex: 1,
+  statsRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    padding: 10,
+    justifyContent: 'center',
+  },
+  statBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    marginHorizontal: 8,
+    elevation: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 1,
+  },
+  statIconContainer: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#4CAF50',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 6,
+  },
+  statIconContainerRed: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#FF3B30',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 6,
   },
   statNumber: {
-    fontSize: 20,
+    fontSize: 16,
     fontWeight: '700',
-    marginVertical: 5,
+    marginRight: 5,
   },
   statLabel: {
-    fontSize: 12,
+    fontSize: 14,
     color: '#666',
   },
   deviceList: {
@@ -1596,10 +2264,14 @@ const styles = StyleSheet.create({
     color: '#999',
     fontStyle: 'italic',
   },
+  deleteHint: {
+    fontSize: 12,
+    color: '#999',
+    fontStyle: 'italic',
+    marginTop: 5,
+  },
   deviceActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    flexDirection: 'column',
     marginTop: 10,
     paddingTop: 10,
     borderTopWidth: 1,
@@ -1898,6 +2570,7 @@ const styles = StyleSheet.create({
   },
   operatorButtonTextSelected: {
     color: '#FFFFFF',
+    fontWeight: '600',
   },
   actionContainer: {
     marginTop: 15,
@@ -1925,6 +2598,7 @@ const styles = StyleSheet.create({
   },
   actionButtonTextSelected: {
     color: '#FFFFFF',
+    fontWeight: '600',
   },
   thresholdDisplayContainer: {
     marginTop: 15,
@@ -1949,6 +2623,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 6,
     marginTop: 10,
+    marginHorizontal: 'auto',
+    alignSelf: 'center',
   },
   editButtonText: {
     color: '#FFFFFF',
@@ -1981,13 +2657,313 @@ const styles = StyleSheet.create({
     marginTop: 20,
   },
   cancelButton: {
-    backgroundColor: '#9E9E9E',
+    backgroundColor: '#F5F5F5',
+    padding: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
     flex: 1,
     marginRight: 10,
+  },
+  cancelButtonText: {
+    color: '#666666',
+    fontWeight: '600',
+    fontSize: 16,
   },
   deleteButton: {
     backgroundColor: '#FF3B30',
     flex: 1,
     marginLeft: 10,
+  },
+  recommendedBadge: {
+    backgroundColor: '#4CAF50',
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+    paddingVertical: 2,
+    paddingHorizontal: 5,
+    borderRadius: 4,
+    marginTop: 5,
+  },
+  thresholdModalContent: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    width: '100%',
+    maxHeight: '80%',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  thresholdModalBody: {
+    padding: 15,
+  },
+  thresholdEditSection: {
+    marginBottom: 15,
+  },
+  thresholdEditLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#666',
+    marginBottom: 5,
+  },
+  operatorButtonsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 5,
+  },
+  operatorButtonNew: {
+    flex: 1,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#2196F3',
+    borderRadius: 8,
+    marginHorizontal: 5,
+    alignItems: 'center',
+  },
+  operatorButtonNewSelected: {
+    backgroundColor: '#2196F3',
+  },
+  operatorButtonNewText: {
+    color: '#2196F3',
+    fontWeight: '500',
+  },
+  thresholdValueContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 5,
+  },
+  thresholdInputWrapper: {
+    flex: 1,
+  },
+  thresholdValueButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginLeft: 5,
+  },
+  thresholdValueButton: {
+    padding: 10,
+  },
+  thresholdValueInput: {
+    backgroundColor: '#F8F9FA',
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+  },
+  actionButtonsNew: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 5,
+  },
+  actionButtonNew: {
+    flex: 1,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#2196F3',
+    borderRadius: 8,
+    marginHorizontal: 5,
+    alignItems: 'center',
+  },
+  actionButtonNewSelected: {
+    backgroundColor: '#2196F3',
+  },
+  actionButtonNewText: {
+    color: '#2196F3',
+    fontWeight: '500',
+  },
+  thresholdSummary: {
+    padding: 15,
+    backgroundColor: '#F8F9FA',
+    borderRadius: 8,
+    marginTop: 15,
+  },
+  thresholdSummaryTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#212121',
+    marginBottom: 10,
+  },
+  thresholdSummaryText: {
+    color: '#666',
+    fontSize: 14,
+  },
+  thresholdHighlight: {
+    fontWeight: '600',
+  },
+  thresholdSaveButton: {
+    backgroundColor: '#2196F3',
+    padding: 15,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 20,
+  },
+  thresholdSaveButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+    fontSize: 16,
+  },
+  inlineEditContainer: {
+    padding: 10,
+    backgroundColor: '#F8F9FA',
+    borderRadius: 8,
+    marginTop: 5,
+  },
+  operatorRow: {
+    marginBottom: 15,
+  },
+  inlineEditLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#666',
+    marginBottom: 5,
+  },
+  operatorInlineButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 5,
+  },
+  operatorInlineButton: {
+    flex: 1,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#2196F3',
+    borderRadius: 8,
+    marginHorizontal: 5,
+    alignItems: 'center',
+  },
+  operatorInlineButtonSelected: {
+    backgroundColor: '#2196F3',
+  },
+  operatorInlineButtonText: {
+    color: '#2196F3',
+    fontWeight: '500',
+  },
+  operatorInlineButtonTextSelected: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+  },
+  valueRow: {
+    marginBottom: 15,
+  },
+  valueControls: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  valueButton: {
+    padding: 10,
+  },
+  valueDisplay: {
+    fontSize: 20,
+    color: '#212121',
+    fontWeight: '600',
+    paddingHorizontal: 20,
+    textAlign: 'center',
+  },
+  valueDisplayInput: {
+    backgroundColor: '#F8F9FA',
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    marginHorizontal: 5,
+    textAlign: 'center',
+    minWidth: 80,
+  },
+  actionRow: {
+    marginBottom: 15,
+  },
+  actionInlineButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 5,
+  },
+  actionInlineButton: {
+    flex: 1,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#2196F3',
+    borderRadius: 8,
+    marginHorizontal: 5,
+    alignItems: 'center',
+  },
+  actionInlineButtonSelected: {
+    backgroundColor: '#2196F3',
+  },
+  actionInlineButtonText: {
+    color: '#2196F3',
+    fontWeight: '500',
+  },
+  actionInlineButtonTextSelected: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+  },
+  inlineButtonsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 15,
+  },
+  iconOverlayContainer: {
+    position: 'relative',
+    width: 18,
+    height: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  slashOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  slashLine: {
+    width: '130%',
+    height: 2,
+    backgroundColor: '#FFFFFF',
+  },
+  saveButton: {
+    backgroundColor: '#2196F3',
+    padding: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+    flex: 1,
+    marginLeft: 10,
+  },
+  saveButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+    fontSize: 16,
+  },
+  disabledInput: {
+    backgroundColor: '#F0F0F0',
+    color: '#999',
+  },
+  disabledText: {
+    color: '#999',
+  },
+  thresholdInfoContainer: {
+    padding: 15,
+    backgroundColor: '#FFF3E0',
+    borderRadius: 8,
+    marginTop: 15,
+    borderWidth: 1,
+    borderColor: '#FFE0B2',
+  },
+  thresholdInfoText: {
+    color: '#F57C00',
+    fontSize: 14,
+    textAlign: 'center',
+    fontStyle: 'italic',
   },
 }); 

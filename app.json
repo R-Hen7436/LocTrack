@@ -18,6 +18,14 @@
         {
           "photosPermission": "The app needs access to your photos to set your profile picture."
         }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#ffffff",
+          "sounds": ["./assets/notification.wav"]
+        }
       ]
     ],
     "ios": {
@@ -43,7 +51,8 @@
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.ACTIVITY_RECOGNITION",
-        "android.permission.FOREGROUND_SERVICE"
+        "android.permission.FOREGROUND_SERVICE",
+        "CALL_PHONE"
       ]
     },
     "web": {
