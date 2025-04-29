@@ -4,6 +4,7 @@ import { getAuth, signOut, updateProfile } from 'firebase/auth';
 import { ref, get, set, onValue } from 'firebase/database';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import * as Device from 'expo-device';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import Navbar from '../Navbar';
 import { auth, db, storage } from '../firebaseConfig';
@@ -211,6 +212,7 @@ export default function Profile({ navigation }) {
   const [isEditingMac, setIsEditingMac] = useState(false);
   const [macParts, setMacParts] = useState(['', '', '', '', '', '']);
   const [activeTab, setActiveTab] = useState('profile'); // 'profile' or 'activity'
+  const [deviceName, setDeviceName] = useState('Unknown Device');
   const macInputRefs = Array(6).fill(0).map(() => React.createRef());
 
   // Add this to hide the navigation header
@@ -263,6 +265,36 @@ export default function Profile({ navigation }) {
         presenceUnsubscribe();
       }
     };
+  }, []);
+
+  // Get device name on component mount
+  useEffect(() => {
+    const getDeviceInfo = async () => {
+      try {
+        // Get basic device information
+        const modelName = Device.modelName || '';
+        const brand = Device.brand || '';
+        const manufacturer = Device.manufacturer || '';
+        
+        // Construct device info
+        let deviceInfo = '';
+        if (brand && modelName) {
+          deviceInfo = `${brand} ${modelName}`;
+        } else if (manufacturer && modelName) {
+          deviceInfo = `${manufacturer} ${modelName}`;
+        } else if (modelName) {
+          deviceInfo = modelName;
+        }
+
+        // Set the device name without additional system info
+        setDeviceName(deviceInfo || `${Platform.OS} Device`);
+      } catch (error) {
+        console.error('Error getting device info:', error);
+        setDeviceName(`${Platform.OS} Device`);
+      }
+    };
+    
+    getDeviceInfo();
   }, []);
 
   // Logout handler
@@ -658,7 +690,7 @@ export default function Profile({ navigation }) {
             <View style={styles.sectionCard}>
               <View style={styles.sectionTitleContainer}>
                 <Text style={styles.sectionTitle}>Device Information</Text>
-      <TouchableOpacity
+                <TouchableOpacity
                   onPress={() => setIsEditingMac(!isEditingMac)}
                   style={styles.actionButton}
                 >
@@ -667,8 +699,14 @@ export default function Profile({ navigation }) {
                     size={20} 
                     color="#4682B4" 
                   />
-      </TouchableOpacity>
+                </TouchableOpacity>
               </View>
+              
+              <InfoRow 
+                label="Device Name" 
+                value={deviceName}
+                icon="phone-portrait-outline"
+              />
               
               {isEditingMac ? (
                 <>

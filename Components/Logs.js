@@ -80,6 +80,7 @@ const getLogIcon = (logType) => {
 
 export default function Logs({ navigation }) {
   const [logs, setLogs] = useState([]);
+  const [deviceInfo, setDeviceInfo] = useState(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
   const [loadingMore, setLoadingMore] = useState(false);
@@ -100,6 +101,7 @@ export default function Logs({ navigation }) {
     try {
       if (!isLoadMore) {
         setLoading(true);
+        setDeviceInfo(null); // Reset device info when reloading
       } else {
         setLoadingMore(true);
       }
@@ -118,8 +120,112 @@ export default function Logs({ navigation }) {
         return;
       }
       
-      // Base query with limit - avoiding orderByChild to prevent indexing issues
+      // Base query with limit
       const limit = 20;
+      
+      // Special handling for location filter to include RSSI logs
+      if (filter === 'location') {
+        try {
+          // First, get all unique identifiers under RSSI_logs
+          const rssiLogsRef = ref(db, 'RSSI_logs');
+          const rssiLogsSnap = await get(rssiLogsRef);
+          
+          if (!rssiLogsSnap.exists()) {
+            setLogs([]);
+            setLoading(false);
+            setLoadingMore(false);
+            return;
+          }
+
+          let rssiLogs = [];
+          const uniqueIds = Object.keys(rssiLogsSnap.val());
+
+          // For each unique identifier
+          for (const uniqueId of uniqueIds) {
+            // Get device info
+            const deviceInfoRef = ref(db, `RSSI_logs/${uniqueId}/device_info`);
+            const locationHistoryRef = ref(db, `RSSI_logs/${uniqueId}/location_history`);
+
+            const [deviceInfoSnap, locationHistorySnap] = await Promise.all([
+              get(deviceInfoRef),
+              get(locationHistoryRef)
+            ]);
+
+            // Store device info separately
+            if (deviceInfoSnap.exists()) {
+              const deviceInfo = deviceInfoSnap.val();
+              setDeviceInfo({
+                deviceId: uniqueId,
+                mac_address: deviceInfo.mac_address,
+                name: deviceInfo.name
+              });
+            }
+
+            // Add location history entries
+            if (locationHistorySnap.exists()) {
+              const locationHistory = locationHistorySnap.val();
+              Object.entries(locationHistory).forEach(([key, entry]) => {
+                const timestamp = typeof entry.timestamp === 'string' ? 
+                  Number(entry.timestamp) : entry.timestamp;
+                  
+                rssiLogs.push({
+                  id: `${uniqueId}_${key}`,
+                  type: 'location',
+                  message: `Location Update - ${entry.location || 'Unknown Location'}`,
+                  timestamp: timestamp,
+                  details: {
+                    deviceId: uniqueId,
+                    location: entry.location,
+                    rssi: entry.rssi || { kalman: 'N/A', raw: 'N/A' },
+                    timestamp: timestamp,
+                    timestamp_readable: entry.timestamp_readable
+                  },
+                  isLocationHistory: true
+                });
+              });
+            }
+          }
+
+          // Sort logs by timestamp (newest first)
+          rssiLogs.sort((a, b) => b.timestamp - a.timestamp);
+
+          // Apply pagination
+          if (isLoadMore && lastLoadedTimestamp) {
+            const lastIndex = rssiLogs.findIndex(log => log.timestamp === lastLoadedTimestamp);
+            if (lastIndex !== -1 && lastIndex + 1 < rssiLogs.length) {
+              rssiLogs = rssiLogs.slice(lastIndex + 1, lastIndex + 1 + limit);
+            } else {
+              setNoMoreLogs(true);
+              rssiLogs = [];
+            }
+          } else {
+            rssiLogs = rssiLogs.slice(0, limit);
+          }
+
+          if (rssiLogs.length < limit) {
+            setNoMoreLogs(true);
+          }
+
+          if (isLoadMore) {
+            setLogs(prevLogs => [...prevLogs, ...rssiLogs]);
+          } else {
+            setLogs(rssiLogs);
+          }
+
+          if (rssiLogs.length > 0) {
+            const oldestLog = rssiLogs[rssiLogs.length - 1];
+            setLastLoadedTimestamp(oldestLog.timestamp);
+          }
+
+          setLoading(false);
+          setLoadingMore(false);
+          return;
+        } catch (error) {
+          console.error('Error loading RSSI logs:', error);
+          setLoading(false);
+          setLoadingMore(false);
+        }
+      }
       
       // Different queries based on role
       if (userData.role === 'owner' || userData.role === 'admin') {
@@ -278,13 +384,7 @@ export default function Logs({ navigation }) {
       setLoading(false);
       setLoadingMore(false);
     } catch (error) {
-      console.error('Error loading logs:', error);
-      // Show a more user-friendly error message
-      Alert.alert(
-        "Error Loading Logs",
-        "There was a problem retrieving activity logs. Please try again later.",
-        [{ text: "OK" }]
-      );
+      console.error('Error in loadLogs:', error);
       setLoading(false);
       setLoadingMore(false);
     }
@@ -316,6 +416,69 @@ export default function Logs({ navigation }) {
   const renderLogItem = ({ item }) => {
     const icon = getLogIcon(item.type);
     
+    const renderRssiDetails = (details) => {
+      if (!details) return null;
+
+      if (item.isDeviceInfo) {
+        return (
+          <View style={styles.rssiDetailsContainer}>
+            <View style={styles.rssiDetailRow}>
+              <Text style={styles.rssiLabel}>Device ID:</Text>
+              <Text style={styles.rssiValue}>{details.deviceId || 'Unknown'}</Text>
+            </View>
+            <View style={styles.rssiDetailRow}>
+              <Text style={styles.rssiLabel}>MAC Address:</Text>
+              <Text style={styles.rssiValue}>{details.mac_address || 'Unknown'}</Text>
+            </View>
+            <View style={styles.rssiDetailRow}>
+              <Text style={styles.rssiLabel}>Name:</Text>
+              <Text style={styles.rssiValue}>{details.name || 'Unknown'}</Text>
+            </View>
+          </View>
+        );
+      }
+
+      if (item.isLocationHistory) {
+        // Get RSSI values safely
+        const kalmanRssi = details.rssi?.kalman || 'N/A';
+        const rawRssi = details.rssi?.raw || 'N/A';
+        
+        // Helper function to get color based on RSSI value
+        const getRssiColor = (rssi) => {
+          if (rssi === 'N/A') return '#666';
+          const rssiNum = Number(rssi);
+          return rssiNum > -70 ? '#4CD964' : rssiNum > -90 ? '#FF9500' : '#FF3B30';
+        };
+
+        return (
+          <View style={styles.rssiDetailsContainer}>
+            <View style={styles.rssiDetailRow}>
+              <Text style={styles.rssiLabel}>Device ID:</Text>
+              <Text style={styles.rssiValue}>{details.deviceId || 'Unknown'}</Text>
+            </View>
+            <View style={styles.rssiDetailRow}>
+              <Text style={styles.rssiLabel}>Location:</Text>
+              <Text style={styles.rssiValue}>{details.location || 'Unknown'}</Text>
+            </View>
+            <View style={styles.rssiDetailRow}>
+              <Text style={styles.rssiLabel}>RSSI (Kalman):</Text>
+              <Text style={[styles.rssiValue, { color: getRssiColor(kalmanRssi) }]}>
+                {kalmanRssi} dBm
+              </Text>
+            </View>
+            <View style={styles.rssiDetailRow}>
+              <Text style={styles.rssiLabel}>RSSI (Raw):</Text>
+              <Text style={[styles.rssiValue, { color: getRssiColor(rawRssi) }]}>
+                {rawRssi} dBm
+              </Text>
+            </View>
+          </View>
+        );
+      }
+
+      return null;
+    };
+    
     return (
       <View style={styles.logItem}>
         <View style={[styles.logIconContainer, { backgroundColor: `${icon.color}20` }]}>
@@ -326,21 +489,14 @@ export default function Logs({ navigation }) {
           <Text style={styles.logMessage}>{item.message}</Text>
           
           <View style={styles.logDetails}>
-            {item.userId && item.userDisplayName && (
-              <Text style={styles.logDetailText}>
-                {item.userDisplayName}
+            {!item.isDeviceInfo && (
+              <Text style={styles.logTimestamp}>
+                {item.details?.timestamp_readable || formatTimestamp(item.timestamp)}
               </Text>
             )}
-            <Text style={styles.logTimestamp}>{formatTimestamp(item.timestamp)}</Text>
           </View>
           
-          {item.details && (
-            <Text style={styles.logDetailsText}>
-              {typeof item.details === 'string' 
-                ? item.details 
-                : JSON.stringify(item.details)}
-            </Text>
-          )}
+          {renderRssiDetails(item.details)}
         </View>
       </View>
     );
@@ -376,6 +532,33 @@ export default function Logs({ navigation }) {
     );
   };
   
+  const renderDeviceInfo = () => {
+    if (!deviceInfo) return null;
+
+    return (
+      <View style={styles.deviceInfoCard}>
+        <View style={styles.deviceInfoHeader}>
+          <Ionicons name="phone-portrait-outline" size={24} color="#007AFF" />
+          <Text style={styles.deviceInfoTitle}>Device Information</Text>
+        </View>
+        <View style={styles.rssiDetailsContainer}>
+          <View style={styles.rssiDetailRow}>
+            <Text style={styles.rssiLabel}>Device ID:</Text>
+            <Text style={styles.rssiValue}>{deviceInfo.deviceId}</Text>
+          </View>
+          <View style={styles.rssiDetailRow}>
+            <Text style={styles.rssiLabel}>MAC Address:</Text>
+            <Text style={styles.rssiValue}>{deviceInfo.mac_address}</Text>
+          </View>
+          <View style={styles.rssiDetailRow}>
+            <Text style={styles.rssiLabel}>Name:</Text>
+            <Text style={styles.rssiValue}>{deviceInfo.name}</Text>
+          </View>
+        </View>
+      </View>
+    );
+  };
+  
   return (
     <View style={styles.container}>
       <SafeAreaView style={styles.content}>
@@ -404,16 +587,19 @@ export default function Logs({ navigation }) {
             <Text style={styles.loadingText}>Loading logs...</Text>
           </View>
         ) : (
-          <FlatList
-            data={logs}
-            renderItem={renderLogItem}
-            keyExtractor={(item) => item.id}
-            contentContainerStyle={styles.listContainer}
-            ListEmptyComponent={ListEmptyComponent}
-            ListFooterComponent={renderFooter}
-            onEndReached={handleLoadMore}
-            onEndReachedThreshold={0.3}
-          />
+          <>
+            {filter === 'location' && renderDeviceInfo()}
+            <FlatList
+              data={logs}
+              renderItem={renderLogItem}
+              keyExtractor={(item) => item.id}
+              contentContainerStyle={styles.listContainer}
+              ListEmptyComponent={ListEmptyComponent}
+              ListFooterComponent={renderFooter}
+              onEndReached={handleLoadMore}
+              onEndReachedThreshold={0.3}
+            />
+          </>
         )}
       </SafeAreaView>
       <Navbar activePage="logs" />
@@ -578,5 +764,55 @@ const styles = StyleSheet.create({
   footerText: {
     marginLeft: 8,
     color: '#666',
+  },
+  rssiDetailsContainer: {
+    backgroundColor: '#F8F9FA',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 8,
+  },
+  rssiDetailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  rssiLabel: {
+    fontSize: 14,
+    color: '#666',
+    flex: 1,
+  },
+  rssiValue: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#212121',
+    flex: 1,
+    textAlign: 'right',
+  },
+  deviceInfoCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    margin: 16,
+    marginTop: 0,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  deviceInfoHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  deviceInfoTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#000',
+    marginLeft: 8,
   },
 }); 
