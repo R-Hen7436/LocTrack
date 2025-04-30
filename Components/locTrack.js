@@ -3393,26 +3393,10 @@ return (
             </TouchableOpacity>
 
             {/* Add this button right after the resetTestingButton in the return statement */}
-            <TouchableOpacity 
-              style={[styles.button, styles.debugButton]}
-              onPress={simulateMovement}
-            >
-              <Ionicons name="walk" size={24} color="white" />
-              <Text style={styles.buttonText}>
-                Simulate Walk
-              </Text>
-            </TouchableOpacity>
+          
 
             {/* Add a clear path button */}
-            <TouchableOpacity 
-              style={[styles.button, styles.clearPathButton]}
-              onPress={clearLocationHistory}
-            >
-              <Ionicons name="trash-outline" size={24} color="white" />
-              <Text style={styles.buttonText}>
-                Clear Path
-              </Text>
-            </TouchableOpacity>
+           
         </>
       ) : (
         <>

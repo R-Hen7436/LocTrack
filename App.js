@@ -227,12 +227,17 @@ export default function App() {
     // Set up the listener
     let deviceListener = null;
     setupDeviceListener().then(listener => {
-      deviceListener = listener;
+      deviceListener = typeof listener === 'function' ? listener : null;
+    }).catch(error => {
+      console.error('Error setting up device listener:', error);
     });
 
     // Cleanup function
     return () => {
-      if (deviceListener) deviceListener();
+      console.log('Cleaning up device listeners');
+      if (deviceListener && typeof deviceListener === 'function') {
+        deviceListener();
+      }
     };
   }, [user]); // Only depend on user changes
 
@@ -327,10 +332,22 @@ export default function App() {
               // Set up device listeners only if notifications are permitted
               if (notificationStatus === 'granted') {
                 console.log('Setting up device listeners for authenticated user');
-                const deviceListener = setupDeviceListeners();
+                let deviceListener = null;
+                
+                // Properly handle the Promise and unsubscribe function
+                setupDeviceListener()
+                  .then(listener => {
+                    deviceListener = typeof listener === 'function' ? listener : null;
+                  })
+                  .catch(error => {
+                    console.error('Error setting up device listener:', error);
+                  });
+                
                 return () => {
                   console.log('Cleaning up device listeners');
-                  if (deviceListener) deviceListener();
+                  if (deviceListener && typeof deviceListener === 'function') {
+                    deviceListener();
+                  }
                 };
               } else {
                 console.warn('Notifications not permitted:', notificationStatus);

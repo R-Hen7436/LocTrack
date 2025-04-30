@@ -199,7 +199,9 @@ export default function Dashboard({ navigation }) {
 
         // Cleanup function
         return () => {
-          unsubscribeDevices();
+          if (unsubscribeDevices && typeof unsubscribeDevices === 'function') {
+            unsubscribeDevices();
+          }
           // Clean up individual IOT listeners
           const db = getDatabase();
           iotDevices.forEach(device => {
@@ -265,7 +267,7 @@ export default function Dashboard({ navigation }) {
 
     // Cleanup on unmount
     return () => {
-      if (unsubscribe) {
+      if (unsubscribe && typeof unsubscribe === 'function') {
         unsubscribe();
       }
     };
@@ -384,9 +386,13 @@ export default function Dashboard({ navigation }) {
 
       // Return a cleanup function that removes all listeners
       return () => {
-        devicesUnsubscribe();
+        if (devicesUnsubscribe && typeof devicesUnsubscribe === 'function') {
+          devicesUnsubscribe();
+        }
         for (const unsubscribe of listeners.values()) {
-          unsubscribe();
+          if (unsubscribe && typeof unsubscribe === 'function') {
+            unsubscribe();
+          }
         }
       };
     } catch (error) {

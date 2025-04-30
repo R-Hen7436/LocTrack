@@ -541,12 +541,12 @@ export default function UserManagement({ navigation }) {
             {/* Indicators row */}
             <View style={styles.indicatorsRow}>
               {/* Total distance traveled */}
-              <View style={styles.indicator}>
-                <Ionicons name="fitness" size={14} color="#4CD964" />
+              {/* <View style={styles.indicator}>
+                <Ionicons name="fitness" size={14} color="red" />
                 <Text style={styles.indicatorText}>
                   {formatDistance(memberStats.totalDistance)}
                 </Text>
-              </View>
+              </View> */}
               
               {/* Geofence status indicator */}
               {memberLocation.Latitude && teamGeofence.length >= 3 && (
