@@ -407,7 +407,7 @@ const CurrentUserMarker = ({ coordinate, tracksViewChanges }) => {
   );
 };
 
-const MAX_HISTORY_POINTS = 50;
+const MAX_HISTORY_POINTS = 50; // Limit trailing points to 50 for cleaner visuals
 const MIN_DISTANCE_THRESHOLD = 0.1; // Reduced from 1.0 meter to 0.1 meters
 const AVERAGE_STEP_LENGTH_METERS = 0.762;
 const STEPS_PER_TRAIL_POINT = 3; // Add a trail point every 3 steps
@@ -489,11 +489,6 @@ const lastGpsLogUpdateTime = useRef(0);
 // Inside your App component, add a state to track team members' location history
 const [teamMemberHistories, setTeamMemberHistories] = useState({});
 
-// Keep refs synced with state
-useEffect(() => { stepCountRef.current = stepCount; }, [stepCount]);
-useEffect(() => { stepsSinceLastGpsUpdateRef.current = stepsSinceLastGpsUpdate; }, [stepsSinceLastGpsUpdate]); // *** Reinstate useEffect ***
-// No longer need stepsSinceLastGpsUpdateRef here
-
 // Make sure the locationHistory state is correctly initialized at the top of your component
 const [locationHistory, setLocationHistory] = useState([]); // Initialize as empty array
 
@@ -512,12 +507,12 @@ const saveTeamMemberLocationHistory = (userId, location) => {
   
   setTeamMemberHistories(prevHistories => {
     const userHistory = prevHistories[userId] || [];
-    // Limit history to prevent memory issues (e.g., last 50 points)
+    // Limit history to 50 points maximum
     const newHistory = [...userHistory, {
       latitude: location.Latitude,
       longitude: location.Longitude,
       timestamp: new Date().toISOString()
-    }].slice(-50);
+    }].slice(-50); // Keep only the most recent 50 points
     
     return {
       ...prevHistories,
@@ -2577,6 +2572,239 @@ useEffect(() => {
   loadTeamGeofence();
 }, [userRole]);
 
+// Generate a random number between min and max
+const randomBetween = (min, max) => {
+  return Math.random() * (max - min) + min;
+};
+
+// Generate a random walk point with natural movement patterns
+const generateNextDebugPoint = (baseLocation, previousPoint) => {
+  if (!baseLocation) return null;
+
+  // If no previous point, start from base location
+  const startPoint = previousPoint || baseLocation;
+  
+  // Create some randomness in step size (between 5-15 meters)
+  const stepSize = randomBetween(0.00005, 0.00015);
+  
+  // Add some natural variation to direction
+  const angle = randomBetween(0, 2 * Math.PI);
+  
+  // Add some meandering to the path
+  const wobble = randomBetween(-0.00002, 0.00002);
+  
+  return {
+    latitude: startPoint.latitude + (stepSize * Math.cos(angle)) + wobble,
+    longitude: startPoint.longitude + (stepSize * Math.sin(angle)) + wobble
+  };
+};
+
+const simulateMovement = () => {
+  if (!currentLocation) {
+    Alert.alert('Error', 'Current location not available');
+    return;
+  }
+
+  // Make a copy of the current location as the base
+  const baseLocation = {...currentLocation};
+  
+  // Generate initial set of points with natural walking pattern
+  const totalPoints = 20; // More points for a longer walk
+  const simulationPoints = [];
+  let lastPoint = baseLocation;
+  
+  for (let i = 0; i < totalPoints; i++) {
+    const nextPoint = generateNextDebugPoint(baseLocation, lastPoint);
+    simulationPoints.push(nextPoint);
+    lastPoint = nextPoint;
+  }
+  
+  let moveIndex = 0;
+  setIsUserMoving(true);
+  
+  // Create a local copy of the history to update during simulation
+  let localHistory = [...locationHistory];
+  
+  const moveInterval = setInterval(() => {
+    if (moveIndex < simulationPoints.length) {
+      const nextPoint = simulationPoints[moveIndex];
+      
+      // Update local history first
+      localHistory = [...localHistory, nextPoint];
+      if (localHistory.length > MAX_HISTORY_POINTS) { // Use the constant for consistency
+        localHistory = localHistory.slice(-MAX_HISTORY_POINTS);
+      }
+      
+      // Now update state with the updated history
+      setLocationHistory(localHistory);
+      
+      // Update current location and estimated position
+      setCurrentLocation(nextPoint);
+      setEstimatedIconPosition(nextPoint);
+      
+      // Save to Firebase for other team members to see
+      if (auth.currentUser) {
+        const userPath = `UsersCurrentLocation/${auth.currentUser.uid}`;
+        update(ref(db, userPath), {
+          Latitude: nextPoint.latitude,
+          Longitude: nextPoint.longitude,
+          lastSeen: new Date().toISOString(),
+          isActive: true
+        });
+        
+        // Save to location history
+        saveTeamMemberLocationHistory(auth.currentUser.uid, {
+          Latitude: nextPoint.latitude,
+          Longitude: nextPoint.longitude
+        });
+      }
+      
+      // Rest of the existing simulation code...
+      const stepIncrement = Math.floor(randomBetween(2, 5));
+      setStepCount(prev => {
+        const newCount = prev + stepIncrement;
+        stepCountRef.current = newCount;
+        return newCount;
+      });
+      
+      setStepsSinceLastGpsUpdate(prev => {
+        const newCount = prev + stepIncrement;
+        stepsSinceLastGpsUpdateRef.current = newCount;
+        return newCount;
+      });
+      
+      setIsUserMoving(true);
+      setLastStepUpdateTime(Date.now());
+    }
+    
+    moveIndex++;
+    if (moveIndex >= simulationPoints.length) {
+      clearInterval(moveInterval);
+      setTimeout(() => {
+        setIsUserMoving(false);
+        
+        // Save final history to Firebase once simulation is complete
+        saveLocationHistoryToFirebase(localHistory);
+      }, 500);
+    }
+  }, 300);
+};
+
+// Add a function to generate unique colors for team members based on their userId
+const getTeamMemberColor = (userId) => {
+  // Define a set of distinct, visually appealing colors
+  const colors = [
+    '#FF5252', // Red
+    '#448AFF', // Blue
+    '#4CAF50', // Green
+    '#FF9800', // Orange
+    '#9C27B0', // Purple
+    '#00BCD4', // Cyan
+    '#8BC34A', // Light Green
+    '#FF4081', // Pink
+    '#607D8B', // Blue Grey
+    '#673AB7', // Deep Purple
+    '#FFC107', // Amber
+    '#009688'  // Teal
+  ];
+  
+  // Use the sum of character codes to create a consistent index
+  let hash = 0;
+  for (let i = 0; i < userId.length; i++) {
+    hash = (hash + userId.charCodeAt(i)) % colors.length;
+  }
+  
+  return colors[hash];
+};
+
+// Add this function to save location history to Firebase
+const saveLocationHistoryToFirebase = async (history) => {
+  if (!auth.currentUser || !history || !Array.isArray(history) || history.length === 0) return;
+  
+  try {
+    // Ensure we only save up to 50 points
+    const limitedHistory = history.length > 50 ? history.slice(-50) : history;
+    
+    const userHistoryRef = ref(db, `users/${auth.currentUser.uid}/locationHistory`);
+    await set(userHistoryRef, {
+      points: limitedHistory,
+      lastUpdated: serverTimestamp()
+    });
+    console.log('Saved location history to Firebase:', limitedHistory.length, 'points');
+  } catch (error) {
+    console.error('Error saving location history:', error);
+  }
+};
+
+// Add this function to load location history from Firebase
+const loadLocationHistoryFromFirebase = async () => {
+  if (!auth.currentUser) return;
+  
+  try {
+    const userHistoryRef = ref(db, `users/${auth.currentUser.uid}/locationHistory/points`);
+    const snapshot = await get(userHistoryRef);
+    
+    if (snapshot.exists()) {
+      const history = snapshot.val();
+      // Ensure history is an array before setting it
+      if (history && Array.isArray(history)) {
+        console.log('Loaded location history from Firebase:', history.length, 'points');
+        setLocationHistory(history);
+      } else {
+        console.log('History exists but is not an array, initializing empty history');
+        setLocationHistory([]);
+      }
+    } else {
+      console.log('No location history found in Firebase');
+      // Initialize with empty array
+      setLocationHistory([]);
+    }
+  } catch (error) {
+    console.error('Error loading location history:', error);
+    // Set empty array on error
+    setLocationHistory([]);
+  }
+};
+
+// Modify the useEffect that handles location updates to save history
+useEffect(() => {
+  // Verify both locationHistory exists and is accessible in this scope
+  if (typeof locationHistory !== 'undefined' && 
+      locationHistory && 
+      Array.isArray(locationHistory) && 
+      locationHistory.length > 0) {
+    saveLocationHistoryToFirebase(locationHistory);
+    console.log('Location history changed, saving to Firebase:', locationHistory.length, 'points');
+  }
+}, [locationHistory]);
+
+// Add useEffect to load history when component mounts
+useEffect(() => {
+  loadLocationHistoryFromFirebase();
+}, []);
+
+// Keep refs synced with state
+useEffect(() => { stepCountRef.current = stepCount; }, [stepCount]);
+useEffect(() => { stepsSinceLastGpsUpdateRef.current = stepsSinceLastGpsUpdate; }, [stepsSinceLastGpsUpdate]); // *** Reinstate useEffect ***
+// No longer need stepsSinceLastGpsUpdateRef here
+
+// Add a function to clear location history
+const clearLocationHistory = async () => {
+  // Clear local state
+  setLocationHistory([]);
+  
+  // Clear from Firebase if user is logged in
+  if (auth.currentUser) {
+    try {
+      const userHistoryRef = ref(db, `users/${auth.currentUser.uid}/locationHistory`);
+      await remove(userHistoryRef);
+      console.log('Cleared location history from Firebase');
+    } catch (error) {
+      console.error('Error clearing location history:', error);
+    }
+  }
+};
+
 return (
     <SafeAreaView style={[styles.container, { paddingTop: 0 }]}>
       {/* Ensure this block is removed */}
@@ -2590,47 +2818,64 @@ return (
       </View>
       */}
 
-      {/* GPS Logging Button / Notch Area - Moved to top center */}
-      <TouchableOpacity 
-        style={[styles.gpsLogButtonBase, isLoggingGps ? styles.gpsLogButtonActiveNotch : styles.gpsLogButtonInactive, { top: insets.top + 10 }]} 
-        onPress={toggleGpsLogging}
-      >
-        {isLoggingGps ? (
-          <View style={styles.notchContentContainer}>
-            <Text style={styles.notchText}>
-              Recording: {gpsLogData.raw.length} pts
-            </Text>
-            <View style={styles.notchStatusSeparator} />
-            <Text style={styles.notchText}>
-              {isUserMoving ? '🚶 Walking' : '🧍 Stationary'}
-            </Text>
-          </View>
-        ) : (
-          <>
-            <MaterialIcons 
-              name="data-usage" 
-              size={20} 
-              color="white" 
-            />
-            <Text style={styles.gpsLogButtonText}>
-              Start GPS Log
-            </Text>
-          </>
-        )}
-      </TouchableOpacity>
+      {/* Remove the old GPS log button and replace with new layout */}
+      <View style={styles.topButtonsRow}>
+        <View style={styles.topButtonGroup}>
+          <TouchableOpacity 
+            style={[
+              styles.gpsLogButtonBase,
+              isLoggingGps ? styles.gpsLogButtonActiveNotch : styles.gpsLogButtonInactive
+            ]} 
+            onPress={toggleGpsLogging}
+          >
+            {isLoggingGps ? (
+              <View style={styles.notchContentContainer}>
+                <Text style={styles.notchText}>
+                  Recording: {gpsLogData.raw.length} pts
+                </Text>
+                <View style={styles.notchStatusSeparator} />
+                <Text style={styles.notchText}>
+                  {isUserMoving ? '🚶 Walking' : '🧍 Stationary'}
+                </Text>
+              </View>
+            ) : (
+              <>
+                <MaterialIcons 
+                  name="data-usage" 
+                  size={20} 
+                  color="white" 
+                />
+                <Text style={styles.gpsLogButtonText}>
+                  Start GPS Log
+                </Text>
+              </>
+            )}
+          </TouchableOpacity>
 
-      {/* Export Button - Positioned below the log button/notch */}
-      {gpsLogData.raw.length > 0 && (
-        <TouchableOpacity 
-          style={[styles.exportGpsButton, { top: insets.top + (isLoggingGps ? 55 : 65) }]} // Adjust top based on notch/button height
-          onPress={exportGpsLogData}
-        >
-          <MaterialIcons name="save-alt" size={20} color="white" />
-          <Text style={styles.exportGpsButtonText}>
-            Export Data
-          </Text>
-        </TouchableOpacity>
-      )}
+          <TouchableOpacity 
+            style={styles.simulateWalkButton}
+            onPress={simulateMovement}
+          >
+            <Ionicons name="walk" size={20} color="white" />
+            <Text style={styles.gpsLogButtonText}>
+              Simulate
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Export button */}
+        {gpsLogData.raw.length > 0 && (
+          <TouchableOpacity 
+            style={styles.exportGpsButton}
+            onPress={exportGpsLogData}
+          >
+            <MaterialIcons name="save-alt" size={20} color="white" />
+            <Text style={styles.exportGpsButtonText}>
+              Export Data
+            </Text>
+          </TouchableOpacity>
+        )}
+      </View>
 
     <MapView 
       ref={mapRef} 
@@ -2827,7 +3072,7 @@ return (
               photoURL={userData.photoURL}
               name={formatUserName(userData)}
               labelPosition='bottom' // ALWAYS use 'bottom'
-              markerColor={getUniqueColor(userId)}
+              markerColor={getTeamMemberColor(userId)}
               isOnline={isOnline} // Use presence status
             />
           );
@@ -2852,11 +3097,12 @@ return (
       {/* Team Member Polylines */}
       {Object.entries(teamMemberHistories).map(([userId, history]) => {
         if (history && history.length >= 2) {
-          // Use the unique color for this user to match their marker
-          const userColor = getUniqueColor(userId);
+          // Use our new function to get a unique color for each user
+          const userColor = getTeamMemberColor(userId);
+          
+          // Check if user is online based on presence data
           const userData = usersLocations[userId] || {};
-          // *** Determine isOnline status for this specific user ***
-          const isUserOnline = userData.presence?.status === 'online';
+          const isUserOnline = userData.isActive === true;
 
           return (
             <React.Fragment key={`history-${userId}`}>
@@ -2867,7 +3113,7 @@ return (
                 lineCap="round"
                 lineJoin="round"
                 zIndex={90} // Below current user's polyline
-                strokeDashPattern={isUserOnline ? null : [5, 5]} // <-- Use the derived status here
+                strokeDashPattern={isUserOnline ? null : [5, 5]} // Dashed if offline
               />
             </React.Fragment>
           );
@@ -3143,6 +3389,28 @@ return (
               <Ionicons name="refresh-circle" size={24} color="white" />
               <Text style={styles.buttonText}>
                 Reset Testing Data
+              </Text>
+            </TouchableOpacity>
+
+            {/* Add this button right after the resetTestingButton in the return statement */}
+            <TouchableOpacity 
+              style={[styles.button, styles.debugButton]}
+              onPress={simulateMovement}
+            >
+              <Ionicons name="walk" size={24} color="white" />
+              <Text style={styles.buttonText}>
+                Simulate Walk
+              </Text>
+            </TouchableOpacity>
+
+            {/* Add a clear path button */}
+            <TouchableOpacity 
+              style={[styles.button, styles.clearPathButton]}
+              onPress={clearLocationHistory}
+            >
+              <Ionicons name="trash-outline" size={24} color="white" />
+              <Text style={styles.buttonText}>
+                Clear Path
               </Text>
             </TouchableOpacity>
         </>
@@ -3674,6 +3942,122 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 59, 48, 0.2)',
     borderWidth: 1,
     borderColor: '#FF3B30',
+  },
+  debugButton: {
+    backgroundColor: "#9C27B0", // Purple color for debug
+    marginTop: 5,
+    width: '100%',
+    borderStyle: 'dashed',
+    borderWidth: 1,
+    borderColor: 'white',
+  },
+  topButtonsContainer: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 50 : 30, // Use fixed values instead of insets
+    left: 20,
+    right: 20,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 10,
+    zIndex: 1001,
+  },
+  simulateWalkButton: {
+    backgroundColor: '#9C27B0',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 25,
+    paddingVertical: 8,
+    paddingHorizontal: 15,
+    gap: 8,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    borderStyle: 'dashed',
+    borderWidth: 1,
+    borderColor: 'white',
+    minWidth: 120,
+  },
+  topButtonsRow: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 50 : 30,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    gap: 10,
+    zIndex: 1001,
+  },
+  topButtonGroup: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 20,
+  },
+  gpsLogButtonBase: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 25,
+    paddingVertical: 8,
+    paddingHorizontal: 15,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+  },
+  gpsLogButtonInactive: {
+    backgroundColor: '#4682b4',
+    gap: 8,
+    minWidth: 150,
+  },
+  gpsLogButtonActiveNotch: {
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+    minWidth: 200,
+  },
+  simulateWalkButton: {
+    backgroundColor: '#9C27B0',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 25,
+    paddingVertical: 8,
+    paddingHorizontal: 15,
+    gap: 8,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    borderStyle: 'dashed',
+    borderWidth: 1,
+    borderColor: 'white',
+    minWidth: 100,
+  },
+  exportGpsButton: {
+    backgroundColor: '#32cd32',
+    borderRadius: 20,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.25,
+    shadowRadius: 2,
+    gap: 5,
+    marginTop: 5,
+  },
+  clearPathButton: {
+    backgroundColor: "#FF3B30",
+    marginTop: 5,
+    width: '100%',
   },
 });
 
