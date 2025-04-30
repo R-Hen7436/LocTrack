@@ -9,7 +9,7 @@ import ForgotPassword from './Components/Auth/ForgotPassword';
 import VerifyEmail from './Components/Auth/VerifyEmail';
 import ChangePassword from './Components/Auth/ChangePassword';
 import InvitationScreen from './Components/Auth/InvitationScreen';
-import { View, ActivityIndicator, Text, TouchableOpacity, Linking, Platform, Alert } from 'react-native';
+import { View, ActivityIndicator, Text, TouchableOpacity, Linking, Platform, Alert, Animated } from 'react-native';
 import ProductKeyManager from './Components/Admin/ProductKeyManager';
 import AdminDashboard from './Components/Admin/AdminDashboard';
 import UserDetail from './Components/Admin/UserDetail';
@@ -30,11 +30,100 @@ import * as IntentLauncher from 'expo-intent-launcher';
 
 const Stack = createNativeStackNavigator();
 
+const FlashMessage = ({ message, visible, onHide }) => {
+  const opacity = React.useRef(new Animated.Value(0)).current;
+  const translateY = React.useRef(new Animated.Value(-100)).current;
+
+  React.useEffect(() => {
+    if (visible) {
+      // Animate in
+      Animated.parallel([
+        Animated.timing(opacity, {
+          toValue: 1,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+        Animated.timing(translateY, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+        })
+      ]).start();
+
+      // Set timeout to animate out
+      const timer = setTimeout(() => {
+        Animated.parallel([
+          Animated.timing(opacity, {
+            toValue: 0,
+            duration: 300,
+            useNativeDriver: true,
+          }),
+          Animated.timing(translateY, {
+            toValue: -100,
+            duration: 300,
+            useNativeDriver: true,
+          })
+        ]).start(() => {
+          onHide();
+        });
+      }, 3000);
+
+      return () => clearTimeout(timer);
+    }
+  }, [visible]);
+
+  if (!visible) return null;
+
+  return (
+    <View style={{
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      left: 0,
+      right: 0,
+      justifyContent: 'center',
+      alignItems: 'center',
+      zIndex: 9999,
+      pointerEvents: 'none',
+    }}>
+      <Animated.View
+        style={{
+          backgroundColor: '#007AFF',
+          padding: 15,
+          borderRadius: 10,
+          shadowColor: '#000',
+          shadowOffset: {
+            width: 0,
+            height: 2,
+          },
+          shadowOpacity: 0.25,
+          shadowRadius: 3.84,
+          elevation: 5,
+          opacity,
+          transform: [{ translateY }],
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minWidth: 200,
+          maxWidth: '80%',
+        }}
+      >
+        <Ionicons name="location" size={24} color="white" style={{ marginRight: 10 }} />
+        <Text style={{ color: 'white', fontSize: 16, fontWeight: '600' }}>{message}</Text>
+      </Animated.View>
+    </View>
+  );
+};
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isVerified, setIsVerified] = useState(false);
   const [notificationStatus, setNotificationStatus] = useState(null);
+  const [showLocationAlert, setShowLocationAlert] = useState(false);
+  const [locationAlertMessage, setLocationAlertMessage] = useState('');
+  const [flashMessage, setFlashMessage] = useState('');
+  const [showFlash, setShowFlash] = useState(false);
 
   // Add notification received handler
   useEffect(() => {
@@ -241,17 +330,22 @@ export default function App() {
     };
   }, [user]); // Only depend on user changes
 
-  // Add notification tap handler
+  // Modify the existing notification tap handler useEffect
   useEffect(() => {
     const subscription = Notifications.addNotificationResponseReceivedListener(response => {
-      const { type, deviceId } = response.notification.request.content.data;
+      const { type, deviceId, location } = response.notification.request.content.data;
       
-      // Handle notification tap by initiating emergency call
-      try {
-        Linking.openURL('tel:911');
-      } catch (error) {
-        console.error('Error making emergency call from notification:', error);
-        Alert.alert('Error', 'Failed to initiate call. Please dial 911 manually.');
+      if (type === 'location') {
+        // Handle location notification tap if needed
+        console.log('Location notification tapped:', location);
+      } else if (type === 'shock' || type === 'smoke') {
+        // Existing emergency call handling
+        try {
+          Linking.openURL('tel:911');
+        } catch (error) {
+          console.error('Error making emergency call from notification:', error);
+          Alert.alert('Error', 'Failed to initiate call. Please dial 911 manually.');
+        }
       }
     });
 
@@ -374,6 +468,70 @@ export default function App() {
     setupApp();
   }, [notificationStatus]); // Added notificationStatus as dependency
 
+  useEffect(() => {
+    if (!user) return; // Only proceed if user is logged in
+
+    console.log('Setting up location history listener');
+    const db = getDatabase();
+
+    const setupLocationListener = async () => {
+      try {
+        // Get the user's MAC address from registeredMac
+        const macRef = ref(db, `registeredMac/${user.email.replace('.', ',')}/macAddress`);
+        const macSnapshot = await get(macRef);
+
+        if (!macSnapshot.exists()) {
+          console.log('No MAC address found for user');
+          return null;
+        }
+
+        const macAddress = macSnapshot.val();
+        const locationHistoryRef = ref(db, `RSSI_logs/${macAddress}/location_history`);
+
+        // Set up the listener
+        return onValue(locationHistoryRef, async (snapshot) => {
+          if (!snapshot.exists()) return;
+
+          // Get the most recent entry
+          const locationHistory = snapshot.val();
+          const entries = Object.entries(locationHistory);
+          const mostRecent = entries[entries.length - 1][1];
+
+          if (mostRecent.location) {
+            const location = mostRecent.location.toUpperCase();
+            if (location === 'INDOOR' || location === 'OUTDOOR') {
+              // Show flash message with animation (removed notification)
+              setFlashMessage(`Your device is now ${location}`);
+              setShowFlash(true);
+
+              // Log for debugging
+              console.log('Showing flash message:', location);
+            }
+          }
+        });
+      } catch (error) {
+        console.error('Error setting up location listener:', error);
+        return null;
+      }
+    };
+
+    // Set up the listener
+    let locationListener = null;
+    setupLocationListener().then(listener => {
+      locationListener = listener;
+    }).catch(error => {
+      console.error('Error in location listener setup:', error);
+    });
+
+    // Cleanup function
+    return () => {
+      console.log('Cleaning up location listener');
+      if (locationListener) {
+        locationListener();
+      }
+    };
+  }, [user]); // Only depend on user changes
+
   if (loading) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -383,279 +541,286 @@ export default function App() {
   }
 
   return (
-    <NavigationContainer>
-      <Stack.Navigator
-        screenOptions={{
-          headerShown: false,
-          presentation: 'card',
-          animation: 'slide_from_right',
-        }}
-      >
-        {user ? (
-          // Check if user is admin first, then check verification
-          user.isAdmin ? (
-            <>
+    <>
+      <FlashMessage
+        message={flashMessage}
+        visible={showFlash}
+        onHide={() => setShowFlash(false)}
+      />
+      <NavigationContainer>
+        <Stack.Navigator
+          screenOptions={{
+            headerShown: false,
+            presentation: 'card',
+            animation: 'slide_from_right',
+          }}
+        >
+          {user ? (
+            // Check if user is admin first, then check verification
+            user.isAdmin ? (
+              <>
+                <Stack.Screen 
+                  name="AdminDashboard" 
+                  component={AdminDashboard}
+                  options={{ 
+                    headerShown: true,
+                    title: 'Admin Dashboard',
+                    headerBackVisible: false,
+                    headerRight: () => (
+                      <TouchableOpacity
+                        onPress={async () => {
+                          try {
+                            await signOut(getAuth());
+                          } catch (error) {
+                            console.error('Error signing out:', error);
+                          }
+                        }}
+                        style={{ marginRight: 15 }}
+                      >
+                        <Ionicons name="log-out-outline" size={24} color="#FF3B30" />
+                      </TouchableOpacity>
+                    ),
+                  }}
+                />
+                <Stack.Screen 
+                  name="LocTrack" 
+                  component={LocTrack}
+                  options={{ 
+                    headerShown: false,
+                    animation: 'slide_from_left'
+                  }}
+                />
+                <Stack.Screen 
+                  name="ProductKeyManager" 
+                  component={ProductKeyManager}
+                  options={{ 
+                    headerShown: true,
+                    title: 'Product Keys',
+                  }}
+                />
+                <Stack.Screen 
+                  name="GeofenceRequests" 
+                  component={GeofenceRequests}
+                  options={{ 
+                    headerShown: false,
+                    animation: 'slide_from_right'
+                  }}
+                />
+                <Stack.Screen 
+                  name="UserDetail" 
+                  component={UserDetail}
+                  options={{ 
+                    headerShown: true,
+                    animation: 'slide_from_right'
+                  }}
+                />
+                <Stack.Screen 
+                  name="Logs" 
+                  component={Logs}
+                  options={{ 
+                    headerShown: false,
+                    animation: 'slide_from_right'
+                  }}
+                />
+                <Stack.Screen 
+                  name="UserManagement" 
+                  component={UserManagement}
+                  options={{ 
+                    headerShown: false,
+                    animation: 'slide_from_right'
+                  }}
+                />
+                <Stack.Screen 
+                  name="Dashboard" 
+                  component={Dashboard}
+                  options={{ 
+                    headerShown: false,
+                    animation: 'slide_from_left'
+                  }}
+                />
+                <Stack.Screen 
+                  name="Profile" 
+                  component={Profile}
+                  options={{ 
+                    headerShown: true,
+                    title: 'My Profile',
+                    headerBackVisible: false,
+                    animation: 'slide_from_right',
+                  }}
+                />
+                <Stack.Screen 
+                  name="EditProfile" 
+                  component={EditProfile}
+                  options={{ 
+                    headerShown: false,
+                    animation: 'slide_from_right'
+                  }}
+                />
+                <Stack.Screen 
+                  name="locationLogs" 
+                  component={LocationLog}
+                  options={{ 
+                    headerShown: true,
+                    title: 'Location History',
+                    animation: 'slide_from_right'
+                  }}
+                />
+                <Stack.Screen 
+                  name="OwnerInitialization" 
+                  component={OwnerInitialization}
+                  options={{ 
+                    headerShown: true,
+                    title: 'Geofence Setup',
+                    animation: 'slide_from_right'
+                  }}
+                />
+                <Stack.Screen 
+                  name="StepTracker" 
+                  component={StepTracker}
+                  options={{ 
+                    headerShown: true,
+                    title: 'Step Tracker',
+                    animation: 'slide_from_right'
+                  }}
+                />
+              </>
+            ) : isVerified ? (
+              <>
+                <Stack.Screen 
+                  name="LocTrack" 
+                  component={LocTrack}
+                  options={{ 
+                    headerShown: false,
+                    animation: 'slide_from_left'
+                  }}
+                />
+                <Stack.Screen 
+                  name="Dashboard" 
+                  component={Dashboard}
+                  options={{ 
+                    headerShown: false,
+                    animation: 'slide_from_left'
+                  }}
+                />
+                <Stack.Screen 
+                  name="Profile" 
+                  component={Profile}
+                  options={{ 
+                    headerShown: true,
+                    title: 'My Profile',
+                    headerBackVisible: false,
+                    animation: 'slide_from_right',
+                  }}
+                />
+                <Stack.Screen 
+                  name="EditProfile" 
+                  component={EditProfile}
+                  options={{ 
+                    headerShown: false,
+                    animation: 'slide_from_right'
+                  }}
+                />
+                <Stack.Screen 
+                  name="locationLogs" 
+                  component={LocationLog}
+                  options={{ 
+                    headerShown: true,
+                    title: 'Location History',
+                    animation: 'slide_from_right'
+                  }}
+                />
+                <Stack.Screen 
+                  name="OwnerInitialization" 
+                  component={OwnerInitialization}
+                  options={{ 
+                    headerShown: true,
+                    title: 'Geofence Setup',
+                    animation: 'slide_from_right'
+                  }}
+                />
+                <Stack.Screen 
+                  name="StepTracker" 
+                  component={StepTracker}
+                  options={{ 
+                    headerShown: true,
+                    title: 'Step Tracker',
+                    animation: 'slide_from_right'
+                  }}
+                />
+                <Stack.Screen 
+                  name="Logs" 
+                  component={Logs}
+                  options={{ 
+                    headerShown: false,
+                    animation: 'slide_from_right'
+                  }}
+                />
+                <Stack.Screen 
+                  name="UserManagement" 
+                  component={UserManagement}
+                  options={{ 
+                    headerShown: false,
+                    animation: 'slide_from_right'
+                  }}
+                />
+              </>
+            ) : (
               <Stack.Screen 
-                name="AdminDashboard" 
-                component={AdminDashboard}
-                options={{ 
-                  headerShown: true,
-                  title: 'Admin Dashboard',
-                  headerBackVisible: false,
-                  headerRight: () => (
-                    <TouchableOpacity
-                      onPress={async () => {
-                        try {
-                          await signOut(getAuth());
-                        } catch (error) {
-                          console.error('Error signing out:', error);
-                        }
-                      }}
-                      style={{ marginRight: 15 }}
-                    >
-                      <Ionicons name="log-out-outline" size={24} color="#FF3B30" />
-                    </TouchableOpacity>
-                  ),
-                }}
+                name="VerifyEmail" 
+                component={VerifyEmail}
+                options={{ headerShown: false }}
               />
-              <Stack.Screen 
-                name="LocTrack" 
-                component={LocTrack}
-                options={{ 
-                  headerShown: false,
-                  animation: 'slide_from_left'
-                }}
-              />
-              <Stack.Screen 
-                name="ProductKeyManager" 
-                component={ProductKeyManager}
-                options={{ 
-                  headerShown: true,
-                  title: 'Product Keys',
-                }}
-              />
-              <Stack.Screen 
-                name="GeofenceRequests" 
-                component={GeofenceRequests}
-                options={{ 
-                  headerShown: false,
-                  animation: 'slide_from_right'
-                }}
-              />
-              <Stack.Screen 
-                name="UserDetail" 
-                component={UserDetail}
-                options={{ 
-                  headerShown: true,
-                  animation: 'slide_from_right'
-                }}
-              />
-              <Stack.Screen 
-                name="Logs" 
-                component={Logs}
-                options={{ 
-                  headerShown: false,
-                  animation: 'slide_from_right'
-                }}
-              />
-              <Stack.Screen 
-                name="UserManagement" 
-                component={UserManagement}
-                options={{ 
-                  headerShown: false,
-                  animation: 'slide_from_right'
-                }}
-              />
-              <Stack.Screen 
-                name="Dashboard" 
-                component={Dashboard}
-                options={{ 
-                  headerShown: false,
-                  animation: 'slide_from_left'
-                }}
-              />
-              <Stack.Screen 
-                name="Profile" 
-                component={Profile}
-                options={{ 
-                  headerShown: true,
-                  title: 'My Profile',
-                  headerBackVisible: false,
-                  animation: 'slide_from_right',
-                }}
-              />
-              <Stack.Screen 
-                name="EditProfile" 
-                component={EditProfile}
-                options={{ 
-                  headerShown: false,
-                  animation: 'slide_from_right'
-                }}
-              />
-              <Stack.Screen 
-                name="locationLogs" 
-                component={LocationLog}
-                options={{ 
-                  headerShown: true,
-                  title: 'Location History',
-                  animation: 'slide_from_right'
-                }}
-              />
-              <Stack.Screen 
-                name="OwnerInitialization" 
-                component={OwnerInitialization}
-                options={{ 
-                  headerShown: true,
-                  title: 'Geofence Setup',
-                  animation: 'slide_from_right'
-                }}
-              />
-              <Stack.Screen 
-                name="StepTracker" 
-                component={StepTracker}
-                options={{ 
-                  headerShown: true,
-                  title: 'Step Tracker',
-                  animation: 'slide_from_right'
-                }}
-              />
-            </>
-          ) : isVerified ? (
-            <>
-              <Stack.Screen 
-                name="LocTrack" 
-                component={LocTrack}
-                options={{ 
-                  headerShown: false,
-                  animation: 'slide_from_left'
-                }}
-              />
-              <Stack.Screen 
-                name="Dashboard" 
-                component={Dashboard}
-                options={{ 
-                  headerShown: false,
-                  animation: 'slide_from_left'
-                }}
-              />
-              <Stack.Screen 
-                name="Profile" 
-                component={Profile}
-                options={{ 
-                  headerShown: true,
-                  title: 'My Profile',
-                  headerBackVisible: false,
-                  animation: 'slide_from_right',
-                }}
-              />
-              <Stack.Screen 
-                name="EditProfile" 
-                component={EditProfile}
-                options={{ 
-                  headerShown: false,
-                  animation: 'slide_from_right'
-                }}
-              />
-              <Stack.Screen 
-                name="locationLogs" 
-                component={LocationLog}
-                options={{ 
-                  headerShown: true,
-                  title: 'Location History',
-                  animation: 'slide_from_right'
-                }}
-              />
-              <Stack.Screen 
-                name="OwnerInitialization" 
-                component={OwnerInitialization}
-                options={{ 
-                  headerShown: true,
-                  title: 'Geofence Setup',
-                  animation: 'slide_from_right'
-                }}
-              />
-              <Stack.Screen 
-                name="StepTracker" 
-                component={StepTracker}
-                options={{ 
-                  headerShown: true,
-                  title: 'Step Tracker',
-                  animation: 'slide_from_right'
-                }}
-              />
-              <Stack.Screen 
-                name="Logs" 
-                component={Logs}
-                options={{ 
-                  headerShown: false,
-                  animation: 'slide_from_right'
-                }}
-              />
-              <Stack.Screen 
-                name="UserManagement" 
-                component={UserManagement}
-                options={{ 
-                  headerShown: false,
-                  animation: 'slide_from_right'
-                }}
-              />
-            </>
+            )
           ) : (
-            <Stack.Screen 
-              name="VerifyEmail" 
-              component={VerifyEmail}
-              options={{ headerShown: false }}
-            />
-          )
-        ) : (
-          // Auth routes
-          <>
-            <Stack.Screen 
-              name="Login" 
-              component={Login}
-              options={{ headerShown: false }}
-            />
-            <Stack.Screen 
-              name="Register" 
-              component={Register}
-              options={{ headerShown: false }}
-            />
-            <Stack.Screen 
-              name="ForgotPassword" 
-              component={ForgotPassword}
-              options={{ headerShown: false }}
-            />
-            <Stack.Screen 
-              name="InvitationScreen" 
-              component={InvitationScreen}
-              options={{ 
-                headerShown: true,
-                title: 'Team Invitation',
-                headerBackVisible: false,
-                gestureEnabled: false,
-              }}
-            />
-            <Stack.Screen 
-              name="VerifyEmail" 
-              component={VerifyEmail}
-              options={{ 
-                headerShown: false,
-                gestureEnabled: false,
-              }}
-            />
-            <Stack.Screen 
-              name="ChangePassword" 
-              component={ChangePassword}
-              options={{ 
-                headerShown: true,
-                title: 'Change Password',
-                headerBackVisible: false,
-                gestureEnabled: false,
-              }}
-            />
-          </>
-        )}
-      </Stack.Navigator>
-    </NavigationContainer>
+            // Auth routes
+            <>
+              <Stack.Screen 
+                name="Login" 
+                component={Login}
+                options={{ headerShown: false }}
+              />
+              <Stack.Screen 
+                name="Register" 
+                component={Register}
+                options={{ headerShown: false }}
+              />
+              <Stack.Screen 
+                name="ForgotPassword" 
+                component={ForgotPassword}
+                options={{ headerShown: false }}
+              />
+              <Stack.Screen 
+                name="InvitationScreen" 
+                component={InvitationScreen}
+                options={{ 
+                  headerShown: true,
+                  title: 'Team Invitation',
+                  headerBackVisible: false,
+                  gestureEnabled: false,
+                }}
+              />
+              <Stack.Screen 
+                name="VerifyEmail" 
+                component={VerifyEmail}
+                options={{ 
+                  headerShown: false,
+                  gestureEnabled: false,
+                }}
+              />
+              <Stack.Screen 
+                name="ChangePassword" 
+                component={ChangePassword}
+                options={{ 
+                  headerShown: true,
+                  title: 'Change Password',
+                  headerBackVisible: false,
+                  gestureEnabled: false,
+                }}
+              />
+            </>
+          )}
+        </Stack.Navigator>
+      </NavigationContainer>
+    </>
   );
 }

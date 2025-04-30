@@ -86,11 +86,17 @@ export default function Logs({ navigation }) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [lastLoadedTimestamp, setLastLoadedTimestamp] = useState(null);
   const [noMoreLogs, setNoMoreLogs] = useState(false);
+  const [userEmail, setUserEmail] = useState('');
   
   const auth = getAuth();
   const db = getDatabase();
   
-  // Initial logs load
+  useEffect(() => {
+    if (auth.currentUser) {
+      setUserEmail(auth.currentUser.email);
+    }
+  }, [auth.currentUser]);
+  
   useEffect(() => {
     loadLogs();
   }, [filter]);
@@ -101,7 +107,7 @@ export default function Logs({ navigation }) {
     try {
       if (!isLoadMore) {
         setLoading(true);
-        setDeviceInfo(null); // Reset device info when reloading
+        setDeviceInfo(null);
       } else {
         setLoadingMore(true);
       }
@@ -126,100 +132,101 @@ export default function Logs({ navigation }) {
       // Special handling for location filter to include RSSI logs
       if (filter === 'location') {
         try {
-          // First, get all unique identifiers under RSSI_logs
-          const rssiLogsRef = ref(db, 'RSSI_logs');
-          const rssiLogsSnap = await get(rssiLogsRef);
+          // Get the MAC address from registeredMac using the email
+          const registeredMacRef = ref(db, `registeredMac/${auth.currentUser.email.replace('.', ',')}/macAddress`);
+          const macSnapshot = await get(registeredMacRef);
           
-          if (!rssiLogsSnap.exists()) {
-            setLogs([]);
-            setLoading(false);
-            setLoadingMore(false);
-            return;
-          }
+          if (macSnapshot.exists()) {
+            const macAddress = macSnapshot.val();
+            
+            // Use this MAC address to get RSSI logs
+            const rssiLogsRef = ref(db, `RSSI_logs/${macAddress}`);
+            const rssiLogsSnap = await get(rssiLogsRef);
+            
+            if (rssiLogsSnap.exists()) {
+              let rssiLogs = [];
+              
+              // Get device info
+              const deviceInfoRef = ref(db, `RSSI_logs/${macAddress}/device_info`);
+              const locationHistoryRef = ref(db, `RSSI_logs/${macAddress}/location_history`);
 
-          let rssiLogs = [];
-          const uniqueIds = Object.keys(rssiLogsSnap.val());
+              const [deviceInfoSnap, locationHistorySnap] = await Promise.all([
+                get(deviceInfoRef),
+                get(locationHistoryRef)
+              ]);
 
-          // For each unique identifier
-          for (const uniqueId of uniqueIds) {
-            // Get device info
-            const deviceInfoRef = ref(db, `RSSI_logs/${uniqueId}/device_info`);
-            const locationHistoryRef = ref(db, `RSSI_logs/${uniqueId}/location_history`);
-
-            const [deviceInfoSnap, locationHistorySnap] = await Promise.all([
-              get(deviceInfoRef),
-              get(locationHistoryRef)
-            ]);
-
-            // Store device info separately
-            if (deviceInfoSnap.exists()) {
-              const deviceInfo = deviceInfoSnap.val();
-              setDeviceInfo({
-                deviceId: uniqueId,
-                mac_address: deviceInfo.mac_address,
-                name: deviceInfo.name
-              });
-            }
-
-            // Add location history entries
-            if (locationHistorySnap.exists()) {
-              const locationHistory = locationHistorySnap.val();
-              Object.entries(locationHistory).forEach(([key, entry]) => {
-                const timestamp = typeof entry.timestamp === 'string' ? 
-                  Number(entry.timestamp) : entry.timestamp;
-                  
-                rssiLogs.push({
-                  id: `${uniqueId}_${key}`,
-                  type: 'location',
-                  message: `Location Update - ${entry.location || 'Unknown Location'}`,
-                  timestamp: timestamp,
-                  details: {
-                    deviceId: uniqueId,
-                    location: entry.location,
-                    rssi: entry.rssi || { kalman: 'N/A', raw: 'N/A' },
-                    timestamp: timestamp,
-                    timestamp_readable: entry.timestamp_readable
-                  },
-                  isLocationHistory: true
+              // Store device info
+              if (deviceInfoSnap.exists()) {
+                const deviceInfo = deviceInfoSnap.val();
+                setDeviceInfo({
+                  deviceId: macAddress,
+                  mac_address: deviceInfo.mac_address,
+                  name: deviceInfo.name,
+                  email: auth.currentUser.email
                 });
-              });
+              }
+
+              // Handle location history
+              if (locationHistorySnap.exists()) {
+                const locationHistory = locationHistorySnap.val();
+                Object.entries(locationHistory).forEach(([key, entry]) => {
+                  const timestamp = typeof entry.timestamp === 'string' ? 
+                    Number(entry.timestamp) : entry.timestamp;
+                    
+                  rssiLogs.push({
+                    id: `${macAddress}_${key}`,
+                    type: 'location',
+                    message: `Location Update - ${entry.location || 'Unknown Location'}`,
+                    timestamp: timestamp,
+                    details: {
+                      deviceId: macAddress,
+                      location: entry.location,
+                      rssi: entry.rssi || { kalman: 'N/A', raw: 'N/A' },
+                      timestamp: timestamp,
+                      timestamp_readable: entry.timestamp_readable,
+                      email: auth.currentUser.email
+                    },
+                    isLocationHistory: true
+                  });
+                });
+              }
+
+              // Sort and apply pagination as before
+              rssiLogs.sort((a, b) => b.timestamp - a.timestamp);
+
+              // Apply pagination
+              if (isLoadMore && lastLoadedTimestamp) {
+                const lastIndex = rssiLogs.findIndex(log => log.timestamp === lastLoadedTimestamp);
+                if (lastIndex !== -1 && lastIndex + 1 < rssiLogs.length) {
+                  rssiLogs = rssiLogs.slice(lastIndex + 1, lastIndex + 1 + limit);
+                } else {
+                  setNoMoreLogs(true);
+                  rssiLogs = [];
+                }
+              } else {
+                rssiLogs = rssiLogs.slice(0, limit);
+              }
+
+              if (rssiLogs.length < limit) {
+                setNoMoreLogs(true);
+              }
+
+              if (isLoadMore) {
+                setLogs(prevLogs => [...prevLogs, ...rssiLogs]);
+              } else {
+                setLogs(rssiLogs);
+              }
+
+              if (rssiLogs.length > 0) {
+                const oldestLog = rssiLogs[rssiLogs.length - 1];
+                setLastLoadedTimestamp(oldestLog.timestamp);
+              }
+
+              setLoading(false);
+              setLoadingMore(false);
+              return;
             }
           }
-
-          // Sort logs by timestamp (newest first)
-          rssiLogs.sort((a, b) => b.timestamp - a.timestamp);
-
-          // Apply pagination
-          if (isLoadMore && lastLoadedTimestamp) {
-            const lastIndex = rssiLogs.findIndex(log => log.timestamp === lastLoadedTimestamp);
-            if (lastIndex !== -1 && lastIndex + 1 < rssiLogs.length) {
-              rssiLogs = rssiLogs.slice(lastIndex + 1, lastIndex + 1 + limit);
-            } else {
-              setNoMoreLogs(true);
-              rssiLogs = [];
-            }
-          } else {
-            rssiLogs = rssiLogs.slice(0, limit);
-          }
-
-          if (rssiLogs.length < limit) {
-            setNoMoreLogs(true);
-          }
-
-          if (isLoadMore) {
-            setLogs(prevLogs => [...prevLogs, ...rssiLogs]);
-          } else {
-            setLogs(rssiLogs);
-          }
-
-          if (rssiLogs.length > 0) {
-            const oldestLog = rssiLogs[rssiLogs.length - 1];
-            setLastLoadedTimestamp(oldestLog.timestamp);
-          }
-
-          setLoading(false);
-          setLoadingMore(false);
-          return;
         } catch (error) {
           console.error('Error loading RSSI logs:', error);
           setLoading(false);
@@ -433,6 +440,10 @@ export default function Logs({ navigation }) {
             <View style={styles.rssiDetailRow}>
               <Text style={styles.rssiLabel}>Name:</Text>
               <Text style={styles.rssiValue}>{details.name || 'Unknown'}</Text>
+            </View>
+            <View style={styles.rssiDetailRow}>
+              <Text style={styles.rssiLabel}>Email:</Text>
+              <Text style={styles.rssiValue}>{userEmail || 'Unknown'}</Text>
             </View>
           </View>
         );

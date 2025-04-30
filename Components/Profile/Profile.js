@@ -496,28 +496,35 @@ export default function Profile({ navigation }) {
   const handleSaveMacAddress = async () => {
     try {
       // Validate MAC address format
-    if (!isValidMacAddress(macParts)) {
+      if (!isValidMacAddress(macParts)) {
         Alert.alert('Invalid MAC Address', 'Please enter a valid MAC address (6 hex pairs)');
-      return;
-    }
+        return;
+      }
 
       setLoading(true);
       
-      // Format the MAC address
-      const macAddress = formatMacAddress(macParts);
+      // Format the MAC address with colons for profile display
+      const macAddressWithColons = formatMacAddress(macParts);
+      
+      // Format the MAC address without colons for registered devices
+      const macAddressWithoutColons = macParts.join('').toUpperCase();
       
       // Update the profile in the database
       const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
       await set(userProfileRef, {
         ...userProfile,
-        macAddress,
+        macAddress: macAddressWithColons,
         updatedAt: new Date().toISOString()
       });
+
+      // Store in registeredMac/EmailAddress/macAddress structure without colons
+      const registeredMacRef = ref(db, `registeredMac/${auth.currentUser.email.replace('.', ',')}/macAddress`);
+      await set(registeredMacRef, macAddressWithoutColons);
 
       // Update local state
       setUserProfile(prev => ({
         ...prev,
-        macAddress
+        macAddress: macAddressWithColons
       }));
       
       setIsEditingMac(false);
