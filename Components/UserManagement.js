@@ -4,6 +4,8 @@ import { getAuth } from 'firebase/auth';
 import { getDatabase, ref, get, set, remove, onValue, push, serverTimestamp } from 'firebase/database';
 import { Ionicons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
+import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Navbar from './Navbar';
 import CacheManager from './utils/CacheManager';
 
@@ -155,19 +157,45 @@ const sendNotification = async (title, body, data = {}) => {
   try {
     console.log(`Attempting to send notification: ${title} - ${body}`);
     
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: title,
-        body: body,
-        data: data,
+    // Configure notification channels first (required for Android)
+    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync('geofence-alerts', {
+        name: 'Geofence Alerts',
+        importance: Notifications.AndroidImportance.HIGH,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#FF231F7C',
         sound: true,
-        priority: Notifications.AndroidNotificationPriority.HIGH,
-      },
+        enableVibrate: true,
+      });
+    }
+    
+    // Schedule the notification with the appropriate channel
+    const notificationContent = {
+      title: title,
+      body: body,
+      data: data,
+      sound: true,
+    };
+    
+    // Add Android-specific properties
+    if (Platform.OS === 'android') {
+      notificationContent.priority = Notifications.AndroidNotificationPriority.HIGH;
+      notificationContent.channelId = 'geofence-alerts';
+      notificationContent.sticky = true;
+      notificationContent.autoDismiss = false;
+    }
+    
+    // Schedule notification
+    const notificationId = await Notifications.scheduleNotificationAsync({
+      content: notificationContent,
       trigger: null, // Immediate notification
     });
-    console.log(`✅ Notification sent successfully: ${title}`);
+    
+    console.log(`✅ Notification sent successfully: ${title} (ID: ${notificationId})`);
+    return notificationId;
   } catch (error) {
     console.error(`❌ Error sending notification:`, error);
+    return null;
   }
 };
 
@@ -189,28 +217,86 @@ export default function UserManagement({ navigation }) {
     // Request notification permissions when component mounts
     const requestNotificationPermissions = async () => {
       try {
-        // Configure notification handler
+        // Configure notification handler with enhanced settings
         Notifications.setNotificationHandler({
           handleNotification: async () => ({
             shouldShowAlert: true,
             shouldPlaySound: true,
             shouldSetBadge: true,
-            priority: Notifications.AndroidNotificationPriority.HIGH,
+            priority: Notifications.AndroidNotificationPriority.MAX, // Use MAX instead of HIGH for critical alerts
           }),
         });
 
-        // Request permissions
-        const { status: existingStatus } = await Notifications.getPermissionsAsync();
-        if (existingStatus !== 'granted') {
-          const { status } = await Notifications.requestPermissionsAsync();
-          console.log('Notification permission status:', status);
+        // Set up notification channels (required for Android)
+        if (Platform.OS === 'android') {
+          console.log('Setting up Android notification channels...');
+          await Notifications.setNotificationChannelAsync('geofence-alerts', {
+            name: 'Geofence Alerts',
+            description: 'Notifications when team members enter or exit geofenced areas',
+            importance: Notifications.AndroidImportance.MAX,
+            vibrationPattern: [0, 250, 250, 250],
+            lightColor: '#FF231F7C',
+            enableVibrate: true,
+            sound: true,
+          });
+          console.log('Android notification channel setup complete');
         }
+
+        // Request permissions
+        console.log('Requesting notification permissions...');
+        const { status: existingStatus } = await Notifications.getPermissionsAsync();
+        console.log('Current notification permission status:', existingStatus);
+        
+        if (existingStatus !== 'granted') {
+          console.log('Notification permission not granted, requesting...');
+          const { status } = await Notifications.requestPermissionsAsync();
+          console.log('New notification permission status:', status);
+          
+          if (status !== 'granted') {
+            console.warn('Notification permission denied by user');
+            Alert.alert(
+              'Notification Permission Required',
+              'Geofence alerts require notification permissions. Please enable them in your device settings.',
+              [{ text: 'OK' }]
+            );
+          } else {
+            console.log('Notification permission granted by user');
+            // Send a test notification to ensure everything is working
+            if (__DEV__) { // Only in development mode
+              setTimeout(async () => {
+                try {
+                  await sendNotification(
+                    'Notification System Active',
+                    'The geofence alert system is now operational.',
+                    { type: 'system', test: true }
+                  );
+                } catch (e) {
+                  console.error('Failed to send test notification:', e);
+                }
+              }, 2000);
+            }
+          }
+        } else {
+          console.log('Notification permission already granted');
+        }
+        
+        // Add listener for receiving notifications
+        console.log('Setting up notification received listener...');
+        const subscription = Notifications.addNotificationReceivedListener(notification => {
+          console.log('Notification received in foreground:', notification);
+        });
+        
+        console.log('Notification setup complete');
+        
+        // Make sure to return the subscription to clean it up later
+        return subscription;
       } catch (error) {
         console.error('Error requesting notification permissions:', error);
+        return null;
       }
     };
 
-    requestNotificationPermissions();
+    const notificationSubscription = requestNotificationPermissions();
     
     async function initialize() {
       if (!auth.currentUser) {
@@ -219,6 +305,26 @@ export default function UserManagement({ navigation }) {
       }
       
       setLoading(true);
+      
+      // Check if we need to focus on geofence alerts
+      try {
+        const checkGeofenceAlerts = await AsyncStorage.getItem('checkGeofenceAlerts');
+        if (checkGeofenceAlerts === 'true') {
+          // Clear the flag
+          await AsyncStorage.removeItem('checkGeofenceAlerts');
+          
+          // Show an alert to inform user they're viewing team members after a geofence alert
+          setTimeout(() => {
+            Alert.alert(
+              'Geofence Alert',
+              'You can monitor your team members and their geofence status here.',
+              [{ text: 'OK' }]
+            );
+          }, 1000);
+        }
+      } catch (error) {
+        console.error('Error checking geofence alerts:', error);
+      }
       
       // Load cached data first to show immediately
       await loadCachedData();
@@ -237,12 +343,18 @@ export default function UserManagement({ navigation }) {
       
       return () => {
         if (unsubscribe) unsubscribe();
+        if (notificationSubscription) notificationSubscription.remove();
       };
     }
     
     initialize().finally(() => {
       setLoading(false);
     });
+    
+    // Clean up notification subscription on component unmount
+    return () => {
+      if (notificationSubscription) notificationSubscription.remove();
+    };
   }, []);
 
   const loadCachedData = async () => {
@@ -404,17 +516,36 @@ export default function UserManagement({ navigation }) {
                   
                   console.log(`🔔 Will send notification for: ${memberName}`);
                   
-                  // Send notification - wrap in a separate try/catch
-                  try {
-                    // Force notification to be sent regardless of other errors
-                    await sendNotification(
-                      `Geofence Alert: ${memberName}`,
-                      message,
-                      { type: 'geofence', userId, inside: isInsideGeofence }
-                    );
-                  } catch (notifyError) {
-                    console.error(`Failed to send notification: ${notifyError.message}`);
-                  }
+                  // Add slight delay to avoid notification congestion
+                  setTimeout(async () => {
+                    // Send notification - wrap in a separate try/catch
+                    try {
+                      // Force notification to be sent regardless of other errors
+                      await sendNotification(
+                        `Geofence Alert: ${memberName}`,
+                        message,
+                        { 
+                          type: 'geofence', 
+                          userId, 
+                          inside: isInsideGeofence,
+                          userName: memberName,
+                          timestamp: Date.now()
+                        }
+                      );
+                      
+                      // Double-check notification was sent
+                      console.log(`✅ Geofence notification dispatched for ${memberName} - ${eventType}`);
+                    } catch (notifyError) {
+                      console.error(`Failed to send notification: ${notifyError.message}`);
+                      
+                      // Fallback to Alert if push notification fails
+                      Alert.alert(
+                        `Geofence Alert: ${memberName}`,
+                        message,
+                        [{ text: 'OK' }]
+                      );
+                    }
+                  }, 500); // 500ms delay
                 } else {
                   console.log(`⏭️ No state change for ${memberName}, skipping log/notification. Still ${isInsideGeofence ? 'INSIDE' : 'OUTSIDE'}.`);
                 }

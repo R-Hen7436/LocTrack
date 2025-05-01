@@ -28,6 +28,7 @@ import Logs from './Components/Logs';
 import UserManagement from './Components/UserManagement';
 import * as Notifications from 'expo-notifications';
 import * as IntentLauncher from 'expo-intent-launcher';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const Stack = createNativeStackNavigator();
 
@@ -384,29 +385,48 @@ export default function App() {
   // Modify the existing notification tap handler useEffect
   useEffect(() => {
     const subscription = Notifications.addNotificationResponseReceivedListener(response => {
-      const { type, deviceId, location, userId, inside } = response.notification.request.content.data;
-      
-      if (type === 'location') {
-        // Handle location notification tap if needed
-        console.log('Location notification tapped:', location);
-      } else if (type === 'shock' || type === 'smoke') {
-        // Existing emergency call handling
-        try {
-          Linking.openURL('tel:911');
-        } catch (error) {
-          console.error('Error making emergency call from notification:', error);
-          Alert.alert('Error', 'Failed to initiate call. Please dial 911 manually.');
+      try {
+        console.log('Notification response received:', response.notification.request.content.data);
+        const { type, deviceId, location, userId, inside, userName } = response.notification.request.content.data;
+        
+        if (type === 'location') {
+          // Handle location notification tap if needed
+          console.log('Location notification tapped:', location);
+        } else if (type === 'shock' || type === 'smoke') {
+          // Existing emergency call handling
+          try {
+            Linking.openURL('tel:911');
+          } catch (error) {
+            console.error('Error making emergency call from notification:', error);
+            Alert.alert('Error', 'Failed to initiate call. Please dial 911 manually.');
+          }
+        } else if (type === 'geofence') {
+          // Handle geofence notification tap - navigate to UserManagement
+          console.log('Geofence notification tapped for user:', userName || userId, 'Geofence status:', inside ? 'inside' : 'outside');
+          
+          // Show more informative alert with user name
+          Alert.alert(
+            'Geofence Alert',
+            `Team member ${userName || userId} is now ${inside ? 'inside' : 'outside'} the geofenced area.`,
+            [
+              // We can't navigate directly from here since we don't have navigation context
+              // Just show a simple confirmation
+              { text: 'OK' }
+            ]
+          );
+          
+          // Set a flag in AsyncStorage that will be checked by UserManagement component on mount
+          try {
+            AsyncStorage.setItem('checkGeofenceAlerts', 'true');
+          } catch (err) {
+            console.error('Failed to set geofence alert flag:', err);
+          }
+        } else if (type === 'system') {
+          // For system test notifications
+          console.log('System notification tapped');
         }
-      } else if (type === 'geofence') {
-        // Handle geofence notification tap - navigate to UserManagement
-        console.log('Geofence notification tapped for user:', userId, 'Geofence status:', inside ? 'inside' : 'outside');
-        // If you have navigation context here, you could navigate to UserManagement
-        // Otherwise, just show an alert
-        Alert.alert(
-          'Geofence Alert',
-          `Member ${userId} is now ${inside ? 'inside' : 'outside'} the geofenced area.`,
-          [{ text: 'OK' }]
-        );
+      } catch (error) {
+        console.error('Error handling notification tap:', error);
       }
     });
 
