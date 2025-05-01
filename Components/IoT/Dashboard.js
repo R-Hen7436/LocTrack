@@ -80,6 +80,7 @@ export default function Dashboard({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [selectedDevice, setSelectedDevice] = useState(null);
+  const [personCount, setPersonCount] = useState(0);
   
   // Form states for new device
   const [deviceName, setDeviceName] = useState('');
@@ -136,6 +137,32 @@ export default function Dashboard({ navigation }) {
             handleGeofenceCheck(profileData);
           }
         }
+
+        // Set up real-time listener for camera analytics
+        const cameraAnalyticsRef = ref(db, `cameraAnalytics/history`);
+        console.log('Setting up camera analytics listener...'); // Debug initial setup
+        const unsubscribeCamera = onValue(cameraAnalyticsRef, (snapshot) => {
+          console.log('Camera analytics snapshot received'); // Debug listener trigger
+          if (snapshot.exists()) {
+            const analyticsData = snapshot.val();
+            console.log('Raw camera analytics data:', JSON.stringify(analyticsData, null, 2));
+            
+            let count = 0;
+            if (typeof analyticsData === 'object' && analyticsData.latest) {
+              // Get count from the latest entry
+              count = analyticsData.latest.count;
+              console.log('Latest count value:', count);
+            }
+            
+            console.log('Final count value:', count);
+            setPersonCount(count !== undefined ? Number(count) : 0);
+          } else {
+            console.log('No camera analytics data exists in Firebase');
+            setPersonCount(0);
+          }
+        }, (error) => {
+          console.error('Error in camera analytics listener:', error);
+        });
 
         // Set up real-time listener for IoT devices
         const iotRef = ref(db, `iotDevices/${auth.currentUser.uid}`);
@@ -201,6 +228,9 @@ export default function Dashboard({ navigation }) {
         return () => {
           if (unsubscribeDevices && typeof unsubscribeDevices === 'function') {
             unsubscribeDevices();
+          }
+          if (unsubscribeCamera && typeof unsubscribeCamera === 'function') {
+            unsubscribeCamera();
           }
           // Clean up individual IOT listeners
           const db = getDatabase();
@@ -2070,6 +2100,12 @@ export default function Dashboard({ navigation }) {
                     <View style={styles.deviceInfo}>
                       <Text style={styles.deviceName}>Security Camera</Text>
                       <Text style={styles.deviceLocation}>View Live Feed</Text>
+                      <View style={styles.personCountContainer}>
+                        <Ionicons name="people" size={16} color="#666" />
+                        <Text style={styles.personCountText}>
+                          {personCount} {personCount === 1 ? 'person' : 'people'} detected
+                        </Text>
+                      </View>
                     </View>
                     <View style={styles.cameraArrow}>
                       <Ionicons name="chevron-forward" size={24} color="#666" />
@@ -3036,5 +3072,21 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 12,
     fontWeight: '600',
+  },
+  personCountContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 5,
+    backgroundColor: '#F0F0F0',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    alignSelf: 'flex-start',
+  },
+  personCountText: {
+    fontSize: 12,
+    color: '#666',
+    marginLeft: 4,
+    fontWeight: '500',
   },
 }); 

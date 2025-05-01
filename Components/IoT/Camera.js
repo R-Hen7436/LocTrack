@@ -5,6 +5,8 @@ import io from 'socket.io-client';
 import { Ionicons } from '@expo/vector-icons';
 import Navbar from '../Navbar';
 import { uploadImage, getUploadedImagesInfo, listImages, trackUpload } from '../../utils/imgbbStorage';
+import { getDatabase, ref, set, serverTimestamp } from 'firebase/database';
+import { getAuth } from 'firebase/auth';
 
 export default function Camera({ navigation }) {
   const [connected, setConnected] = useState(false);
@@ -22,6 +24,35 @@ export default function Camera({ navigation }) {
   const socketRef = useRef(null);
   const webViewRef = useRef(null);
   const [forceHideLoading, setForceHideLoading] = useState(false);
+
+  const updatePersonCount = async (count) => {
+    try {
+      const auth = getAuth();
+      if (!auth.currentUser) {
+        console.log('No authenticated user found');
+        return;
+      }
+
+      const db = getDatabase();
+      const cameraAnalyticsRef = ref(db, `cameraAnalytics/${auth.currentUser.uid}`);
+      
+      await set(cameraAnalyticsRef, {
+        personCount: count,
+        lastUpdated: serverTimestamp(),
+        deviceId: serverAddress // Store the camera's IP/identifier
+      });
+
+      // Store historical data
+      const historyRef = ref(db, `cameraAnalytics/${auth.currentUser.uid}/history/${Date.now()}`);
+      await set(historyRef, {
+        personCount: count,
+        timestamp: serverTimestamp()
+      });
+
+    } catch (error) {
+      console.error('Error updating person count:', error);
+    }
+  };
 
   useEffect(() => {
     console.log('Using server address:', serverAddress);
@@ -65,6 +96,8 @@ export default function Camera({ navigation }) {
         if (data.faces) {
           setFaceData(data.faces);
           console.log(`Detected ${data.faces.length} faces`);
+          // Update person count in Firebase
+          updatePersonCount(data.faces.length);
         }
       }
     });
@@ -79,6 +112,8 @@ export default function Camera({ navigation }) {
     socket.on('frame_update', (data) => {
       if (data && data.faces) {
         setFaceData(data.faces);
+        // Update person count in Firebase for frame updates too
+        updatePersonCount(data.faces.length);
       }
     });
   };

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, SafeAreaView, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, SafeAreaView, ActivityIndicator, Alert, ScrollView } from 'react-native';
 import { getAuth } from 'firebase/auth';
 import { getDatabase, ref, get, query, orderByChild, limitToLast } from 'firebase/database';
 import { Ionicons } from '@expo/vector-icons';
@@ -580,7 +580,12 @@ export default function Logs({ navigation }) {
           </TouchableOpacity>
         </View>
         
-        <View style={styles.filterContainer}>
+        <ScrollView 
+          horizontal 
+          showsHorizontalScrollIndicator={false} 
+          style={styles.filterScrollContainer}
+          contentContainerStyle={styles.filterContainer}
+        >
           {renderFilterButton('all', 'All')}
           {renderFilterButton('login', 'Login')}
           {renderFilterButton('logout', 'Logout')}
@@ -590,7 +595,7 @@ export default function Logs({ navigation }) {
           {renderFilterButton('userOffline', 'Offline')}
           {renderFilterButton('activity', 'Activity')}
           {renderFilterButton('system', 'System')}
-        </View>
+        </ScrollView>
         
         {loading ? (
           <View style={styles.loadingContainer}>
@@ -643,28 +648,52 @@ const styles = StyleSheet.create({
   refreshIcon: {
     padding: 8,
   },
-  filterContainer: {
-    flexDirection: 'row',
-    paddingHorizontal: 12,
+  filterScrollContainer: {
+    flexGrow: 0,
     marginBottom: 8,
   },
-  filterButton: {
+  filterContainer: {
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
+    paddingVertical: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  filterButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
     marginHorizontal: 4,
-    backgroundColor: '#E5E5EA',
+    backgroundColor: '#F0F0F5',
+    minWidth: 80,
+    alignItems: 'center',
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 1,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 1,
+    elevation: 2,
   },
   filterButtonActive: {
     backgroundColor: '#007AFF',
+    shadowColor: "#007AFF",
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+    elevation: 4,
   },
   filterButtonText: {
-    fontSize: 14,
-    color: '#666',
+    fontSize: 15,
+    color: '#333333',
+    fontWeight: '600',
   },
   filterButtonTextActive: {
     color: '#FFFFFF',
-    fontWeight: '600',
+    fontWeight: '700',
   },
   loadingContainer: {
     flex: 1,
