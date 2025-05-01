@@ -1642,10 +1642,16 @@ useEffect(() => {
 }, []);
 
 useEffect(() => {
-    console.log(">>> useEffect for loadAllUserLocations is RUNNING <<<"); // <-- ADD THIS LOG
+    console.log(">>> useEffect for loadAllUserLocations is RUNNING <<<");
     const loadAllUserLocations = async () => {
       try {
         console.log(">>> loadAllUserLocations function has started <<<");
+      
+        // Check if user is logged in
+        if (!auth.currentUser) {
+          console.log("No user logged in, skipping location loading");
+          return;
+        }
       
         // First get the current user's team code
         const currentUserProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
@@ -1666,6 +1672,13 @@ useEffect(() => {
         const locationsRef = ref(db, "UsersCurrentLocation");
       
         const unsubscribe = onValue(locationsRef, (snapshot) => {
+          // Check if user is still logged in before processing
+          if (!auth.currentUser) {
+            console.log("User logged out, unsubscribing from location updates");
+            unsubscribe();
+            return;
+          }
+
           if (snapshot.exists()) {
             const locationsData = snapshot.val();
             
@@ -1682,28 +1695,27 @@ useEffect(() => {
             
             const fetchUserProfiles = async () => {
               console.log(`Processing ${Object.keys(locationsData).length} user locations...`);
-              
-              // *** IMPORTANT: Use a local variable inside fetchUserProfiles ***
+            
+              // Check if user is still logged in
+              if (!auth.currentUser) {
+                console.log("User logged out during profile fetching");
+                return {};
+              }
+
               const localFormattedLocations = {};
 
-              // Always include current user if available in the main snapshot
               if (locationsData[auth.currentUser.uid]) {
                 localFormattedLocations[auth.currentUser.uid] = {
                   ...locationsData[auth.currentUser.uid],
-                  // Make sure we have essential profile data for current user too
                   teamCode: currentUserTeamCode,
                   role: currentUserRole,
                   firstName: currentUserProfile.firstName || '',
                   lastName: currentUserProfile.lastName || '',
                   photoURL: currentUserProfile.photoURL || '',
                   name: formatUserName(currentUserProfile),
-                  presence: { status: 'online' } // Assume current user is online initially
+                  presence: { status: 'online' }
                 };
               }
-              
-              // Collect other user profiles and presence
-              // ... (rest of the profile/presence fetching logic remains the same) ...
-              // ... but modify it to add users to localFormattedLocations ...
               
               for (const [userId, userData] of Object.entries(locationsData)) {
                 if (userId === auth.currentUser.uid) continue;
@@ -1712,120 +1724,48 @@ useEffect(() => {
                   continue;
                 }
 
-                console.log(`DBG fetchUserProfiles: Processing User ID: ${userId}`); // Log User ID
-
                 try {
                   const userProfileRef = ref(db, `users/${userId}/profile`);
                   const profileSnapshot = await get(userProfileRef);
                   const profileData = profileSnapshot.exists() ? profileSnapshot.val() : null;
-                  console.log(`DBG fetchUserProfiles: Profile for ${userId}:`, profileData ? JSON.stringify(profileData) : 'null'); // Log Profile Data
 
                   const presenceRef = ref(db, `users/${userId}/presence`);
                   const presenceSnapshot = await get(presenceRef);
                   const presenceData = presenceSnapshot.exists() ? presenceSnapshot.val() : { status: 'offline' };
-                  console.log(`DBG fetchUserProfiles: Presence for ${userId}:`, JSON.stringify(presenceData)); // Log Presence Data
 
                   if (profileData) {
-                      const isSameTeam = profileData.teamCode === currentUserTeamCode;
-                      const isAdminViewingAdmin = (currentUserRole === 'admin' && profileData.role === 'admin');
-                      
-                      console.log(`DBG fetchUserProfiles: Checks for ${userId} - isSameTeam: ${isSameTeam} (UserTeam: ${profileData.teamCode}, CurrentUserTeam: ${currentUserTeamCode}), isAdminViewingAdmin: ${isAdminViewingAdmin}`); // Log Checks
-                      
-                      if (isSameTeam || isAdminViewingAdmin) {
-                          console.log(`DBG fetchUserProfiles: *** Adding ${userId} to localFormattedLocations ***`); // Log Add Decision
-                          
-                          // *** Add to localFormattedLocations ***
-                          localFormattedLocations[userId] = {
-                            ...userData,
-                            firstName: profileData.firstName || '',
-                            lastName: profileData.lastName || '',
-                            photoURL: profileData.photoURL || '',
-                            role: profileData.role || '',
-                            teamCode: profileData.teamCode || '',
-                            name: formatUserName(profileData),
-                            presence: presenceData
-                          };
-                      }
-                  } else {
-                    console.warn(`Profile not found for user ${userId}`);
+                    const isSameTeam = profileData.teamCode === currentUserTeamCode;
+                    const isAdminViewingAdmin = (currentUserRole === 'admin' && profileData.role === 'admin');
+                    
+                    if (isSameTeam || isAdminViewingAdmin) {
+                      localFormattedLocations[userId] = {
+                        ...userData,
+                        firstName: profileData.firstName || '',
+                        lastName: profileData.lastName || '',
+                        photoURL: profileData.photoURL || '',
+                        role: profileData.role || '',
+                        teamCode: profileData.teamCode || '',
+                        name: formatUserName(profileData),
+                        presence: presenceData
+                      };
+                    }
                   }
                 } catch (error) {
                   console.error(`Error processing user ${userId}:`, error);
                 }
               }
               
-              console.log(`DBG fetchUserProfiles: Final localFormattedLocations before return:`, JSON.stringify(localFormattedLocations, null, 2)); // Log Final Object
-              // *** Return the populated local object ***
               return localFormattedLocations;
             };
             
-            // Now use the returned value in .then()
-            fetchUserProfiles().then((finalFormattedLocations) => { // <-- Receive the returned object
-              // Log after fetchUserProfiles completes and *before* setting state
-              console.log(`Setting ${Object.keys(finalFormattedLocations).length} user locations (including offline users)`);
-              console.log('usersLocations state content (inside .then):', JSON.stringify(finalFormattedLocations, null, 2)); // <-- Log the correct object
-              
-              // **** COMPARE WITH PREVIOUS STATE AND LOG CHANGES ****
-              const previousLocations = previousUsersLocationsRef.current;
-              const currentUid = auth.currentUser?.uid;
-              // Use this one variable for the team code
-              const teamCodeForLogging = finalFormattedLocations[currentUid]?.teamCode; 
-              
-              // Check if we have a team code before proceeding
-              if (teamCodeForLogging) { 
-                Object.keys(finalFormattedLocations).forEach(userId => {
-                  if (userId === currentUid) return; // Don't log changes for the current user
-                  
-                  const currentUserData = finalFormattedLocations[userId];
-                  const previousUserData = previousLocations[userId];
-                  
-                  const currentStatus = currentUserData.presence?.status;
-                  const previousStatus = previousUserData?.presence?.status;
-                  const userName = currentUserData.name || userId;
-                  
-                  // Check for status changes (online/offline)
-                  if (currentStatus !== previousStatus) {
-                    if (currentStatus === 'online' && previousStatus !== 'online') {
-                      // Log user online event
-                      logTeamActivity(
-                        teamCodeForLogging, // Use the variable defined outside the loop
-                        userId,
-                        userName,
-                        'userOnline',
-                        `${userName} came online.`
-                      );
-                    } else if (currentStatus === 'offline' && previousStatus === 'online') {
-                      // Log user offline event
-                      logTeamActivity(
-                        teamCodeForLogging, // Use the variable defined outside the loop
-                        userId,
-                        userName,
-                        'userOffline',
-                        `${userName} went offline.`
-                      );
-                    } else if (!previousStatus && currentStatus === 'online') {
-                      // User appeared online (first time seen or came back)
-                       logTeamActivity(
-                        teamCodeForLogging, // Use the variable defined outside the loop
-                        userId,
-                        userName,
-                        'userOnline',
-                        `${userName} appeared online.`
-                      );
-                    }
-                    // Add other specific change logging here if needed (e.g., location update)
-                  }
-                });
+            fetchUserProfiles().then((finalFormattedLocations) => {
+              // Final auth check before setting state
+              if (auth.currentUser) {
+                setUsersLocations(finalFormattedLocations);
+                previousUsersLocationsRef.current = finalFormattedLocations;
               }
-              // **** END COMPARISON ****
-
-              setUsersLocations(finalFormattedLocations); // <-- Set state with the correct object
-              
-              // **** UPDATE PREVIOUS STATE REF ****
-              previousUsersLocationsRef.current = finalFormattedLocations;
-              
             }).catch(error => {
-                console.error("Error in fetchUserProfiles promise chain:", error);
+              console.error("Error in fetchUserProfiles promise chain:", error);
             });
           } else {
             console.log("No user locations found in database");
@@ -1851,7 +1791,7 @@ useEffect(() => {
         });
       }
     };
-  }, []); // <--- CHANGED DEPENDENCY ARRAY TO []
+  }, []);
 
 const getUniqueColor = (str) => {
   let hash = 0;

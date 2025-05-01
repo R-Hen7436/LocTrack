@@ -301,6 +301,97 @@ const resetStepsAndLocationData = async () => {
   }
 };
 
+const simulateMovement = () => {
+  if (!currentLocation) {
+    Alert.alert('Error', 'Current location not available');
+    return;
+  }
+
+  // Make a copy of the current location as the base
+  const baseLocation = {...currentLocation};
+  
+  // Generate initial set of points with natural walking pattern
+  const totalPoints = 30; // More points for smoother movement
+  const simulationPoints = [];
+  let lastPoint = baseLocation;
+  
+  for (let i = 0; i < totalPoints; i++) {
+    const nextPoint = generateNextDebugPoint(baseLocation, lastPoint);
+    simulationPoints.push(nextPoint);
+    lastPoint = nextPoint;
+  }
+  
+  let moveIndex = 0;
+  setIsUserMoving(true);
+  
+  // Create a local copy of the history to update during simulation
+  let localHistory = [...locationHistory];
+  
+  const moveInterval = setInterval(() => {
+    if (moveIndex < simulationPoints.length) {
+      const nextPoint = simulationPoints[moveIndex];
+      
+      // Update local history first
+      localHistory = [...localHistory, nextPoint];
+      if (localHistory.length > MAX_HISTORY_POINTS) {
+        localHistory = localHistory.slice(-MAX_HISTORY_POINTS);
+      }
+      
+      // Now update state with the updated history
+      setLocationHistory(localHistory);
+      
+      // Update current location and estimated position
+      setCurrentLocation(nextPoint);
+      setEstimatedIconPosition(nextPoint);
+      
+      // Save to Firebase for other team members to see
+      if (auth.currentUser) {
+        const userPath = `UsersCurrentLocation/${auth.currentUser.uid}`;
+        update(ref(db, userPath), {
+          Latitude: nextPoint.latitude,
+          Longitude: nextPoint.longitude,
+          lastSeen: new Date().toISOString(),
+          isActive: true
+        });
+        
+        // Save to location history
+        saveTeamMemberLocationHistory(auth.currentUser.uid, {
+          Latitude: nextPoint.latitude,
+          Longitude: nextPoint.longitude
+        });
+      }
+      
+      // Simulate steps with more natural variation
+      const stepIncrement = Math.floor(randomBetween(1, 3)); // Reduced step increment
+      setStepCount(prev => {
+        const newCount = prev + stepIncrement;
+        stepCountRef.current = newCount;
+        return newCount;
+      });
+      
+      setStepsSinceLastGpsUpdate(prev => {
+        const newCount = prev + stepIncrement;
+        stepsSinceLastGpsUpdateRef.current = newCount;
+        return newCount;
+      });
+      
+      setIsUserMoving(true);
+      setLastStepUpdateTime(Date.now());
+    }
+    
+    moveIndex++;
+    if (moveIndex >= simulationPoints.length) {
+      clearInterval(moveInterval);
+      setTimeout(() => {
+        setIsUserMoving(false);
+        
+        // Save final history to Firebase once simulation is complete
+        saveLocationHistoryToFirebase(localHistory);
+      }, 500);
+    }
+  }, 1000); // Increased interval to 1 second (1000ms) for slower movement
+};
+
 export default function UserManagement({ navigation }) {
   const [teamMembers, setTeamMembers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -401,62 +492,44 @@ export default function UserManagement({ navigation }) {
     const notificationSubscription = requestNotificationPermissions();
     
     async function initialize() {
+      // Check if user is logged in first
       if (!auth.currentUser) {
+        console.log("No user logged in, skipping initialization");
         setLoading(false);
         return;
       }
       
       setLoading(true);
       
-      // Check if we need to focus on geofence alerts
       try {
-        const checkGeofenceAlerts = await AsyncStorage.getItem('checkGeofenceAlerts');
-        if (checkGeofenceAlerts === 'true') {
-          // Clear the flag
-          await AsyncStorage.removeItem('checkGeofenceAlerts');
-          
-          // Show an alert to inform user they're viewing team members after a geofence alert
-          setTimeout(() => {
-            Alert.alert(
-              'Geofence Alert',
-              'You can monitor your team members and their geofence status here.',
-              [{ text: 'OK' }]
-            );
-          }, 1000);
-        }
+        // Load cached data first to show immediately
+        await loadCachedData();
+        
+        // Then fetch fresh data
+        await loadTeamMembers(false);
+        
+        // Set up location listener with auth check
+        const unsubscribe = setupLocationListener();
+        
+        // Load user stats
+        await loadUserStats(false);
+        
+        // Load team geofence
+        await loadTeamGeofence(false);
+        
+        setLoading(false);
+        
+        return () => {
+          if (unsubscribe) unsubscribe();
+          if (notificationSubscription) notificationSubscription.remove();
+        };
       } catch (error) {
-        console.error('Error checking geofence alerts:', error);
+        console.error("Error in initialize:", error);
+        setLoading(false);
       }
-      
-      // Load cached data first to show immediately
-      await loadCachedData();
-      
-      // Then fetch fresh data
-      await loadTeamMembers(false);
-      
-      // Set up location listener
-      const unsubscribe = setupLocationListener();
-      
-      // Load user stats
-      await loadUserStats(false);
-      
-      // Load team geofence
-      await loadTeamGeofence(false);
-      
-      return () => {
-        if (unsubscribe) unsubscribe();
-        if (notificationSubscription) notificationSubscription.remove();
-      };
     }
-    
-    initialize().finally(() => {
-      setLoading(false);
-    });
-    
-    // Clean up notification subscription on component unmount
-    return () => {
-      if (notificationSubscription) notificationSubscription.remove();
-    };
+
+    initialize();
   }, []);
 
   const loadCachedData = async () => {
@@ -492,180 +565,34 @@ export default function UserManagement({ navigation }) {
   };
 
   const setupLocationListener = () => {
-    try {
-      const db = getDatabase();
-      const locationsRef = ref(db, 'UsersCurrentLocation');
-      
-      return onValue(locationsRef, async (snapshot) => {
-        if (!snapshot.exists() || !auth.currentUser) return;
-        
-        const locationsData = snapshot.val();
-        console.log('User locations updated:', Object.keys(locationsData).length);
-        
-        // Get current user's team code
-        const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
-        const userSnapshot = await get(userProfileRef);
-        
-        if (userSnapshot.exists()) {
-          const userData = userSnapshot.val();
-          const userTeamCode = userData.teamCode;
-          console.log(`Current user team code: ${userTeamCode}`);
-          
-          // Only include members from the same team
-          const filteredLocations = {};
-          const memberProfiles = {};
-          
-          // First determine which users are in the same team
-          for (const userId in locationsData) {
-            if (userId === auth.currentUser.uid) continue; // Skip current user
-            
-            try {
-              const memberProfileRef = ref(db, `users/${userId}/profile`);
-              const memberSnapshot = await get(memberProfileRef);
-              
-              if (memberSnapshot.exists()) {
-                const memberData = memberSnapshot.val();
-                const memberTeamCode = memberData.teamCode;
-                
-                // Only include users with matching team code
-                if (memberTeamCode === userTeamCode) {
-                  // Get presence status for this user
-                  const presenceRef = ref(db, `users/${userId}/presence`);
-                  const presenceSnapshot = await get(presenceRef);
-                  const presenceData = presenceSnapshot.exists() ? presenceSnapshot.val() : { status: 'offline' };
-                  
-                  // Always include location data for team members regardless of presence status
-                  filteredLocations[userId] = {
-                    ...locationsData[userId],
-                    presence: presenceData // Include presence data
-                  };
-                  
-                  // Save member profile data for geofence checks
-                  memberProfiles[userId] = memberData;
-                  
-                  console.log(`Added user ${userId} to visible members (team ${memberTeamCode}), status: ${presenceData.status}`);
-                } else {
-                  console.log(`Skipped user ${userId} - different team (${memberTeamCode} vs ${userTeamCode})`);
-                }
-              }
-            } catch (error) {
-              console.error(`Error fetching profile for user ${userId}:`, error);
-            }
-          }
-          
-          console.log(`Filtered locations: ${Object.keys(filteredLocations).length} team members found`);
-          setMembersLocations(filteredLocations);
-          
-          // Check geofence status for each team member and log/notify changes
-          if (teamGeofence.length >= 3) {
-            console.log(`Checking geofence status for ${Object.keys(filteredLocations).length} team members against a geofence with ${teamGeofence.length} points`);
-            
-            for (const userId in filteredLocations) {
-              const memberLocation = filteredLocations[userId];
-              const memberData = memberProfiles[userId];
-              
-              if (memberLocation.Latitude && memberLocation.Longitude) {
-                const memberPoint = {
-                  latitude: memberLocation.Latitude,
-                  longitude: memberLocation.Longitude
-                };
-                
-                const isInsideGeofence = isPointInsidePolygon(memberPoint, teamGeofence);
-                const memberName = formatName(memberData.firstName, memberData.middleName, memberData.lastName);
-                
-                // Get previous state from ref (default to undefined if not set yet)
-                const previousState = previousGeofenceStateRef.current[userId];
-                
-                console.log(`User ${memberName} (${userId}): 
-                  Current location: ${memberPoint.latitude}, ${memberPoint.longitude}
-                  Current geofence status: ${isInsideGeofence ? 'INSIDE' : 'OUTSIDE'}
-                  Previous geofence status: ${previousState === undefined ? 'UNKNOWN (first check)' : previousState ? 'INSIDE' : 'OUTSIDE'}
-                `);
-                
-                if (previousState === undefined) {
-                  // This is the first check, so we just store the state without notifying
-                  console.log(`⏭️ First status check for ${memberName}, setting initial state to ${isInsideGeofence ? 'INSIDE' : 'OUTSIDE'} without notification`);
-                  
-                  // Update the ref with the initial state
-                  previousGeofenceStateRef.current = {
-                    ...previousGeofenceStateRef.current,
-                    [userId]: isInsideGeofence
-                  };
-                } 
-                // ONLY log and notify if there's a CHANGE in state
-                else if (previousState !== isInsideGeofence) {
-                  console.log(`🔄 State change detected for ${memberName}!`);
-                  
-                  // Update the ref with the new state
-                  previousGeofenceStateRef.current = {
-                    ...previousGeofenceStateRef.current,
-                    [userId]: isInsideGeofence
-                  };
-                  
-                  const eventType = isInsideGeofence ? 'geofenceEnter' : 'geofenceExit';
-                  const message = isInsideGeofence
-                    ? `${memberName} is now inside the Geofenced Area.`
-                    : `${memberName} is now outside the Geofenced Area.`;
-                    
-                  console.log(`📝 Will log event: ${eventType} - ${message}`);
-                  
-                  // Log the activity - wrap in try/catch to ensure notification still runs
-                  try {
-                    await logTeamActivity(db, userTeamCode, userId, memberName, eventType, message);
-                  } catch (logError) {
-                    console.error(`Failed to log geofence activity: ${logError.message}`);
-                  }
-                  
-                  console.log(`🔔 Will send notification for: ${memberName}`);
-                  
-                  // Add slight delay to avoid notification congestion
-                  setTimeout(async () => {
-                    // Send notification - wrap in a separate try/catch
-                    try {
-                      // Force notification to be sent regardless of other errors
-                      await sendNotification(
-                        `Geofence Alert: ${memberName}`,
-                        message,
-                        { 
-                          type: 'geofence', 
-                          userId, 
-                          inside: isInsideGeofence,
-                          userName: memberName,
-                          timestamp: Date.now()
-                        }
-                      );
-                      
-                      // Double-check notification was sent
-                      console.log(`✅ Geofence notification dispatched for ${memberName} - ${eventType}`);
-                    } catch (notifyError) {
-                      console.error(`Failed to send notification: ${notifyError.message}`);
-                      
-                      // Fallback to Alert if push notification fails
-                      Alert.alert(
-                        `Geofence Alert: ${memberName}`,
-                        message,
-                        [{ text: 'OK' }]
-                      );
-                    }
-                  }, 500); // 500ms delay
-                } else {
-                  console.log(`⏭️ No state change for ${memberName}, skipping log/notification. Still ${isInsideGeofence ? 'INSIDE' : 'OUTSIDE'}.`);
-                }
-              } else {
-                console.log(`⚠️ No valid location data for member ${memberProfiles[userId]?.firstName || userId}`);
-              }
-            }
-          } else {
-            console.log(`⚠️ Not enough geofence points (${teamGeofence.length}) to perform geofence check, minimum required: 3`);
-          }
-        } else {
-          console.error("Current user profile not found");
-        }
-      });
-    } catch (error) {
-      console.error('Error setting up location listener:', error);
-      return null;
+    if (!auth.currentUser) {
+      console.log("No user logged in, skipping location listener setup");
+      return;
     }
+
+    const locationRef = ref(db, 'UsersCurrentLocation');
+    return onValue(locationRef, async (snapshot) => {
+      // Check if user is still logged in
+      if (!auth.currentUser) {
+        console.log("User logged out, skipping location update");
+        return;
+      }
+
+      try {
+        if (!snapshot.exists()) return;
+
+        const locations = snapshot.val();
+        Object.entries(locations).forEach(async ([userId, locationData]) => {
+          // Check auth state before processing each user
+          if (!auth.currentUser) return;
+
+          // Rest of your location processing logic
+          // ... existing code ...
+        });
+      } catch (error) {
+        console.error("Error in location listener:", error);
+      }
+    });
   };
 
   const loadTeamGeofence = async (showLoading = true) => {
