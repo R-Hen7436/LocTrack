@@ -529,7 +529,7 @@ export default function Dashboard({ navigation }) {
           <View style={styles.deviceDataRow}>
             <Text style={styles.dataLabel}>Status</Text>
             <Text style={styles.dataValue}>
-              {item.data.Status === '1' ? 'Door Locked' : 'Door Unlocked'}
+              {item.data.Status === '1' ? <Text>Door Locked</Text> : <Text>Door Unlocked</Text>}
             </Text>
           </View>
 
@@ -636,7 +636,7 @@ export default function Dashboard({ navigation }) {
             { backgroundColor: item.data?.isOnline ? '#4CAF50' : '#FF3B30' }
           ]} />
           <Text style={styles.statusText}>
-            {item.data?.isOnline ? 'Online' : 'Offline'}
+            {item.data?.isOnline ? <Text>Online</Text> : <Text>Offline</Text>}
           </Text>
         </View>
       </View>
@@ -647,12 +647,13 @@ export default function Dashboard({ navigation }) {
         {/* Toggle if device is dynamic and has toggle type */}
         {item.isDynamic && item.conditions?.type === 'toggle' && (
           <View style={styles.toggleContainer}>
-            <AnimatedToggle
-              value={item.data?.Status === '1'}
-              onToggle={() => handleToggleChange(item)}
-              onText={item.conditions.toggleStates.onText || 'ON'}
-              offText={item.conditions.toggleStates.offText || 'OFF'}
-            />
+            <TouchableOpacity onPress={() => handleToggleChange(item)} activeOpacity={0.8}>
+              <View style={[styles.toggleBackground, { backgroundColor: item.data?.Status === '1' ? '#4CAF50' : '#FF3B30' }]}>
+                <Text style={styles.toggleText}>
+                  {item.data?.Status === '1' ? item.conditions.toggleStates.onText || 'ON' : item.conditions.toggleStates.offText || 'OFF'}
+                </Text>
+              </View>
+            </TouchableOpacity>
           </View>
         )}
 
@@ -1050,32 +1051,14 @@ export default function Dashboard({ navigation }) {
     }, [value, size]);
 
     return (
-      <View style={styles.toggleWrapper}>
-        <Text style={styles.toggleLabel}>
-          {value ? (onText || 'ON') : (offText || 'OFF')}
-        </Text>
-        <Pressable
-          onPress={onToggle}
-          style={[
-            styles.toggleTrack,
-            {
-              width: size * 2,
-              height: size + 4,
-              backgroundColor: value ? '#4CAF50' : '#FF3B30',
-            },
-          ]}
-        >
-          <Animated.View
-            style={[
-              styles.toggleThumb,
-              {
-                width: size - 4,
-                height: size - 4,
-                transform: [{ translateX: translation }],
-              },
-            ]}
-          />
-        </Pressable>
+      <View style={styles.toggleContainer}>
+        <TouchableOpacity onPress={onToggle} activeOpacity={0.8}>
+          <View style={[styles.toggleBackground, { backgroundColor: value ? '#4CAF50' : '#FF3B30' }]}>
+            <Text style={styles.toggleText}>
+              {value ? onText || 'ON' : offText || 'OFF'}
+            </Text>
+          </View>
+        </TouchableOpacity>
       </View>
     );
   };
@@ -1464,7 +1447,7 @@ export default function Dashboard({ navigation }) {
                       <View key={key} style={styles.deviceDataRow}>
                         <Text style={styles.dataLabel}>{key}:</Text>
                         <Text style={styles.dataValue}>
-                          {typeof value === 'boolean' ? value.toString() : value}
+                          {typeof value === 'boolean' ? <Text>{value.toString()}</Text> : <Text>{value}</Text>}
                         </Text>
                       </View>
                     ))}
@@ -1494,7 +1477,7 @@ export default function Dashboard({ navigation }) {
                         styles.statusText,
                         { color: deviceFound?.isOnline ? '#4CAF50' : '#FF3B30' }
                       ]}>
-                        {deviceFound?.isOnline ? 'Online' : 'Offline'}
+                        {deviceFound?.isOnline ? <Text>Online</Text> : <Text>Offline</Text>}
                       </Text>
                     </View>
                   </View>
@@ -2103,7 +2086,7 @@ export default function Dashboard({ navigation }) {
                       <View style={styles.personCountContainer}>
                         <Ionicons name="people" size={16} color="#666" />
                         <Text style={styles.personCountText}>
-                          {personCount} {personCount === 1 ? 'person' : 'people'} detected
+                          {personCount + ' ' + (personCount === 1 ? 'person' : 'people') + ' detected'}
                         </Text>
                       </View>
                     </View>
@@ -3088,5 +3071,17 @@ const styles = StyleSheet.create({
     color: '#666',
     marginLeft: 4,
     fontWeight: '500',
+  },
+  toggleBackground: {
+    padding: 5,
+    borderRadius: 15,
+    width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  toggleText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
   },
 }); 

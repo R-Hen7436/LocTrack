@@ -188,16 +188,12 @@ export default function App() {
     configureNotifications();
   }, []);
 
-  // Separate useEffect for setting up device listeners
-  useEffect(() => {
-    if (!user) return; // Only proceed if user is logged in
-
-    console.log('Setting up device listeners');
-    const db = getDatabase();
-    
-    // Set up device listener
-    const setupDeviceListener = async () => {
+  // Define setupDeviceListener outside useEffect
+  const setupDeviceListener = async () => {
+    try {
+      const db = getDatabase();
       const iotsRef = ref(db, 'IOTs');
+      
       return onValue(iotsRef, async (snapshot) => {
         if (!snapshot.exists()) return;
         
@@ -219,7 +215,7 @@ export default function App() {
                   sound: true,
                   priority: Notifications.AndroidNotificationPriority.HIGH,
                 },
-                trigger: null, // null means send immediately
+                trigger: null,
               });
               
               // Show alert with auto-dial option for 911
@@ -236,7 +232,7 @@ export default function App() {
                     style: 'destructive',
                     onPress: async () => {
                       try {
-                        const phoneUrl = `tel:911`;
+                        const phoneUrl = 'tel:911';
                         const canOpen = await Linking.canOpenURL(phoneUrl);
                         if (canOpen) {
                           await Linking.openURL(phoneUrl);
@@ -270,7 +266,7 @@ export default function App() {
                   sound: true,
                   priority: Notifications.AndroidNotificationPriority.HIGH,
                 },
-                trigger: null, // null means send immediately
+                trigger: null,
               });
               
               // Show alert with auto-dial option for 911
@@ -287,7 +283,7 @@ export default function App() {
                     style: 'destructive',
                     onPress: async () => {
                       try {
-                        const phoneUrl = `tel:911`;
+                        const phoneUrl = 'tel:911';
                         const canOpen = await Linking.canOpenURL(phoneUrl);
                         if (canOpen) {
                           await Linking.openURL(phoneUrl);
@@ -312,24 +308,42 @@ export default function App() {
           }
         });
       });
-    };
+    } catch (error) {
+      console.error('Error in setupDeviceListener:', error);
+      return null;
+    }
+  };
 
-    // Set up the listener
+  // Separate useEffect for setting up device listeners
+  useEffect(() => {
+    if (!user) return; // Only proceed if user is logged in
+
+    console.log('Setting up device listeners');
     let deviceListener = null;
-    setupDeviceListener().then(listener => {
-      deviceListener = typeof listener === 'function' ? listener : null;
-    }).catch(error => {
-      console.error('Error setting up device listener:', error);
-    });
+    
+    try {
+      // Set up the listener
+      setupDeviceListener().then(listener => {
+        deviceListener = listener;
+      }).catch(error => {
+        console.error('Error setting up device listener:', error);
+      });
+    } catch (error) {
+      console.error('Error in device listener setup:', error);
+    }
 
     // Cleanup function
     return () => {
-      console.log('Cleaning up device listeners');
-      if (deviceListener && typeof deviceListener === 'function') {
-        deviceListener();
+      try {
+        console.log('Cleaning up device listeners');
+        if (deviceListener) {
+          deviceListener();
+        }
+      } catch (error) {
+        console.error('Error cleaning up device listener:', error);
       }
     };
-  }, [user]); // Only depend on user changes
+  }, [user]);
 
   // Modify the existing notification tap handler useEffect
   useEffect(() => {
@@ -355,6 +369,7 @@ export default function App() {
     };
   }, []);
 
+  // useEffect for auth state change
   useEffect(() => {
     const setupApp = async () => {
       const auth = getAuth();
@@ -423,30 +438,6 @@ export default function App() {
                 setUser(userWithAdmin);
                 setIsVerified(defaultProfile.isAdmin || user.emailVerified);
               }
-
-              // Set up device listeners only if notifications are permitted
-              if (notificationStatus === 'granted') {
-                console.log('Setting up device listeners for authenticated user');
-                let deviceListener = null;
-                
-                // Properly handle the Promise and unsubscribe function
-                setupDeviceListener()
-                  .then(listener => {
-                    deviceListener = typeof listener === 'function' ? listener : null;
-                  })
-                  .catch(error => {
-                    console.error('Error setting up device listener:', error);
-                  });
-                
-                return () => {
-                  console.log('Cleaning up device listeners');
-                  if (deviceListener && typeof deviceListener === 'function') {
-                    deviceListener();
-                  }
-                };
-              } else {
-                console.warn('Notifications not permitted:', notificationStatus);
-              }
             } catch (error) {
               console.error('Error in auth state change:', error);
             }
@@ -467,7 +458,7 @@ export default function App() {
     };
 
     setupApp();
-  }, [notificationStatus]); // Added notificationStatus as dependency
+  }, [notificationStatus]);
 
   useEffect(() => {
     if (!user) return; // Only proceed if user is logged in
