@@ -503,7 +503,12 @@ const previousUsersLocationsRef = useRef({});
 
 // Add a function to save location history for team members
 const saveTeamMemberLocationHistory = (userId, location) => {
-  if (!userId || !location || !location.Latitude || !location.Longitude) return;
+  if (!userId || !location || !location.Latitude || !location.Longitude) {
+    console.log(`Skipping location history update for ${userId} - invalid data:`, location);
+    return;
+  }
+  
+  console.log(`Saving team member location history for ${userId}: ${location.Latitude}, ${location.Longitude}`);
   
   setTeamMemberHistories(prevHistories => {
     const userHistory = prevHistories[userId] || [];
@@ -514,11 +519,46 @@ const saveTeamMemberLocationHistory = (userId, location) => {
       timestamp: new Date().toISOString()
     }].slice(-50); // Keep only the most recent 50 points
     
+    console.log(`Updated history for ${userId}, new length: ${newHistory.length}`);
+    
     return {
       ...prevHistories,
       [userId]: newHistory
     };
   });
+  
+  // Also save the location history to Firebase for persistence between sessions
+  try {
+    const historyRef = ref(db, `teams/${location.teamCode}/memberLocationHistory/${userId}`);
+    const newPoint = {
+      latitude: location.Latitude,
+      longitude: location.Longitude,
+      timestamp: new Date().toISOString()
+    };
+    
+    // Use push to add to the history array in Firebase
+    push(historyRef, newPoint)
+      .then(() => console.log(`Successfully saved history point to Firebase for ${userId}`))
+      .catch(err => console.error(`Error saving history point to Firebase for ${userId}:`, err));
+      
+    // Limit the history size in Firebase by keeping only the latest 50 points
+    get(historyRef).then(snapshot => {
+      if (snapshot.exists()) {
+        const historyData = snapshot.val();
+        const historyKeys = Object.keys(historyData);
+        
+        if (historyKeys.length > 50) {
+          const keysToRemove = historyKeys.slice(0, historyKeys.length - 50);
+          keysToRemove.forEach(key => {
+            remove(ref(db, `teams/${location.teamCode}/memberLocationHistory/${userId}/${key}`))
+              .catch(err => console.error(`Error trimming history for ${userId}:`, err));
+          });
+        }
+      }
+    }).catch(err => console.error(`Error checking history size for ${userId}:`, err));
+  } catch (error) {
+    console.error(`Error saving location history to Firebase for ${userId}:`, error);
+  }
 };
 
 // Inside the listener for usersLocations, add this to update histories
@@ -2804,6 +2844,109 @@ const clearLocationHistory = async () => {
     }
   }
 };
+
+// Add a function to load team member history from Firebase
+const loadTeamMemberHistoryFromFirebase = async () => {
+  if (!auth.currentUser) return;
+  
+  try {
+    // Get the user's team code
+    const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+    const profileSnapshot = await get(userProfileRef);
+    
+    if (!profileSnapshot.exists()) return;
+    
+    const profileData = profileSnapshot.val();
+    const teamCode = profileData.teamCode;
+    
+    if (!teamCode) return;
+    
+    // Get all team members' location histories
+    const historyRef = ref(db, `teams/${teamCode}/memberLocationHistory`);
+    const historySnapshot = await get(historyRef);
+    
+    if (!historySnapshot.exists()) return;
+    
+    const historyData = historySnapshot.val();
+    const newTeamMemberHistories = {};
+    
+    // Process each team member's history
+    Object.entries(historyData).forEach(([userId, userHistory]) => {
+      if (userId === auth.currentUser.uid) return; // Skip current user
+      
+      // Convert from Firebase object to array and sort by timestamp
+      const historyArray = Object.values(userHistory || {})
+        .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+        .slice(-50); // Keep only the latest 50 points
+      
+      if (historyArray.length > 0) {
+        newTeamMemberHistories[userId] = historyArray;
+        console.log(`Loaded ${historyArray.length} history points for ${userId}`);
+      }
+    });
+    
+    // Update the state with the loaded histories
+    setTeamMemberHistories(prevHistories => ({
+      ...prevHistories,
+      ...newTeamMemberHistories
+    }));
+    
+  } catch (error) {
+    console.error("Error loading team member history from Firebase:", error);
+  }
+};
+
+// ... existing code ...
+
+// Add this useEffect hook after the other useEffect hooks
+useEffect(() => {
+  // Load initial team member history from Firebase when the component mounts
+  loadTeamMemberHistoryFromFirebase();
+  
+  // Set up a listener for real-time updates to team member location history
+  if (auth.currentUser) {
+    const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+    get(userProfileRef).then(snapshot => {
+      if (snapshot.exists()) {
+        const profileData = snapshot.val();
+        const teamCode = profileData.teamCode;
+        
+        if (teamCode) {
+          const historyRef = ref(db, `teams/${teamCode}/memberLocationHistory`);
+          const unsubscribe = onValue(historyRef, snapshot => {
+            if (snapshot.exists()) {
+              const historyData = snapshot.val();
+              const newTeamMemberHistories = {};
+              
+              Object.entries(historyData).forEach(([userId, userHistory]) => {
+                if (userId === auth.currentUser.uid) return;
+                
+                const historyArray = Object.values(userHistory || {})
+                  .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+                  .slice(-50);
+                
+                if (historyArray.length > 0) {
+                  newTeamMemberHistories[userId] = historyArray;
+                }
+              });
+              
+              setTeamMemberHistories(prevHistories => ({
+                ...prevHistories,
+                ...newTeamMemberHistories
+              }));
+            }
+          });
+          
+          return () => unsubscribe();
+        }
+      }
+    }).catch(error => {
+      console.error("Error setting up team member history listener:", error);
+    });
+  }
+}, [auth.currentUser]);
+
+// ... existing code ...
 
 return (
     <SafeAreaView style={[styles.container, { paddingTop: 0 }]}>

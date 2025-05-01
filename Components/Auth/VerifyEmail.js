@@ -89,12 +89,13 @@ export default function VerifyEmail({ route, navigation }) {
 
   const handleSignOut = async () => {
     try {
+      // Clear the verification check interval first
+      if (verificationCheckInterval.current) {
+        clearInterval(verificationCheckInterval.current);
+      }
       await signOut(auth);
       // Navigate to Login screen after successful sign out
-      navigation.reset({
-        index: 0,
-        routes: [{ name: 'Login' }],
-      });
+      navigation.navigate('Login');
     } catch (error) {
       console.error('Error signing out:', error);
       alert('Failed to sign out: ' + error.message);
