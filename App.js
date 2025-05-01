@@ -18,6 +18,7 @@ import { getDatabase, ref, get, set, onValue } from 'firebase/database';
 import Profile from './Components/Profile/Profile';
 import EditProfile from './Components/Profile/EditProfile';
 import Dashboard from './Components/IoT/Dashboard';
+import Camera from './Components/IoT/Camera';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import GeofenceRequests from './Components/Admin/GeofenceRequests';
 import OwnerInitialization from './Components/Auth/OwnerInitialization';
@@ -683,6 +684,15 @@ export default function App() {
                     animation: 'slide_from_right'
                   }}
                 />
+                <Stack.Screen 
+                  name="Camera" 
+                  component={Camera}
+                  options={{ 
+                    headerShown: true,
+                    title: 'Camera',
+                    animation: 'slide_from_right'
+                  }}
+                />
               </>
             ) : isVerified ? (
               <>
@@ -763,6 +773,15 @@ export default function App() {
                     animation: 'slide_from_right'
                   }}
                 />
+                <Stack.Screen 
+                  name="Camera" 
+                  component={Camera}
+                  options={{ 
+                    headerShown: true,
+                    title: 'Camera',
+                    animation: 'slide_from_right'
+                  }}
+                />
               </>
             ) : (
               <Stack.Screen 
@@ -815,6 +834,15 @@ export default function App() {
                   title: 'Change Password',
                   headerBackVisible: false,
                   gestureEnabled: false,
+                }}
+              />
+              <Stack.Screen 
+                name="Camera" 
+                component={Camera}
+                options={{ 
+                  headerShown: true,
+                  title: 'Camera',
+                  animation: 'slide_from_right'
                 }}
               />
             </>

@@ -33,7 +33,9 @@
     "react-native-maps": "1.18.0",
     "react-native-safe-area-context": "^5.2.0",
     "react-native-screens": "^4.9.0",
-    "react-native-web": "^0.19.13"
+    "react-native-web": "^0.19.13",
+    "react-native-webview": "^13.13.5",
+    "socket.io-client": "^4.8.1"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0"

@@ -2055,8 +2055,34 @@ export default function Dashboard({ navigation }) {
         </View>
       ) : (
         <FlatList
-          data={iotDevices}
-          renderItem={renderDevice}
+          data={[{ id: 'camera_card' }, ...iotDevices]}
+          renderItem={({ item }) => {
+            if (item.id === 'camera_card') {
+              return (
+                <TouchableOpacity 
+                  style={[styles.deviceCard, styles.cameraCard]}
+                  onPress={() => navigation.navigate('Camera')}
+                >
+                  <View style={styles.deviceHeader}>
+                    <View style={[styles.deviceIconContainer, { backgroundColor: '#9C27B0' }]}>
+                      <Ionicons name="camera" size={28} color="#FFFFFF" />
+                    </View>
+                    <View style={styles.deviceInfo}>
+                      <Text style={styles.deviceName}>Security Camera</Text>
+                      <Text style={styles.deviceLocation}>View Live Feed</Text>
+                    </View>
+                    <View style={styles.cameraArrow}>
+                      <Ionicons name="chevron-forward" size={24} color="#666" />
+                    </View>
+                  </View>
+                  <View style={styles.cameraBadge}>
+                    <Text style={styles.cameraBadgeText}>LIVE</Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            }
+            return renderDevice({ item });
+          }}
           keyExtractor={item => item.id}
           contentContainerStyle={styles.deviceList}
         />
@@ -2971,5 +2997,44 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
     fontStyle: 'italic',
+  },
+  cameraCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    marginBottom: 15,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
+    transform: [{ scale: 1.02 }],
+  },
+  cameraArrow: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F0F0F0',
+  },
+  cameraBadge: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    backgroundColor: '#9C27B0',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  cameraBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
   },
 }); 
