@@ -81,6 +81,9 @@ export default function Dashboard({ navigation }) {
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [selectedDevice, setSelectedDevice] = useState(null);
   const [personCount, setPersonCount] = useState(0);
+  const [alertStatus, setAlertStatus] = useState({});
+  const [lastAlertTime, setLastAlertTime] = useState({});
+  const ALERT_COOLDOWN = 300000; // 5 minutes in milliseconds
   
   // Form states for new device
   const [deviceName, setDeviceName] = useState('');
@@ -100,15 +103,17 @@ export default function Dashboard({ navigation }) {
     maxValue: '',
     buttonActions: [],
     toggleStates: { 
-      on: '', 
-      off: '',
-      onText: '',
-      offText: ''
+      on: 1,
+      off: 0,
+      onText: 'ON',
+      offText: 'OFF'
     },
     truefalseValue: { true: '', false: '' },
     threshold: {
       value: '',
-      operator: '>' // Default operator
+      operator: '>', 
+      action: 'alert',
+      environment: ''
     }
   });
 
@@ -199,18 +204,35 @@ export default function Dashboard({ navigation }) {
                 onValue(iotDataRef, (iotDataSnapshot) => {
                   if (iotDataSnapshot.exists()) {
                     const iotData = iotDataSnapshot.val();
+                    const deviceId = iotDataRef.key; // Get deviceId from the ref
+
                     setIotDevices(currentDevices => 
-                      currentDevices.map(d => 
-                        d.deviceId === device.deviceId 
-                          ? {
-                              ...d,
-                              data: {
-                                ...iotData,
-                                isOnline: iotData.isOnline || false
-                              }
+                      currentDevices.map(d => {
+                        if (d.deviceId === deviceId) {
+                          const updatedDevice = {
+                            ...d,
+                            data: {
+                              ...iotData,
+                              isOnline: iotData.isOnline || false,
+                              smokeLevel: iotData.smokeLevel || null // Ensure smokeLevel is captured
                             }
-                          : d
-                      )
+                          };
+
+                          // Check for Smoke Detector Alert
+                          if (updatedDevice.type === 'smoke') {
+                            handleSensorAlert(deviceId, updatedDevice.name, 'smoke', iotData.smokeDetected === true);
+                          }
+
+                          // Check for Shock Sensor Alert
+                          if (updatedDevice.type === 'shock') {
+                            handleSensorAlert(deviceId, updatedDevice.name, 'shock', iotData.shockDetected === true);
+                          }
+
+                          return updatedDevice;
+                        } else {
+                          return d;
+                        }
+                      })
                     );
                   }
                 });
@@ -355,7 +377,8 @@ export default function Dashboard({ navigation }) {
                         conditions: device.conditions,
                         data: {
                           ...iotData,
-                          isOnline: iotData.isOnline || false
+                          isOnline: iotData.isOnline || false,
+                          smokeLevel: iotData.smokeLevel || null // Ensure smokeLevel is captured
                         }
                       }];
                     } else {
@@ -365,7 +388,8 @@ export default function Dashboard({ navigation }) {
                         ...updatedDevices[deviceIndex],
                         data: {
                           ...iotData,
-                          isOnline: iotData.isOnline || false
+                          isOnline: iotData.isOnline || false,
+                          smokeLevel: iotData.smokeLevel || null // Ensure smokeLevel is captured
                         }
                       };
                       return updatedDevices;
@@ -394,7 +418,8 @@ export default function Dashboard({ navigation }) {
                 conditions: device.conditions,
                 data: {
                   ...device.data,
-                  isOnline: device.data?.isOnline || false
+                  isOnline: device.data?.isOnline || false,
+                  smokeLevel: device.data?.smokeLevel || null // Ensure smokeLevel is captured
                 }
               });
             }
@@ -521,17 +546,40 @@ export default function Dashboard({ navigation }) {
   };
 
   const renderDeviceContent = (item) => {
-    // Helper function to render device details based on type
-    if (item.data?.Status !== undefined) {
-      // Device with Status field
+    // First check for devices with Environment and Threshold fields
+    if (item.data?.Environment !== undefined || item.data?.Threshold !== undefined) {
       return (
         <>
           <View style={styles.deviceDataRow}>
-            <Text style={styles.dataLabel}>Status</Text>
+            <Text style={styles.dataLabel}>Environment</Text>
             <Text style={styles.dataValue}>
-              {item.data.Status === '1' ? <Text>Door Locked</Text> : <Text>Door Unlocked</Text>}
+              {item.data.Environment || 'Not set'}
             </Text>
           </View>
+
+          <View style={styles.deviceDataRow}>
+            <Text style={styles.dataLabel}>Operator</Text>
+            <Text style={styles.dataValue}>
+              {item.data.Operator || '>'}
+            </Text>
+          </View>
+
+          <View style={styles.deviceDataRow}>
+            <Text style={styles.dataLabel}>Threshold</Text>
+            <Text style={styles.dataValue}>
+              {item.data.Threshold}
+            </Text>
+          </View>
+          
+          {/* Display smoke level if it exists */}
+          {item.data?.smokeLevel !== undefined && (
+            <View style={styles.deviceDataRow}>
+              <Text style={styles.dataLabel}>Smoke Level</Text>
+              <Text style={styles.dataValue}>
+                {item.data.smokeLevel}
+              </Text>
+            </View>
+          )}
 
           <View style={styles.deviceDataRow}>
             <Text style={styles.dataLabel}>Last Status Update</Text>
@@ -541,28 +589,13 @@ export default function Dashboard({ navigation }) {
           </View>
         </>
       );
-    } else if (item.data?.Threshold !== undefined) {
-      // Device with Threshold field
+    } else if (item.data?.Status !== undefined) {
       return (
         <>
           <View style={styles.deviceDataRow}>
-            <Text style={styles.dataLabel}>Operator</Text>
+            <Text style={styles.dataLabel}>Status</Text>
             <Text style={styles.dataValue}>
-              {item.data.Operator || '>'}
-            </Text>
-          </View>
-
-          <View style={styles.deviceDataRow}>
-            <Text style={styles.dataLabel}>Environment</Text>
-            <Text style={styles.dataValue}>
-              {item.data.Environment || 'Not set'}
-            </Text>
-          </View>
-
-          <View style={styles.deviceDataRow}>
-            <Text style={styles.dataLabel}>Threshold</Text>
-            <Text style={styles.dataValue}>
-              {item.data.Threshold}
+              {Number(item.data.Status) === 1 ? 'Door Locked' : 'Door Unlocked'}
             </Text>
           </View>
 
@@ -636,7 +669,7 @@ export default function Dashboard({ navigation }) {
             { backgroundColor: item.data?.isOnline ? '#4CAF50' : '#FF3B30' }
           ]} />
           <Text style={styles.statusText}>
-            {item.data?.isOnline ? <Text>Online</Text> : <Text>Offline</Text>}
+            {item.data?.isOnline ? 'Online' : 'Offline'}
           </Text>
         </View>
       </View>
@@ -647,13 +680,12 @@ export default function Dashboard({ navigation }) {
         {/* Toggle if device is dynamic and has toggle type */}
         {item.isDynamic && item.conditions?.type === 'toggle' && (
           <View style={styles.toggleContainer}>
-            <TouchableOpacity onPress={() => handleToggleChange(item)} activeOpacity={0.8}>
-              <View style={[styles.toggleBackground, { backgroundColor: item.data?.Status === '1' ? '#4CAF50' : '#FF3B30' }]}>
-                <Text style={styles.toggleText}>
-                  {item.data?.Status === '1' ? item.conditions.toggleStates.onText || 'ON' : item.conditions.toggleStates.offText || 'OFF'}
-                </Text>
-              </View>
-            </TouchableOpacity>
+            <AnimatedToggle
+              value={Number(item.data?.Status) === 1}
+              onToggle={() => handleToggleChange(item)}
+              onText={item.conditions.toggleStates.onText || 'ON'}
+              offText={item.conditions.toggleStates.offText || 'OFF'}
+            />
           </View>
         )}
 
@@ -832,7 +864,8 @@ export default function Dashboard({ navigation }) {
                   saveThresholdChanges(
                     item, 
                     item.conditions.threshold.operator,
-                    item.conditions.threshold.value
+                    item.conditions.threshold.value,
+                    item.conditions.threshold.environment
                   );
                 }}
               >
@@ -896,7 +929,8 @@ export default function Dashboard({ navigation }) {
             threshold: {
               value: '',
               operator: '>', 
-              action: 'alert'
+              action: 'alert',
+              environment: ''
             }
           });
         }
@@ -917,20 +951,24 @@ export default function Dashboard({ navigation }) {
             threshold: {
               value: deviceData.Threshold.toString(),
               operator: deviceData.Operator || '>', 
-              action: 'alert'
+              action: 'alert',
+              environment: deviceData.Environment || '' // Store Environment if available
             }
           });
         }
         // Then check for LockStatus or Status
         else if ('LockStatus' in deviceData || 'Status' in deviceData) {
+          // Check if Status exists and set its value as a number
+          const statusValue = 'Status' in deviceData ? Number(deviceData.Status) : undefined;
+          
           setConditions({
             type: 'toggle',
             minValue: '',
             maxValue: '',
             buttonActions: [],
             toggleStates: { 
-              on: '1', 
-              off: '0',
+              on: 1, 
+              off: 0,
               onText: 'LockStatus' in deviceData ? 'Locked' : 'ON',
               offText: 'LockStatus' in deviceData ? 'Unlocked' : 'OFF'
             },
@@ -940,6 +978,14 @@ export default function Dashboard({ navigation }) {
               operator: '>'
             }
           });
+          
+          // If Status already exists in deviceData, update it to a number in the deviceFound state
+          if (statusValue !== undefined) {
+            setDeviceFound({
+              ...deviceData,
+              Status: statusValue
+            });
+          }
         }
       } else {
         Alert.alert('Error', 'Device not found');
@@ -950,8 +996,8 @@ export default function Dashboard({ navigation }) {
     }
   };
 
-  // Modify the saveThresholdChanges function to work with inline editing
-  const saveThresholdChanges = async (device, newOperator, newValue) => {
+  // Modify the saveThresholdChanges function
+  const saveThresholdChanges = async (device, newOperator, newValue, newEnvironment) => {
     try {
       const auth = getAuth();
       if (!auth.currentUser) {
@@ -990,7 +1036,8 @@ export default function Dashboard({ navigation }) {
                 ...deviceData.conditions,
                 threshold: {
                   operator: newOperator,
-                  value: newValue
+                  value: newValue,
+                  environment: newEnvironment || ''
                 }
               }
             };
@@ -1009,7 +1056,9 @@ export default function Dashboard({ navigation }) {
         await set(iotRef, {
           ...iotData,
           Operator: newOperator,
-          Threshold: Number(newValue) || 0
+          Threshold: Number(newValue) || 0,
+          Environment: newEnvironment || iotData.Environment || '',
+          smokeLevel: iotData.smokeLevel || null // Preserve smokeLevel if it exists
         });
       }
       
@@ -1024,7 +1073,8 @@ export default function Dashboard({ navigation }) {
               threshold: {
                 ...d.conditions.threshold,
                 operator: newOperator,
-                value: newValue
+                value: newValue,
+                environment: newEnvironment || ''
               }
             }
           } : d
@@ -1047,18 +1097,40 @@ export default function Dashboard({ navigation }) {
         toValue: value ? size : 0,
         useNativeDriver: true,
         bounciness: 8,
+        speed: 12 // Only use bounciness/speed configuration
       }).start();
     }, [value, size]);
 
     return (
-      <View style={styles.toggleContainer}>
-        <TouchableOpacity onPress={onToggle} activeOpacity={0.8}>
-          <View style={[styles.toggleBackground, { backgroundColor: value ? '#4CAF50' : '#FF3B30' }]}>
-            <Text style={styles.toggleText}>
-              {value ? onText || 'ON' : offText || 'OFF'}
-            </Text>
-          </View>
-        </TouchableOpacity>
+      <View style={styles.toggleWrapper}>
+        <Text style={[
+          styles.toggleLabel,
+          { color: value ? '#4CAF50' : '#FF3B30' }
+        ]}>
+          {value ? (onText || 'ON') : (offText || 'OFF')}
+        </Text>
+        <Pressable
+          onPress={onToggle}
+          style={[
+            styles.toggleTrack,
+            {
+              width: size * 2,
+              height: size + 4,
+              backgroundColor: value ? '#4CAF50' : '#FF3B30',
+            },
+          ]}
+        >
+          <Animated.View
+            style={[
+              styles.toggleThumb,
+              {
+                width: size - 4,
+                height: size - 4,
+                transform: [{ translateX: translation }],
+              },
+            ]}
+          />
+        </Pressable>
       </View>
     );
   };
@@ -1303,6 +1375,20 @@ export default function Dashboard({ navigation }) {
         });
       }
       
+      // Process toggle states to ensure they're numeric
+      let processedConditions = conditions;
+      if (isDynamic && conditions.type === 'toggle') {
+        processedConditions = {
+          ...conditions,
+          toggleStates: {
+            on: Number(conditions.toggleStates.on) || 0,
+            off: Number(conditions.toggleStates.off) || 0,
+            onText: conditions.toggleStates.onText || 'ON',
+            offText: conditions.toggleStates.offText || 'OFF'
+          }
+        };
+      }
+      
       // Prepare the device data
       const newDevice = {
         deviceId: deviceSearchId,
@@ -1311,9 +1397,13 @@ export default function Dashboard({ navigation }) {
         location: deviceLocation || 'Not specified',
         lastUpdated: new Date().toISOString(),
         isDynamic: isDynamic,
-        conditions: isDynamic ? conditions : null,
+        conditions: isDynamic ? processedConditions : null,
         data: {
-          isOnline: deviceFound?.isOnline || false
+          isOnline: deviceFound?.isOnline || false,
+          // If device has Status, ensure it's numeric
+          ...(deviceFound?.Status !== undefined && {
+            Status: Number(deviceFound.Status)
+          })
         }
       };
 
@@ -1331,14 +1421,26 @@ export default function Dashboard({ navigation }) {
         if (iotSnapshot.exists()) {
           const iotData = iotSnapshot.val();
           
-          if (conditions.type === 'threshold') {
-            // Update Threshold and Operator fields in IOTs collection
+          if (processedConditions.type === 'threshold') {
+            // Update Threshold, Operator, and Environment fields in IOTs collection
             await set(iotRef, {
               ...iotData,
-              Operator: conditions.threshold.operator,
-              Threshold: Number(conditions.threshold.value) || 0
+              Operator: processedConditions.threshold.operator,
+              Threshold: Number(processedConditions.threshold.value) || 0,
+              Environment: processedConditions.threshold.environment || iotData.Environment || '',
+              smokeLevel: iotData.smokeLevel || null // Preserve smokeLevel if it exists
             });
             console.log('Updated threshold settings in IOTs collection');
+          } else if (processedConditions.type === 'toggle') {
+            // Ensure Status/LockStatus is set with proper numeric value
+            const fieldToUpdate = 'LockStatus' in iotData ? 'LockStatus' : 'Status';
+            await set(iotRef, {
+              ...iotData,
+              [fieldToUpdate]: Number(processedConditions.toggleStates.on) || 0,
+              lastStatusUpdate: new Date().toISOString(),
+              smokeLevel: iotData.smokeLevel || null // Preserve smokeLevel if it exists
+            });
+            console.log(`Updated ${fieldToUpdate} in IOTs collection`);
           }
         }
       }
@@ -1357,16 +1459,17 @@ export default function Dashboard({ navigation }) {
         maxValue: '',
         buttonActions: [],
         toggleStates: { 
-          on: '', 
-          off: '',
-          onText: '',
-          offText: ''
+          on: 1,
+          off: 0,
+          onText: 'ON',
+          offText: 'OFF'
         },
         truefalseValue: { true: '', false: '' },
         threshold: {
           value: '',
           operator: '>', 
-          action: 'alert'
+          action: 'alert',
+          environment: ''
         }
       });
       
@@ -1447,7 +1550,7 @@ export default function Dashboard({ navigation }) {
                       <View key={key} style={styles.deviceDataRow}>
                         <Text style={styles.dataLabel}>{key}:</Text>
                         <Text style={styles.dataValue}>
-                          {typeof value === 'boolean' ? <Text>{value.toString()}</Text> : <Text>{value}</Text>}
+                          {typeof value === 'boolean' ? value.toString() : value}
                         </Text>
                       </View>
                     ))}
@@ -1477,7 +1580,7 @@ export default function Dashboard({ navigation }) {
                         styles.statusText,
                         { color: deviceFound?.isOnline ? '#4CAF50' : '#FF3B30' }
                       ]}>
-                        {deviceFound?.isOnline ? <Text>Online</Text> : <Text>Offline</Text>}
+                        {deviceFound?.isOnline ? 'Online' : 'Offline'}
                       </Text>
                     </View>
                   </View>
@@ -1724,26 +1827,37 @@ export default function Dashboard({ navigation }) {
 
                     {conditions.type === 'toggle' && (
                       <>
-                        <Text style={styles.inputLabel}>Toggle States</Text>
+                        <Text style={styles.inputLabel}>Toggle States (Numeric Values)</Text>
+                      
                         <TextInput
                           style={styles.input}
-                          value={conditions.toggleStates.on}
-                          onChangeText={(value) => setConditions({
-                            ...conditions,
-                            toggleStates: {...conditions.toggleStates, on: value}
-                          })}
-                          placeholder="On State Value ( 0 or 1 )"
-                          editable={!deviceFound || (!('LockStatus' in deviceFound) && !('Status' in deviceFound))}
+                          value={String(conditions.toggleStates.on)}
+                          onChangeText={(value) => {
+                            // Only allow numeric input
+                            if (/^\d*$/.test(value)) {
+                              setConditions({
+                                ...conditions,
+                                toggleStates: {...conditions.toggleStates, on: Number(value) || 0}
+                              });
+                            }
+                          }}
+                          placeholder="On State Value (numeric, e.g., 1)"
+                          keyboardType="numeric"
                         />
                         <TextInput
                           style={styles.input}
-                          value={conditions.toggleStates.off}
-                          onChangeText={(value) => setConditions({
-                            ...conditions,
-                            toggleStates: {...conditions.toggleStates, off: value}
-                          })}
-                          placeholder="Off State Value ( 0 or 1 )"
-                          editable={!deviceFound || (!('LockStatus' in deviceFound) && !('Status' in deviceFound))}
+                          value={String(conditions.toggleStates.off)}
+                          onChangeText={(value) => {
+                            // Only allow numeric input
+                            if (/^\d*$/.test(value)) {
+                              setConditions({
+                                ...conditions,
+                                toggleStates: {...conditions.toggleStates, off: Number(value) || 0}
+                              });
+                            }
+                          }}
+                          placeholder="Off State Value (numeric, e.g., 0)"
+                          keyboardType="numeric"
                         />
                         <Text style={styles.inputLabel}>Toggle Labels</Text>
                         <TextInput
@@ -1754,7 +1868,6 @@ export default function Dashboard({ navigation }) {
                             toggleStates: {...conditions.toggleStates, onText: value}
                           })}
                           placeholder="On State Label (ON, Running, Locked)"
-                          editable={!deviceFound || (!('LockStatus' in deviceFound) && !('Status' in deviceFound))}
                         />
                         <TextInput
                           style={styles.input}
@@ -1764,7 +1877,6 @@ export default function Dashboard({ navigation }) {
                             toggleStates: {...conditions.toggleStates, offText: value}
                           })}
                           placeholder="Off State Label (OFF, Stopped, Unlocked)"
-                          editable={!deviceFound || (!('LockStatus' in deviceFound) && !('Status' in deviceFound))}
                         />
                       </>
                     )}
@@ -1833,6 +1945,7 @@ export default function Dashboard({ navigation }) {
                             </View>
                           </View>
 
+                          <Text style={styles.inputLabel}>Threshold Value</Text>
                           <TextInput
                             style={styles.input}
                             value={conditions.threshold.value}
@@ -1872,15 +1985,17 @@ export default function Dashboard({ navigation }) {
       maxValue: '',
       buttonActions: [],
       toggleStates: type === 'toggle' ? { 
-        on: '1', 
-        off: '0',
+        on: 1, 
+        off: 0,
         onText: 'ON',
         offText: 'OFF'
       } : conditions.toggleStates,
       truefalseValue: type === 'truefalse' ? { true: '', false: '' } : conditions.truefalseValue,
       threshold: type === 'threshold' ? {
         value: '',
-        operator: '>'
+        operator: '>',
+        environment: '',
+        action: 'alert'
       } : conditions.threshold
     });
   };
@@ -1968,18 +2083,20 @@ export default function Dashboard({ navigation }) {
 
         // Determine which field to toggle (LockStatus or Status)
         const fieldToToggle = 'LockStatus' in currentData ? 'LockStatus' : 'Status';
-        const currentValue = currentData[fieldToToggle];
+        const currentValue = Number(currentData[fieldToToggle]); // Convert to number
 
-        // Get the toggle states from device conditions
-        const { on, off } = device.conditions?.toggleStates || { on: '1', off: '0' };
+        // Get the toggle states from device conditions and convert to numbers
+        const { on, off } = device.conditions?.toggleStates || { on: 0, off: 1 }; // Default numeric values
+        const onValue = Number(on);
+        const offValue = Number(off);
 
         // Toggle the value
-        newValue = currentValue === on ? off : on;
+        newValue = currentValue === onValue ? offValue : onValue;
 
-        // Update the device state in Firebase
+        // Update the device state in Firebase with numeric value
         await set(iotRef, {
           ...currentData,
-          [fieldToToggle]: newValue,
+          [fieldToToggle]: newValue, // Store as number
           lastStatusUpdate: new Date().toISOString()
         });
 
@@ -1991,7 +2108,7 @@ export default function Dashboard({ navigation }) {
                   ...d,
                   data: {
                     ...d.data,
-                    [fieldToToggle]: newValue,
+                    [fieldToToggle]: newValue, // Store as number
                     lastStatusUpdate: new Date().toISOString()
                   }
                 }
@@ -2006,6 +2123,55 @@ export default function Dashboard({ navigation }) {
     } catch (error) {
       console.error('Error toggling device:', error);
       Alert.alert('Error', 'Failed to toggle device: ' + error.message);
+    }
+  };
+
+  // Add this function at the component level
+  const handleSensorAlert = (deviceId, deviceName, type, detected) => {
+    const currentTime = Date.now();
+    const lastAlert = lastAlertTime[`${deviceId}_${type}`] || 0;
+
+    // Check if enough time has passed since the last alert
+    if (currentTime - lastAlert > ALERT_COOLDOWN) {
+      if (detected && !alertStatus[deviceId]?.[type]) {
+        // Update last alert time
+        setLastAlertTime(prev => ({
+          ...prev,
+          [`${deviceId}_${type}`]: currentTime
+        }));
+
+        // Show the alert with additional options
+        Alert.alert(
+          `${type.charAt(0).toUpperCase() + type.slice(1)} Detected!`,
+          `${type.charAt(0).toUpperCase() + type.slice(1)} detected by sensor: ${deviceName || deviceId}`,
+          [
+            {
+              text: 'View Details',
+              onPress: () => {
+                // You can add navigation to device details or specific handling here
+                console.log('View details pressed');
+              }
+            },
+            {
+              text: 'Dismiss',
+              style: 'cancel'
+            }
+          ],
+          { cancelable: true }
+        );
+
+        // Update alert status
+        setAlertStatus(prev => ({
+          ...prev,
+          [deviceId]: { ...prev[deviceId], [type]: true }
+        }));
+      } else if (!detected && alertStatus[deviceId]?.[type]) {
+        // Reset alert status when condition clears
+        setAlertStatus(prev => ({
+          ...prev,
+          [deviceId]: { ...prev[deviceId], [type]: false }
+        }));
+      }
     }
   };
 
@@ -2086,7 +2252,7 @@ export default function Dashboard({ navigation }) {
                       <View style={styles.personCountContainer}>
                         <Ionicons name="people" size={16} color="#666" />
                         <Text style={styles.personCountText}>
-                          {personCount + ' ' + (personCount === 1 ? 'person' : 'people') + ' detected'}
+                          {personCount} {personCount === 1 ? 'person' : 'people'} detected
                         </Text>
                       </View>
                     </View>
@@ -2568,17 +2734,19 @@ const styles = StyleSheet.create({
   },
   toggleWrapper: {
     alignItems: 'center',
+    width: '100%',  // Ensure full width
   },
   toggleLabel: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#212121',
     marginBottom: 10,
+    textAlign: 'center',
   },
   toggleTrack: {
     borderRadius: 34,
     padding: 2,
     justifyContent: 'center',
+    position: 'relative',  // Ensure proper positioning
   },
   toggleThumb: {
     backgroundColor: '#FFF',
@@ -2591,6 +2759,8 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
     elevation: 5,
+    position: 'absolute',  // Improve positioning
+    left: 2,  // Add left offset
   },
   thresholdContainer: {
     marginTop: 10,
@@ -3072,16 +3242,21 @@ const styles = StyleSheet.create({
     marginLeft: 4,
     fontWeight: '500',
   },
-  toggleBackground: {
-    padding: 5,
-    borderRadius: 15,
-    width: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
+  inputInfoContainer: {
+    backgroundColor: '#F0F8FF',
+    padding: 8,
+    borderRadius: 6,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#C8E1FF',
   },
-  toggleText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
+  environmentInput: {
+    backgroundColor: '#F8F9FA',
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    marginBottom: 10,
   },
 }); 
