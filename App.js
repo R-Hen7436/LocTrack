@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { getAuth, onAuthStateChanged, signOut } from 'firebase/auth';
@@ -125,6 +125,7 @@ export default function App() {
   const [locationAlertMessage, setLocationAlertMessage] = useState('');
   const [flashMessage, setFlashMessage] = useState('');
   const [showFlash, setShowFlash] = useState(false);
+  const shownAlertsRef = useRef({});
 
   // Add notification received handler
   useEffect(() => {
@@ -206,102 +207,132 @@ export default function App() {
             if (device.Readings === "Shock Detected") {
               console.log('Shock detected for device:', deviceId);
               
-              // Send notification for shock detection
-              await Notifications.scheduleNotificationAsync({
-                content: {
-                  title: "⚠️ SHOCK DETECTED!",
-                  body: `Device ${deviceId} has detected a shock. Tap to call emergency services.`,
-                  data: { type: 'shock', deviceId },
-                  sound: true,
-                  priority: Notifications.AndroidNotificationPriority.HIGH,
-                },
-                trigger: null,
-              });
-              
-              // Show alert with auto-dial option for 911
-              Alert.alert(
-                '⚠️ SHOCK DETECTED!',
-                `Device ${deviceId} has detected a shock. Call Emergency Services (911) immediately?`,
-                [
-                  {
-                    text: 'Cancel',
-                    style: 'cancel'
+              // Check if we've already shown an alert for this device's shock detection
+              const alertKey = `${deviceId}-shock`;
+              if (!shownAlertsRef.current[alertKey]) {
+                console.log('Showing shock alert for first time:', alertKey);
+                // Mark as shown immediately to prevent race conditions
+                shownAlertsRef.current[alertKey] = true;
+                
+                // Send notification for shock detection
+                await Notifications.scheduleNotificationAsync({
+                  content: {
+                    title: "⚠️ SHOCK DETECTED!",
+                    body: `Device ${deviceId} has detected a shock or vibration. Tap to call emergency services.`,
+                    data: { type: 'shock', deviceId },
+                    sound: true,
+                    priority: Notifications.AndroidNotificationPriority.HIGH,
                   },
-                  {
-                    text: 'Call 911',
-                    style: 'destructive',
-                    onPress: async () => {
-                      try {
-                        const phoneUrl = 'tel:911';
-                        const canOpen = await Linking.canOpenURL(phoneUrl);
-                        if (canOpen) {
-                          await Linking.openURL(phoneUrl);
-                        } else if (Platform.OS === 'android') {
-                          await IntentLauncher.startActivityAsync(
-                            'android.intent.action.DIAL',
-                            { data: phoneUrl }
-                          );
+                  trigger: null,
+                });
+                
+                // Show alert with auto-dial option for 911
+                Alert.alert(
+                  '⚠️ SHOCK DETECTED!',
+                  `Device ${deviceId} has detected a shock. Call Emergency Services (911) immediately?`,
+                  [
+                    {
+                      text: 'Cancel',
+                      style: 'cancel'
+                    },
+                    {
+                      text: 'Call 911',
+                      style: 'destructive',
+                      onPress: async () => {
+                        try {
+                          const phoneUrl = 'tel:911';
+                          const canOpen = await Linking.canOpenURL(phoneUrl);
+                          if (canOpen) {
+                            await Linking.openURL(phoneUrl);
+                          } else if (Platform.OS === 'android') {
+                            await IntentLauncher.startActivityAsync(
+                              'android.intent.action.DIAL',
+                              { data: phoneUrl }
+                            );
+                          }
+                        } catch (error) {
+                          console.error('Error making emergency call:', error);
+                          Alert.alert('Error', 'Failed to initiate call. Please dial 911 manually.');
                         }
-                      } catch (error) {
-                        console.error('Error making emergency call:', error);
-                        Alert.alert('Error', 'Failed to initiate call. Please dial 911 manually.');
                       }
                     }
-                  }
-                ],
-                { cancelable: false }
-              );
+                  ],
+                  { cancelable: false }
+                );
+              }
+            } else if (device.Readings !== "Shock Detected") {
+              // Reset the shown status when readings change back to normal
+              const alertKey = `${deviceId}-shock`;
+              if (shownAlertsRef.current[alertKey]) {
+                console.log('Resetting shock alert status for:', alertKey);
+                delete shownAlertsRef.current[alertKey];
+              }
             }
             
             // Handle smoke detection
             if (device.Environment === "Smoke Detected") {
               console.log('Smoke detected for device:', deviceId);
               
-              // Send notification for smoke detection
-              await Notifications.scheduleNotificationAsync({
-                content: {
-                  title: "🚨 SMOKE DETECTED!",
-                  body: `Device ${deviceId} has detected smoke. Tap to call emergency services.`,
-                  data: { type: 'smoke', deviceId },
-                  sound: true,
-                  priority: Notifications.AndroidNotificationPriority.HIGH,
-                },
-                trigger: null,
-              });
-              
-              // Show alert with auto-dial option for 911
-              Alert.alert(
-                '🚨 SMOKE DETECTED!',
-                `Device ${deviceId} has detected smoke. Call Emergency Services (911) immediately?`,
-                [
-                  {
-                    text: 'Cancel',
-                    style: 'cancel'
+              // Check if we've already shown an alert for this device's smoke detection
+              const alertKey = `${deviceId}-smoke`;
+              if (!shownAlertsRef.current[alertKey]) {
+                console.log('Showing smoke alert for first time:', alertKey);
+                // Mark as shown immediately to prevent race conditions
+                shownAlertsRef.current[alertKey] = true;
+                
+                // Send notification for smoke detection
+                await Notifications.scheduleNotificationAsync({
+                  content: {
+                    title: "🚨 SMOKE DETECTED!",
+                    body: `Device ${deviceId} has detected smoke. Tap to call emergency services.`,
+                    data: { type: 'smoke', deviceId },
+                    sound: true,
+                    priority: Notifications.AndroidNotificationPriority.HIGH,
                   },
-                  {
-                    text: 'Call 911',
-                    style: 'destructive',
-                    onPress: async () => {
-                      try {
-                        const phoneUrl = 'tel:911';
-                        const canOpen = await Linking.canOpenURL(phoneUrl);
-                        if (canOpen) {
-                          await Linking.openURL(phoneUrl);
-                        } else if (Platform.OS === 'android') {
-                          await IntentLauncher.startActivityAsync(
-                            'android.intent.action.DIAL',
-                            { data: phoneUrl }
-                          );
+                  trigger: null,
+                });
+                
+                // Show alert with auto-dial option for 911
+                Alert.alert(
+                  '🚨 SMOKE DETECTED!',
+                  `Device ${deviceId} has detected smoke. Call Emergency Services (911) immediately?`,
+                  [
+                    {
+                      text: 'Cancel',
+                      style: 'cancel'
+                    },
+                    {
+                      text: 'Call 911',
+                      style: 'destructive',
+                      onPress: async () => {
+                        try {
+                          const phoneUrl = 'tel:911';
+                          const canOpen = await Linking.canOpenURL(phoneUrl);
+                          if (canOpen) {
+                            await Linking.openURL(phoneUrl);
+                          } else if (Platform.OS === 'android') {
+                            await IntentLauncher.startActivityAsync(
+                              'android.intent.action.DIAL',
+                              { data: phoneUrl }
+                            );
+                          }
+                        } catch (error) {
+                          console.error('Error making emergency call:', error);
+                          Alert.alert('Error', 'Failed to initiate call. Please dial 911 manually.');
                         }
-                      } catch (error) {
-                        console.error('Error making emergency call:', error);
-                        Alert.alert('Error', 'Failed to initiate call. Please dial 911 manually.');
                       }
                     }
-                  }
-                ],
-                { cancelable: false }
-              );
+                  ],
+                  { cancelable: false }
+                );
+              }
+            } else if (device.Environment !== "Smoke Detected") {
+              // Reset the shown status when environment changes back to normal
+              const alertKey = `${deviceId}-smoke`;
+              if (shownAlertsRef.current[alertKey]) {
+                console.log('Resetting smoke alert status for:', alertKey);
+                delete shownAlertsRef.current[alertKey];
+              }
             }
           } catch (error) {
             console.error('Error processing device update:', error);
@@ -321,6 +352,9 @@ export default function App() {
     console.log('Setting up device listeners');
     let deviceListener = null;
     
+    // Initialize alert tracking when setting up listeners
+    shownAlertsRef.current = {};
+    
     try {
       // Set up the listener
       setupDeviceListener().then(listener => {
@@ -339,6 +373,8 @@ export default function App() {
         if (deviceListener) {
           deviceListener();
         }
+        // Clear alert tracking on cleanup
+        shownAlertsRef.current = {};
       } catch (error) {
         console.error('Error cleaning up device listener:', error);
       }
