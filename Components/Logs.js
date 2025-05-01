@@ -53,25 +53,23 @@ const formatTimestamp = (timestamp) => {
 
 const getLogIcon = (logType) => {
   switch (logType) {
-    case 'login':
-      return { name: 'log-in-outline', color: '#4CD964' };
-    case 'logout':
-      return { name: 'log-out-outline', color: '#FF9500' };
-    case 'location':
-      return { name: 'location-outline', color: '#007AFF' };
-    case 'geofence':
-      return { name: 'shield-checkmark-outline', color: '#5AC8FA' };
+    case 'warning':
+      return { name: 'warning-outline', color: '#FF9500' };
     case 'error':
-      return { name: 'warning-outline', color: '#FF3B30' };
-    case 'permission':
-      return { name: 'key-outline', color: '#FF9500' };
-    case 'system':
-      return { name: 'cog-outline', color: '#8E8E93' };
+      return { name: 'alert-circle-outline', color: '#FF3B30' };
     case 'userOnline':
-      return { name: 'person-add-outline', color: '#4CD964' };
+      return { name: 'person', color: '#4CD964' };
     case 'userOffline':
-      return { name: 'person-remove-outline', color: '#FF9500' };
+      return { name: 'person-outline', color: '#8E8E93' };
+    case 'location':
+      return { name: 'location-outline', color: '#5AC8FA' };
     case 'activity':
+      return { name: 'analytics-outline', color: '#4CD964' };
+    case 'geofenceEnter':
+      return { name: 'shield-checkmark', color: '#4CD964' }; // Green shield for entering geofence
+    case 'geofenceExit':
+      return { name: 'shield-outline', color: '#FF3B30' }; // Red outline shield for exiting geofence
+    case 'rssi':
       return { name: 'pulse-outline', color: '#007AFF' };
     default:
       return { name: 'information-circle-outline', color: '#8E8E93' };
@@ -241,16 +239,24 @@ export default function Logs({ navigation }) {
           try {
             // First try to fetch from the activityLog path where our new logs are stored
             const activityLogRef = ref(db, `teams/${userData.teamCode}/activityLog`);
+            console.log(`📋 Checking for activity logs at: teams/${userData.teamCode}/activityLog`);
             const activitySnapshot = await get(activityLogRef);
             
             if (activitySnapshot.exists()) {
+              console.log(`✅ Activity logs found! Count: ${Object.keys(activitySnapshot.val()).length}`);
               let activityLogs = [];
               activitySnapshot.forEach((childSnapshot) => {
+                const eventType = childSnapshot.val().eventType || 'activity';
+                const message = childSnapshot.val().message;
+                
+                console.log(`📌 Found log entry: type=${eventType}, message=${message}`);
+                
                 const log = {
                   id: childSnapshot.key,
-                  type: childSnapshot.val().eventType || 'activity',
-                  message: childSnapshot.val().message,
+                  type: eventType,
+                  message: message,
                   timestamp: childSnapshot.val().timestamp,
+                  clientTimestamp: childSnapshot.val().clientTimestamp,
                   userId: childSnapshot.val().userId,
                   userDisplayName: childSnapshot.val().userName,
                   details: null
@@ -258,6 +264,9 @@ export default function Logs({ navigation }) {
                 // Apply filter
                 if (filter === 'all' || log.type === filter) {
                   activityLogs.push(log);
+                  console.log(`✓ Added log to display list: ${log.type} - ${log.message}`);
+                } else {
+                  console.log(`✗ Filtered out log due to type mismatch: current filter=${filter}, log type=${log.type}`);
                 }
               });
               
@@ -266,13 +275,18 @@ export default function Logs({ navigation }) {
                 // Client-side sorting (newest first)
                 activityLogs.sort((a, b) => {
                   // Handle server timestamps which might be objects with .seconds property
-                  const getTime = (timestamp) => {
+                  const getTime = (log) => {
+                    const timestamp = log.timestamp;
                     if (timestamp && typeof timestamp === 'object' && timestamp.seconds) {
                       return timestamp.seconds * 1000;
                     }
+                    // If serverTimestamp doesn't exist or is invalid, fall back to clientTimestamp
+                    if (log.clientTimestamp) {
+                      return log.clientTimestamp;
+                    }
                     return timestamp || 0;
                   };
-                  return getTime(b.timestamp) - getTime(a.timestamp);
+                  return getTime(b) - getTime(a);
                 });
                 
                 // Apply pagination logic
@@ -411,10 +425,18 @@ export default function Logs({ navigation }) {
   
   const renderFilterButton = (filterType, label) => (
     <TouchableOpacity
-      style={[styles.filterButton, filter === filterType && styles.filterButtonActive]}
+      style={[
+        styles.filterButton,
+        filter === filterType && styles.filterButtonActive
+      ]}
       onPress={() => setFilter(filterType)}
     >
-      <Text style={[styles.filterButtonText, filter === filterType && styles.filterButtonTextActive]}>
+      <Text
+        style={[
+          styles.filterButtonText,
+          filter === filterType && styles.filterButtonTextActive
+        ]}
+      >
         {label}
       </Text>
     </TouchableOpacity>
@@ -502,7 +524,11 @@ export default function Logs({ navigation }) {
           <View style={styles.logDetails}>
             {!item.isDeviceInfo && (
               <Text style={styles.logTimestamp}>
-                {item.details?.timestamp_readable || formatTimestamp(item.timestamp)}
+                {item.details?.timestamp_readable || (
+                  item.clientTimestamp ? 
+                  formatTimestamp(item.clientTimestamp) : 
+                  formatTimestamp(item.timestamp)
+                )}
               </Text>
             )}
           </View>
@@ -574,27 +600,28 @@ export default function Logs({ navigation }) {
     <View style={styles.container}>
       <SafeAreaView style={styles.content}>
         <View style={styles.header}>
-          <Text style={styles.headerTitle}>Activity Logs</Text>
-          <TouchableOpacity style={styles.refreshIcon} onPress={handleRefresh}>
-            <Ionicons name="refresh" size={22} color="#007AFF" />
+          <Text style={styles.headerTitle}>Logs</Text>
+          <TouchableOpacity onPress={handleRefresh} style={styles.refreshIcon}>
+            <Ionicons name="refresh" size={24} color="#007AFF" />
           </TouchableOpacity>
         </View>
         
         <ScrollView 
           horizontal 
-          showsHorizontalScrollIndicator={false} 
-          style={styles.filterScrollContainer}
-          contentContainerStyle={styles.filterContainer}
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.filterScrollContainer}
         >
-          {renderFilterButton('all', 'All')}
-          {renderFilterButton('login', 'Login')}
-          {renderFilterButton('logout', 'Logout')}
-          {renderFilterButton('location', 'Location')}
-          {renderFilterButton('geofence', 'Geofence')}
-          {renderFilterButton('userOnline', 'Online')}
-          {renderFilterButton('userOffline', 'Offline')}
-          {renderFilterButton('activity', 'Activity')}
-          {renderFilterButton('system', 'System')}
+          <View style={styles.filterContainer}>
+            {renderFilterButton('all', 'All')}
+            {renderFilterButton('activity', 'Activity')}
+            {renderFilterButton('location', 'Location')}
+            {renderFilterButton('userOnline', 'Online')}
+            {renderFilterButton('userOffline', 'Offline')}
+            {renderFilterButton('warning', 'Warnings')}
+            {renderFilterButton('error', 'Errors')}
+            {renderFilterButton('geofenceEnter', 'Enter Geofence')}
+            {renderFilterButton('geofenceExit', 'Exit Geofence')}
+          </View>
         </ScrollView>
         
         {loading ? (

@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, FlatList, Image, Alert, ActivityIndicator, SafeAreaView } from 'react-native';
 import { getAuth } from 'firebase/auth';
-import { getDatabase, ref, get, set, remove, onValue } from 'firebase/database';
+import { getDatabase, ref, get, set, remove, onValue, push, serverTimestamp } from 'firebase/database';
 import { Ionicons } from '@expo/vector-icons';
+import * as Notifications from 'expo-notifications';
 import Navbar from './Navbar';
 import CacheManager from './utils/CacheManager';
 
@@ -106,6 +107,70 @@ const isPointInsidePolygon = (point, polygon) => {
   return inside;
 };
 
+// Log team activity to Firebase
+const logTeamActivity = async (db, teamCode, userId, userName, eventType, message) => {
+  if (!teamCode || !userId || !eventType) {
+    console.error(`ACTIVITY LOG ERROR: Missing required parameters - teamCode: ${teamCode}, userId: ${userId}, eventType: ${eventType}`);
+    return;
+  }
+  
+  try {
+    console.log(`Attempting to log activity: ${eventType} for user ${userName} (${userId}) in team ${teamCode}`);
+    const logRef = ref(db, `teams/${teamCode}/activityLog`);
+    const newLogEntryRef = push(logRef); // Get a unique key
+    
+    // Include both server timestamp and client timestamp to ensure we have a value
+    const logEntry = {
+      timestamp: serverTimestamp(), // Use server time for accuracy
+      clientTimestamp: Date.now(), // Fallback client timestamp
+      userId: userId,
+      userName: userName || 'Unknown User',
+      eventType: eventType, // e.g., 'geofenceEnter', 'geofenceExit'
+      message: message || `User ${userName || userId} location changed.`
+    };
+    
+    await set(newLogEntryRef, logEntry);
+    console.log(`✅ ACTIVITY LOG SUCCESS: Event '${eventType}' for user ${userName || userId} logged to team ${teamCode}.`);
+    
+    // Double check if the log was actually written by reading it back
+    try {
+      const checkRef = ref(db, `teams/${teamCode}/activityLog/${newLogEntryRef.key}`);
+      const checkSnapshot = await get(checkRef);
+      
+      if (checkSnapshot.exists()) {
+        console.log(`✅ Verified log entry was written successfully: ${newLogEntryRef.key}`);
+      } else {
+        console.error(`❌ Failed to verify log entry was written: ${newLogEntryRef.key}`);
+      }
+    } catch (verifyError) {
+      console.error('Error verifying log entry:', verifyError);
+    }
+  } catch (error) {
+    console.error(`❌ ACTIVITY LOG ERROR: Failed to log event '${eventType}' for user ${userId}:`, error);
+  }
+};
+
+// Send a notification
+const sendNotification = async (title, body, data = {}) => {
+  try {
+    console.log(`Attempting to send notification: ${title} - ${body}`);
+    
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: title,
+        body: body,
+        data: data,
+        sound: true,
+        priority: Notifications.AndroidNotificationPriority.HIGH,
+      },
+      trigger: null, // Immediate notification
+    });
+    console.log(`✅ Notification sent successfully: ${title}`);
+  } catch (error) {
+    console.error(`❌ Error sending notification:`, error);
+  }
+};
+
 export default function UserManagement({ navigation }) {
   const [teamMembers, setTeamMembers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -114,11 +179,45 @@ export default function UserManagement({ navigation }) {
   const [userStats, setUserStats] = useState({});
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [teamGeofence, setTeamGeofence] = useState([]);
+  // Reference to store the previous geofence state of each member
+  const previousGeofenceStateRef = useRef({});
+  
   const auth = getAuth();
   const db = getDatabase();
 
   useEffect(() => {
+    // Request notification permissions when component mounts
+    const requestNotificationPermissions = async () => {
+      try {
+        // Configure notification handler
+        Notifications.setNotificationHandler({
+          handleNotification: async () => ({
+            shouldShowAlert: true,
+            shouldPlaySound: true,
+            shouldSetBadge: true,
+            priority: Notifications.AndroidNotificationPriority.HIGH,
+          }),
+        });
+
+        // Request permissions
+        const { status: existingStatus } = await Notifications.getPermissionsAsync();
+        if (existingStatus !== 'granted') {
+          const { status } = await Notifications.requestPermissionsAsync();
+          console.log('Notification permission status:', status);
+        }
+      } catch (error) {
+        console.error('Error requesting notification permissions:', error);
+      }
+    };
+
+    requestNotificationPermissions();
+    
     async function initialize() {
+      if (!auth.currentUser) {
+        setLoading(false);
+        return;
+      }
+      
       setLoading(true);
       
       // Load cached data first to show immediately
@@ -184,62 +283,150 @@ export default function UserManagement({ navigation }) {
       const locationsRef = ref(db, 'UsersCurrentLocation');
       
       return onValue(locationsRef, async (snapshot) => {
-        if (snapshot.exists()) {
-          const locationsData = snapshot.val();
-          console.log('User locations updated:', Object.keys(locationsData).length);
+        if (!snapshot.exists() || !auth.currentUser) return;
+        
+        const locationsData = snapshot.val();
+        console.log('User locations updated:', Object.keys(locationsData).length);
+        
+        // Get current user's team code
+        const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+        const userSnapshot = await get(userProfileRef);
+        
+        if (userSnapshot.exists()) {
+          const userData = userSnapshot.val();
+          const userTeamCode = userData.teamCode;
+          console.log(`Current user team code: ${userTeamCode}`);
           
-          // Get current user's team code
-          const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
-          const userSnapshot = await get(userProfileRef);
+          // Only include members from the same team
+          const filteredLocations = {};
+          const memberProfiles = {};
           
-          if (userSnapshot.exists()) {
-            const userData = userSnapshot.val();
-            const userTeamCode = userData.teamCode;
-            console.log(`Current user team code: ${userTeamCode}`);
+          // First determine which users are in the same team
+          for (const userId in locationsData) {
+            if (userId === auth.currentUser.uid) continue; // Skip current user
             
-            // Only include members from the same team
-            const filteredLocations = {};
-            
-            // First determine which users are in the same team
-            for (const userId in locationsData) {
-              if (userId === auth.currentUser.uid) continue; // Skip current user
+            try {
+              const memberProfileRef = ref(db, `users/${userId}/profile`);
+              const memberSnapshot = await get(memberProfileRef);
               
-              try {
-                const memberProfileRef = ref(db, `users/${userId}/profile`);
-                const memberSnapshot = await get(memberProfileRef);
+              if (memberSnapshot.exists()) {
+                const memberData = memberSnapshot.val();
+                const memberTeamCode = memberData.teamCode;
                 
-                if (memberSnapshot.exists()) {
-                  const memberData = memberSnapshot.val();
-                  const memberTeamCode = memberData.teamCode;
+                // Only include users with matching team code
+                if (memberTeamCode === userTeamCode) {
+                  // Get presence status for this user
+                  const presenceRef = ref(db, `users/${userId}/presence`);
+                  const presenceSnapshot = await get(presenceRef);
+                  const presenceData = presenceSnapshot.exists() ? presenceSnapshot.val() : { status: 'offline' };
                   
-                  // Only include users with matching team code
-                  if (memberTeamCode === userTeamCode) {
-                    // Get presence status for this user
-                    const presenceRef = ref(db, `users/${userId}/presence`);
-                    const presenceSnapshot = await get(presenceRef);
-                    const presenceData = presenceSnapshot.exists() ? presenceSnapshot.val() : { status: 'offline' };
-                    
-                    // Always include location data for team members regardless of presence status
-                    filteredLocations[userId] = {
-                      ...locationsData[userId],
-                      presence: presenceData // Include presence data
-                    };
-                    
-                    console.log(`Added user ${userId} to visible members (team ${memberTeamCode}), status: ${presenceData.status}`);
-                  } else {
-                    console.log(`Skipped user ${userId} - different team (${memberTeamCode} vs ${userTeamCode})`);
-                  }
+                  // Always include location data for team members regardless of presence status
+                  filteredLocations[userId] = {
+                    ...locationsData[userId],
+                    presence: presenceData // Include presence data
+                  };
+                  
+                  // Save member profile data for geofence checks
+                  memberProfiles[userId] = memberData;
+                  
+                  console.log(`Added user ${userId} to visible members (team ${memberTeamCode}), status: ${presenceData.status}`);
+                } else {
+                  console.log(`Skipped user ${userId} - different team (${memberTeamCode} vs ${userTeamCode})`);
                 }
-              } catch (error) {
-                console.error(`Error fetching profile for user ${userId}:`, error);
+              }
+            } catch (error) {
+              console.error(`Error fetching profile for user ${userId}:`, error);
+            }
+          }
+          
+          console.log(`Filtered locations: ${Object.keys(filteredLocations).length} team members found`);
+          setMembersLocations(filteredLocations);
+          
+          // Check geofence status for each team member and log/notify changes
+          if (teamGeofence.length >= 3) {
+            console.log(`Checking geofence status for ${Object.keys(filteredLocations).length} team members against a geofence with ${teamGeofence.length} points`);
+            
+            for (const userId in filteredLocations) {
+              const memberLocation = filteredLocations[userId];
+              const memberData = memberProfiles[userId];
+              
+              if (memberLocation.Latitude && memberLocation.Longitude) {
+                const memberPoint = {
+                  latitude: memberLocation.Latitude,
+                  longitude: memberLocation.Longitude
+                };
+                
+                const isInsideGeofence = isPointInsidePolygon(memberPoint, teamGeofence);
+                const memberName = formatName(memberData.firstName, memberData.middleName, memberData.lastName);
+                
+                // Get previous state from ref (default to undefined if not set yet)
+                const previousState = previousGeofenceStateRef.current[userId];
+                
+                console.log(`User ${memberName} (${userId}): 
+                  Current location: ${memberPoint.latitude}, ${memberPoint.longitude}
+                  Current geofence status: ${isInsideGeofence ? 'INSIDE' : 'OUTSIDE'}
+                  Previous geofence status: ${previousState === undefined ? 'UNKNOWN (first check)' : previousState ? 'INSIDE' : 'OUTSIDE'}
+                `);
+                
+                if (previousState === undefined) {
+                  // This is the first check, so we just store the state without notifying
+                  console.log(`⏭️ First status check for ${memberName}, setting initial state to ${isInsideGeofence ? 'INSIDE' : 'OUTSIDE'} without notification`);
+                  
+                  // Update the ref with the initial state
+                  previousGeofenceStateRef.current = {
+                    ...previousGeofenceStateRef.current,
+                    [userId]: isInsideGeofence
+                  };
+                } 
+                // ONLY log and notify if there's a CHANGE in state
+                else if (previousState !== isInsideGeofence) {
+                  console.log(`🔄 State change detected for ${memberName}!`);
+                  
+                  // Update the ref with the new state
+                  previousGeofenceStateRef.current = {
+                    ...previousGeofenceStateRef.current,
+                    [userId]: isInsideGeofence
+                  };
+                  
+                  const eventType = isInsideGeofence ? 'geofenceEnter' : 'geofenceExit';
+                  const message = isInsideGeofence
+                    ? `${memberName} is now inside the Geofenced Area.`
+                    : `${memberName} is now outside the Geofenced Area.`;
+                    
+                  console.log(`📝 Will log event: ${eventType} - ${message}`);
+                  
+                  // Log the activity - wrap in try/catch to ensure notification still runs
+                  try {
+                    await logTeamActivity(db, userTeamCode, userId, memberName, eventType, message);
+                  } catch (logError) {
+                    console.error(`Failed to log geofence activity: ${logError.message}`);
+                  }
+                  
+                  console.log(`🔔 Will send notification for: ${memberName}`);
+                  
+                  // Send notification - wrap in a separate try/catch
+                  try {
+                    // Force notification to be sent regardless of other errors
+                    await sendNotification(
+                      `Geofence Alert: ${memberName}`,
+                      message,
+                      { type: 'geofence', userId, inside: isInsideGeofence }
+                    );
+                  } catch (notifyError) {
+                    console.error(`Failed to send notification: ${notifyError.message}`);
+                  }
+                } else {
+                  console.log(`⏭️ No state change for ${memberName}, skipping log/notification. Still ${isInsideGeofence ? 'INSIDE' : 'OUTSIDE'}.`);
+                }
+              } else {
+                console.log(`⚠️ No valid location data for member ${memberProfiles[userId]?.firstName || userId}`);
               }
             }
-            
-            console.log(`Filtered locations: ${Object.keys(filteredLocations).length} team members found`);
-            setMembersLocations(filteredLocations);
           } else {
-            console.error("Current user profile not found");
+            console.log(`⚠️ Not enough geofence points (${teamGeofence.length}) to perform geofence check, minimum required: 3`);
           }
+        } else {
+          console.error("Current user profile not found");
         }
       });
     } catch (error) {
@@ -255,6 +442,8 @@ export default function UserManagement({ navigation }) {
     
     try {
       const fetchGeofence = async () => {
+        if (!auth.currentUser) return [];
+        
         const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
         const profileSnapshot = await get(userProfileRef);
         const userTeamCode = profileSnapshot.val()?.teamCode;
@@ -349,7 +538,10 @@ export default function UserManagement({ navigation }) {
     }
     
     try {
-      if (!auth.currentUser) return;
+      if (!auth.currentUser) {
+        setIsRefreshing(false);
+        return;
+      }
 
       const fetchTeamMembers = async () => {
         // Get owner's team code
@@ -606,7 +798,11 @@ export default function UserManagement({ navigation }) {
   return (
     <View style={styles.container}>
       <SafeAreaView style={styles.content}>
-        {loading ? (
+        {!auth.currentUser ? (
+          <View style={styles.loadingContainer}>
+            <Text style={styles.loadingText}>Please log in to view team members</Text>
+          </View>
+        ) : loading ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color="#007AFF" />
             <Text style={styles.loadingText}>Loading team members...</Text>

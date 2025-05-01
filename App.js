@@ -348,7 +348,7 @@ export default function App() {
   // Modify the existing notification tap handler useEffect
   useEffect(() => {
     const subscription = Notifications.addNotificationResponseReceivedListener(response => {
-      const { type, deviceId, location } = response.notification.request.content.data;
+      const { type, deviceId, location, userId, inside } = response.notification.request.content.data;
       
       if (type === 'location') {
         // Handle location notification tap if needed
@@ -361,6 +361,16 @@ export default function App() {
           console.error('Error making emergency call from notification:', error);
           Alert.alert('Error', 'Failed to initiate call. Please dial 911 manually.');
         }
+      } else if (type === 'geofence') {
+        // Handle geofence notification tap - navigate to UserManagement
+        console.log('Geofence notification tapped for user:', userId, 'Geofence status:', inside ? 'inside' : 'outside');
+        // If you have navigation context here, you could navigate to UserManagement
+        // Otherwise, just show an alert
+        Alert.alert(
+          'Geofence Alert',
+          `Member ${userId} is now ${inside ? 'inside' : 'outside'} the geofenced area.`,
+          [{ text: 'OK' }]
+        );
       }
     });
 
