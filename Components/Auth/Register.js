@@ -9,7 +9,9 @@ import {
   Platform,
   SafeAreaView,
   TouchableWithoutFeedback,
-  Keyboard
+  Keyboard,
+  Dimensions,
+  Alert
 } from 'react-native';
 import { getAuth, createUserWithEmailAndPassword, sendEmailVerification, updateProfile } from 'firebase/auth';
 import { getDatabase, ref, set, get } from 'firebase/database';
@@ -34,8 +36,15 @@ export default function Register({ navigation }) {
   const [role, setRole] = useState('member'); 
   const [isAdmin, setIsAdmin] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const windowHeight = Dimensions.get('window').height;
 
   const handleRegister = async () => {
+    if (!acceptedTerms) {
+      setError('You must accept the Terms and Conditions to register');
+      return;
+    }
+
     if (!firstName.trim() || !lastName.trim() || !email.trim() || !password.trim()) {
       setError('First name, last name, email, and password are required');
       return;
@@ -242,10 +251,17 @@ export default function Register({ navigation }) {
       <KeyboardAvoidingView 
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardAvoidingView}
-        keyboardVerticalOffset={50} // Keep the adjusted offset for now
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 50 : 0}
       >
         <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-          <ScrollView contentContainerStyle={styles.container}>
+          <ScrollView 
+            contentContainerStyle={[
+              styles.container,
+              { minHeight: windowHeight }
+            ]}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
             <View style={styles.headerContainer}>
               <Text style={styles.title}>Create account</Text>
               <Text style={styles.subtitle}>
@@ -357,6 +373,46 @@ export default function Register({ navigation }) {
                   />
                 )}
                 
+                {/* Terms and Conditions Checkbox */}
+                <View style={styles.termsContainer}>
+                  <TouchableOpacity 
+                    style={styles.checkbox}
+                    onPress={() => setAcceptedTerms(!acceptedTerms)}
+                  >
+                    {acceptedTerms && (
+                      <Ionicons 
+                        name="checkmark" 
+                        size={18} 
+                        color={theme.colors.primary} 
+                      />
+                    )}
+                  </TouchableOpacity>
+                  <View style={styles.termsTextContainer}>
+                    <Text style={styles.termsText}>
+                      I accept the{' '}
+                      <Text 
+                        style={styles.termsLink}
+                        onPress={() => {
+                          // You can add navigation to Terms page or show modal here
+                          Alert.alert(
+                            'Terms and Conditions',
+                            'By accepting these terms, you agree to:\n\n' +
+                            '1. Share your location data with your team\n' +
+                            '2. Allow notifications for important updates\n' +
+                            '3. Follow team safety guidelines\n' +
+                            '4. Keep your account information secure\n' +
+                            '5. Use the app responsibly\n\n' +
+                            'Your privacy and security are important to us.',
+                            [{ text: 'OK' }]
+                          );
+                        }}
+                      >
+                        Terms and Conditions
+                      </Text>
+                    </Text>
+                  </View>
+                </View>
+                
                 {error ? <Text style={styles.errorText}>{error}</Text> : null}
                 {message ? <Text style={styles.successText}>{message}</Text> : null}
                 
@@ -366,6 +422,7 @@ export default function Register({ navigation }) {
                   onPress={handleRegister}
                   size="lg"
                   style={styles.registerButton}
+                  disabled={!acceptedTerms}
                 />
                 
                 <View style={styles.loginLinkContainer}>
@@ -399,6 +456,7 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: 'center',
     padding: 24,
+    paddingBottom: Platform.OS === 'ios' ? 60 : 30, // Extra padding at bottom for keyboard
   },
   headerContainer: {
     marginBottom: 8,
@@ -421,6 +479,7 @@ const styles = StyleSheet.create({
   formCard: {
     padding: 24,
     marginBottom: 24,
+    marginTop: 'auto', // Push form to bottom when keyboard is closed
   },
   formContainer: {
     width: '100%',
@@ -502,6 +561,7 @@ const styles = StyleSheet.create({
   registerButton: {
     marginTop: 8,
     marginBottom: 16,
+    opacity: (props) => props.disabled ? 0.6 : 1,
   },
   loginLinkContainer: {
     flexDirection: 'row',
@@ -519,5 +579,36 @@ const styles = StyleSheet.create({
   loginButtonText: {
     fontWeight: '600',
     color: theme.colors.primary,
+  },
+  termsContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 20,
+    marginTop: 10,
+    paddingHorizontal: 4,
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderWidth: 2,
+    borderColor: theme.colors.border,
+    borderRadius: 6,
+    marginRight: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.backgroundAlt,
+  },
+  termsTextContainer: {
+    flex: 1,
+  },
+  termsText: {
+    fontSize: 14,
+    color: theme.colors.text.secondary,
+    lineHeight: 20,
+  },
+  termsLink: {
+    color: theme.colors.primary,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
   },
 }); 
