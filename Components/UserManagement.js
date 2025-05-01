@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, FlatList, Image, Alert, ActivityIndicator, SafeAreaView } from 'react-native';
 import { getAuth } from 'firebase/auth';
-import { getDatabase, ref, get, set, remove, onValue, push, serverTimestamp } from 'firebase/database';
+import { getDatabase, ref, get, set, remove, onValue, push, serverTimestamp, update } from 'firebase/database';
 import { Ionicons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
@@ -196,6 +196,108 @@ const sendNotification = async (title, body, data = {}) => {
   } catch (error) {
     console.error(`❌ Error sending notification:`, error);
     return null;
+  }
+};
+
+// Add a new function to reset steps and location data
+const resetStepsAndLocationData = async () => {
+  try {
+    Alert.alert(
+      "Reset Testing Data",
+      "This will reset your step count, location history, and geofence points for testing purposes. Continue?",
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Reset", 
+          style: "destructive",
+          onPress: async () => {
+            // Show loading
+            Alert.alert("Resetting...", "Please wait while data is being reset.", []);
+            
+            try {
+              // 1. Reset local state
+              setStepCount(0);
+              stepCountRef.current = 0;
+              setStepsSinceLastGpsUpdate(0);
+              stepsSinceLastGpsUpdateRef.current = 0;
+              setRealStepCount(0);
+              setStepCountHistory([]);
+              setLocationHistory([]);
+              setIsUserMoving(false);
+              setLastStepUpdateTime(Date.now());
+              lastSmoothedCoordinateRef.current = null;
+              lastTrailPointStepsRef.current = null;
+              setPoints([]); // Reset owner points
+              setTeamGeofence([]); // Reset member geofence
+              
+              if (auth.currentUser?.uid) {
+                const db = getDatabase();
+                
+                // 2. Reset Firebase step data
+                const stepDataRef = ref(db, `users/${auth.currentUser.uid}/profile/stepData`);
+                await update(stepDataRef, {
+                  lastStepCount: 0,
+                  totalSteps: 0,
+                  lastUpdateTimestamp: Date.now(),
+                  history: []
+                });
+                
+                // 3. Get user profile to determine role and team code
+                const userProfileRef = ref(db, `users/${auth.currentUser.uid}/profile`);
+                const profileSnap = await get(userProfileRef);
+                if (profileSnap.exists()) {
+                  const userData = profileSnap.val();
+                  const teamCode = userData.teamCode;
+                  
+                  if (teamCode) {
+                    // 4. Reset team step data
+                    const teamStepDataRef = ref(db, `teams/${teamCode}/locationStepData/${auth.currentUser.uid}`);
+                    await remove(teamStepDataRef);
+                    
+                    // 5. Reset geofence data based on role
+                    if (userData.role === 'owner') {
+                      // Reset owner's geofence data
+                      const teamGeofenceRef = ref(db, `teams/${teamCode}/geofence/coordinates`);
+                      await set(teamGeofenceRef, []);
+                      
+                      // Reset owner's profile geofence data
+                      const ownerGeofenceRef = ref(db, `users/${auth.currentUser.uid}/profile/geofenceData`);
+                      await remove(ownerGeofenceRef);
+                      
+                      console.log('Reset owner geofence data');
+                    } else {
+                      // Reset member's cached geofence data
+                      const memberGeofenceCacheRef = ref(db, `users/${auth.currentUser.uid}/profile/teamGeofenceCache`);
+                      await remove(memberGeofenceCacheRef);
+                      
+                      console.log('Reset member geofence cache');
+                    }
+                  }
+                }
+                
+                // 6. Reset location history if needed
+                if (currentLocation) {
+                  const userLocationRef = ref(db, `UsersCurrentLocation/${auth.currentUser.uid}`);
+                  await update(userLocationRef, {
+                    Timestamp: new Date().toISOString(),
+                    lastSeen: new Date().toISOString(),
+                  });
+                }
+                
+                Alert.alert("Reset Complete", "Step count, location history, and geofence data have been reset for testing purposes.");
+              } else {
+                Alert.alert("Error", "You must be logged in to reset data.");
+              }
+            } catch (error) {
+              console.error("Error resetting data:", error);
+              Alert.alert("Reset Failed", "There was an error resetting your data.");
+            }
+          }
+        }
+      ]
+    );
+  } catch (error) {
+    console.error("Error in resetStepsAndLocationData:", error);
   }
 };
 
